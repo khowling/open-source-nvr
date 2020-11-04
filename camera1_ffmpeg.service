@@ -1,0 +1,13 @@
+[Unit]
+Description=camera1_ffmpeg
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=xxxxx
+Group=xxxxx
+Type=simple
+ExecStart=/home/xxxxxx/ip-camera-manager/ffmpeg_start.sh
+
+[Install]
+WantedBy=multi-user.target

@@ -1,70 +1,87 @@
-# Getting Started with Create React App
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
 
-## Available Scripts
 
-In the project directory, you can run:
+#  Setup Linux server to capture files from ip-campera
 
-### `npm start`
+I need to see the videos, in a browser, fast navigate, and teir to cloud
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
 
-The page will reload if you make edits.\
-You will also see any lint errors in the console.
+## Create Logic Volume for the local files 
 
-### `npm test`
+To create a logical volume from a volume group storage pool, use the ```lvcreate``` command. Specify the size of the logical volume with the -L option, specify a name with the -n option, and pass in the volume group to allocate the space from.
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+```
+sudo lvcreate -L 40G -n video-files ubuntu-vg
+```
 
-### `npm run build`
+format
+```
+sudo mkfs -t ext4 /dev/mapper/ubuntu--vg-video--files
+```
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+mount
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+```
+mkdir /video
+sudo mount /dev/mapper/ubuntu--vg-video--files  /video
+```
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+## Create a shell script to start ffmpeg
 
-### `npm run eject`
+create a file called ```ffmpeg_start.sh```
 
-**Note: this is a one-way operation. Once you `eject`, you can’t go back!**
+```
+# Copy all output streams with the -c copy option, (split the video at keyframes)
+# additionally map everything from input to the output with -map 0
+# segment_time: segment duration to time Default value is "2" seconds (600 = 10mins). 
 
-If you aren’t satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+ffmpeg -rtsp_transport tcp -i rtsp://<username>:<passwd>@<ip>:554/h264Preview_01_main -c copy -map 0 -f segment  -strftime 1 -segment_time 600 -segment_format mp4 "static/video/mp4/out%Y-%m-%d_%H-%M-%S.mp4"
+```
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you’re on your own.
+Copy the ```camera1_ffmpeg.service``` file to ```/etc/systemd/system``` , and replacing the xxxx
 
-You don’t have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn’t feel obligated to use this feature. However we understand that this tool wouldn’t be useful if you couldn’t customize it when you are ready for it.
+## Video Format Info
 
-## Learn More
+The video encapsulation format used by all Reolink cameras is MP4. So the video's format we download via Reolink Client or Reolink app is MP4. But when using USB disk to backup videos directly from Reolink NVR, you could choose either H.264 or MP4 video files. - the compression type is H264
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+The Real Time Streaming Protocol (RTSP)
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+rtsp://server/publishing_point/file
+rtsp://username:pwd@IP:port/videoMain
 
-### Code Splitting
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
 
-### Analyzing the Bundle Size
+## The player
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+https://videojs.com/
 
-### Making a Progressive Web App
+```
+npm install --save @videojs/http-streaming
+```
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
 
-### Advanced Configuration
+HTTP Live Streaming (HLS) is a widely used protocol developed by Apple that will serve your stream better to a multitude of devices. HLS will take your stream, break it into chunks, and serve it via a specialized playlist
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
+ffmpeg -rtsp_transport tcp -i rtsp://user:passws@<IP>:554/h264Preview_01_main -f hls ./static/video/hls/hls_preview_01_main
 
-### Deployment
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
+## Awesome
 
-### `npm run build` fails to minify
+Motion detection
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+```
+curl "http://xxxxxxxx/api.cgi?cmd=GetMdState&user=admin&password=qwerty"
+```
+ 1 = motion
+ 0 = no motion
+```
+[
+   {
+      "cmd" : "GetMdState",
+      "code" : 0,
+      "value" : {
+         "state" : 1
+      }
+   }
+]
+```
