@@ -6,41 +6,7 @@ const
     path = require('path'),
     app = new Koa()
 
-function streamFileChunked(file, req, res) {
-    getFileStat(file, function (err, stat) {
-        if (err) {
-            console.error(err);
-            return res.status(404);
-        }
-
-        let chunkSize = 1024 * 1024;
-        if (stat.size > chunkSize * 2) {
-            chunkSize = Math.ceil(stat.size * 0.25);
-        }
-        let range = (req.headers.range) ? req.headers.range.replace(/bytes=/, "").split("-") : [];
-
-        range[0] = range[0] ? parseInt(range[0], 10) : 0;
-        range[1] = range[1] ? parseInt(range[1], 10) : range[0] + chunkSize;
-        if (range[1] > stat.size - 1) {
-            range[1] = stat.size - 1;
-        }
-        range = { start: range[0], end: range[1] };
-
-        let stream = readStreams.make(file, range);
-        res.writeHead(206, {
-            'Cache-Control': 'no-cache, no-store, must-revalidate',
-            'Pragma': 'no-cache',
-            'Expires': 0,
-            'Content-Type': 'audio/mpeg',
-            'Accept-Ranges': 'bytes',
-            'Content-Range': 'bytes ' + range.start + '-' + range.end + '/' + stat.size,
-            'Content-Length': range.end - range.start + 1,
-        });
-        stream.pipe(res);
-    });
-}
-
-const PassThrough = require('stream').PassThrough;
+//const PassThrough = require('stream').PassThrough;
 
 async function startWeb() {
 
