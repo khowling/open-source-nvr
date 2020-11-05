@@ -1,5 +1,5 @@
-import logo from './logo.svg';
-import './App.css';
+//import logo from './logo.svg';
+//import './App.css';
 import React, { useEffect } from 'react';
 import videojs from 'video.js'
 
@@ -13,7 +13,7 @@ function App() {
       autoplay: true,
       controls: true,
       sources: [{
-        src: '/video/hls_test01',
+        src: '/video/mp4/out-test-2020-11-05_18-30-30.mp4',
         type: 'video/mp4'
       }]
     }, function onPlayerReady() {
@@ -26,23 +26,12 @@ function App() {
   return (
     <div className="App">
       <header className="App-header">
-        <img src={logo} className="App-logo" alt="logo" />
-        <p>
-          Edit <code>src/App.js</code> and save to reload.
-        </p>
 
         <div data-vjs-player>
-          <video ref={video_ref} class="vjs-default-skin" width="640" height="268" />
+          <video ref={video_ref} className="video-js vjs-default-skin" width="640" height="268" />
         </div>
 
-        <a
-          className="App-link"
-          href="https://reactjs.org"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Learn React
-        </a>
+
       </header>
     </div>
   );

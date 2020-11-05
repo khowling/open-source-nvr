@@ -31,6 +31,9 @@ sudo mount /dev/mapper/ubuntu--vg-video--files  /video
 create a file called ```ffmpeg_start.sh```
 
 ```
+#!/bin/bash
+
+
 # Copy all output streams with the -c copy option, (split the video at keyframes)
 # additionally map everything from input to the output with -map 0
 # segment_time: segment duration to time Default value is "2" seconds (600 = 10mins). 
@@ -39,6 +42,12 @@ ffmpeg -rtsp_transport tcp -i rtsp://<username>:<passwd>@<ip>:554/h264Preview_01
 ```
 
 Copy the ```camera1_ffmpeg.service``` file to ```/etc/systemd/system``` , and replacing the xxxx
+
+run
+
+```
+sudo systemctl enable  camera1_ffmpeg.service
+```
 
 ## Video Format Info
 
@@ -49,7 +58,11 @@ The Real Time Streaming Protocol (RTSP)
 rtsp://server/publishing_point/file
 rtsp://username:pwd@IP:port/videoMain
 
+### images snapshot
 
+```
+http://(ip address)/cgi-bin/api.cgi?cmd=Snap&channel=0&rs=(any combination of numbers and letters)&user=(user name)&password=(user password)
+```
 
 ## The player
 
@@ -70,7 +83,7 @@ ffmpeg -rtsp_transport tcp -i rtsp://user:passws@<IP>:554/h264Preview_01_main -f
 Motion detection
 
 ```
-curl "http://xxxxxxxx/api.cgi?cmd=GetMdState&user=admin&password=qwerty"
+curl "http://xxxxxxxx/api.cgi?cmd=GetMdState&user=admin&password=xxxxx"
 ```
  1 = motion
  0 = no motion
