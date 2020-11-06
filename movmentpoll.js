@@ -92,7 +92,7 @@ async function processMovement() {
         } else {
             if (movement_entry) {
                 if (movement_entry.consecutivesecondswithout > SECS_WITHOUT_MOVEMENT) {
-                    const filename = `./video/mov-${process.env.CAMERA_NAME}-${movement_entry.startDate.getFullYear()}-${('0' + movement_entry.startDate.getMonth()).slice(-2)}-${('0' + movement_entry.startDate.getDay()).slice(-2)}.csv`
+                    const filename = `${process.env.FILEPATH}/mov-${process.env.CAMERA_NAME}-${movement_entry.startDate.getFullYear()}-${('0' + (movement_entry.startDate.getMonth() + 1)).slice(-2)}-${('0' + movement_entry.startDate.getDate()).slice(-2)}.csv`
                     console.log(`writing movement ${filename}`)
                     await fs.promises.appendFile(filename, `${movement_entry.startDate.toISOString()};${movement_entry.seconds}` + "\n")
                     movement_entry = null

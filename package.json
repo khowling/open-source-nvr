@@ -39,6 +39,8 @@
     ]
   },
   "devDependencies": {
+    "@fluentui/react": "^7.149.4",
     "video.js": "^7.10.2"
-  }
+  },
+  "proxy": "http://localhost:8080"
 }
