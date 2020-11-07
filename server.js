@@ -42,7 +42,15 @@ async function startWeb() {
         })
 
     const api = new Router({ prefix: '/api' })
-        .get(['/movements'], async (ctx, next) => {
+        .post('/movements', async (ctx, next) => {
+            const d = new Date()
+
+            const filename = `${process.env.FILEPATH}/web-${process.env.CAMERA_NAME}-${d.getFullYear()}-${('0' + (d.getMonth() + 1)).slice(-2)}-${('0' + d.getDate()).slice(-2)}.csv`
+            console.log(`writing movement ${filename}`)
+            await fs.promises.appendFile(filename, ctx.request.body.map(m => `${m.movement_key};${m.file};${m.reviewed || "false"};${m.save || "false"}`).join("\n") + "\n")
+            ctx.status = 201
+        })
+        .get('/movements', async (ctx, next) => {
 
 
             function add_in_order(new_val, array) {
@@ -79,7 +87,7 @@ async function startWeb() {
                         for (let mov_line of data.split(/\r?\n/)) {
                             const [start, duration] = mov_line.split(';')
                             if (start && duration) {
-                                sorted_mov = add_in_order({ start: new Date(start).getTime(), duration }, sorted_mov)
+                                sorted_mov = add_in_order({ start: new Date(start).getTime(), duration, file_key: start }, sorted_mov)
                             }
                         }
                     }
@@ -88,14 +96,14 @@ async function startWeb() {
 
             let mp4_idx = 0
             ctx.body = sorted_mov.map(function (sm) {
-
+                const out = { movement_key: sm.file_key, start: new Date(sm.start).toUTCString().replace(/ \d{4}/, "").replace(/ GMT$/, ""), duration: sm.duration }
                 while (mp4_idx < sorted_mp4.length) {
                     const curr_mp4_start = sorted_mp4[mp4_idx].start
                     if (sm.start >= curr_mp4_start) {
                         // movemet time is greater than current mp4 start time
                         const next_mp4_start = (mp4_idx + 1 < sorted_mp4.length) ? sorted_mp4[mp4_idx + 1].start : null
                         if (next_mp4_start === null || sm.start < next_mp4_start) {
-                            return { start: new Date(sm.start).toUTCString(), duration: sm.duration, file: sorted_mp4[mp4_idx].file, index: (sm.start - curr_mp4_start) / 1000 }
+                            return { ...out, file: sorted_mp4[mp4_idx].file, index: parseInt((sm.start - curr_mp4_start) / 1000, 10) }
                         } else {
                             // movement time is after or equal the next mp4 start time
                             mp4_idx++
@@ -103,14 +111,14 @@ async function startWeb() {
 
                     } else {
                         // movemet time is older than current mp4 (mp4 no longer on local disk!)
-                        return { start: new Date(sm.start).toUTCString(), duration: sm.duration }
+                        return out
                     }
                 }
 
             })
         })
 
-
+    app.use(require('koa-body-parser')())
     app.use(api.routes())
     app.use(static.routes())
     /*

@@ -2,11 +2,15 @@
 //import './App.css';
 import React, { /* useCallback , */ useRef, useEffect } from 'react';
 import videojs from 'video.js'
-import { Fabric, DetailsList, SelectionMode, Stack } from '@fluentui/react'
+import { Fabric, PrimaryButton, DetailsList, SelectionMode, Selection, Stack, Checkbox } from '@fluentui/react'
+import { initializeIcons } from '@fluentui/react/lib/Icons';
+
+initializeIcons(/* optional base url */);
 
 function App() {
 
   const [moments, setMoments] = React.useState([])
+  const [state, setState] = React.useState({ current_idx: null, inputs: {} })
 
   /*
     const video_ref = useCallback(node => {
@@ -27,6 +31,7 @@ function App() {
 
   const video_ref = useRef(null);
   useEffect(() => {
+    console.log(`initialising videojs on ${video_ref.current}`)
     let mPlayer = videojs(video_ref.current, {
       autoplay: true,
       controls: true//,
@@ -61,15 +66,46 @@ function App() {
       )
   }, [])
 
-  function _onItemInvoked(e) {
-    let mPlayer = videojs(video_ref.current)
-    if (mPlayer.src() !== `/video/mp4/${e.file}`) {
-      mPlayer.src({ type: "video/mp4", src: `/video/mp4/${e.file}` })
+  function _onItemInvoked(e, idx) {
+    if (idx !== state.current_idx) {
+      setState({ current_idx: idx, inputs: { ...state.inputs, [idx]: { reviewed: true } } })
+      //setMoments([...moments.slice(0, idx), { ...moments[idx], reviewed: true }, ...moments.slice(idx + 1)])
+      let mPlayer = videojs(video_ref.current)
+      if (mPlayer.src() !== `/video/mp4/${e.file}`) {
+        mPlayer.src({ type: "video/mp4", src: `/video/mp4/${e.file}` })
+      }
+      mPlayer.currentTime(Math.max(0, e.index - 4)) // 4 seconds before moments
+      mPlayer.play()
+      //console.log(mPlayer.remainingTime())
+      //if (mPlayer.remainingTime() < e.duration + 4) {
+      //  alert('movement goes onto the next file')
+      //}
+      console.log(e)
     }
-    mPlayer.currentTime(Math.max(0, e.index - 4)) // 4 seconds before movement
-    console.log(e)
   }
 
+  function process() {
+    const body = JSON.stringify(Object.keys(state.inputs).map((i) => { return { ...moments[i], ...state.inputs[i] } }))
+
+    fetch('/api/movements', {
+      body,
+      method: "POST",
+      headers: {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(body)
+      }
+    }).then(async (res) => {
+      if (!res.ok) {
+        console.error(`non 200 err : ${res.status}`)
+      } else if (res.status === 201) {
+        window.location.reload(true)
+      } else {
+        console.error(`non 200 err : ${res.status}`)
+      }
+    }, err => {
+      console.error(`err : ${err}`)
+    })
+  }
 
   return (
     <Fabric>
@@ -80,18 +116,26 @@ function App() {
               items={moments}
               compact={true}
               columns={[
-                { name: "Start", key: "start", fieldName: "start" },
-                { name: "secs", key: "duration", fieldName: "duration" },
-                { name: "File", key: "file", fieldName: "file" }
+                {
+                  name: "Reviewed Movement (seconds)", key: "start", minWidth: 200, maxWidth: 200, onRender: (i, idx) => {
+                    return <Checkbox label={`${i.start} (${i.duration})`} checked={state.inputs[idx] && state.inputs[idx].reviewed} disabled />
+                  }
+                },
+                {
+                  name: "Save", key: "stat", onRender: (i, idx) => {
+                    return <div> <Checkbox checked={state.inputs[idx] && state.inputs[idx].save} onChange={(e, val) => setState({ current_idx: idx, inputs: { ...state.inputs, [idx]: { reviewed: true, save: val } } })} /> </div>
+                  }
+                }
               ]}
-              selectionMode={SelectionMode.none}
-              setKey="none"
+              selectionMode={SelectionMode.single}
               isHeaderVisible={true}
-              onItemInvoked={_onItemInvoked}
+              onActiveItemChanged={_onItemInvoked}
             />
+            <PrimaryButton text="Update" onClick={process} />
           </Stack.Item>
+
           <Stack.Item styles={{ root: { width: "700px" } }} grow={1}>
-            <div data-vjs-player>
+            <div >
               <video ref={video_ref} className="video-js vjs-default-skin" width="640" height="268" />
             </div>
           </Stack.Item>
