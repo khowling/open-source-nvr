@@ -37,8 +37,9 @@ create a file called ```ffmpeg_start.sh```
 # Copy all output streams with the -c copy option, (split the video at keyframes)
 # additionally map everything from input to the output with -map 0
 # segment_time: segment duration to time Default value is "2" seconds (600 = 10mins). 
+# reset_timestamps : allows videojs seek bar to function
 
-ffmpeg -rtsp_transport tcp -i rtsp://<username>:<passwd>@<ip>:554/h264Preview_01_main -c copy -map 0 -f segment  -strftime 1 -segment_time 600 -segment_format mp4 "static/video/mp4/out%Y-%m-%d_%H-%M-%S.mp4"
+ffmpeg -rtsp_transport tcp -i rtsp://admin:qwerty@192.168.0.76:554/h264Preview_01_main -c copy -map 0 -f segment  -strftime 1 -segment_time 120 -reset_timestamps 1 -segment_format mp4  "static/video/mp4/out%Y-%m-%d_%H-%M-%S.mp4"
 ```
 
 Copy the ```camera1_ffmpeg.service``` file to ```/etc/systemd/system``` , and replacing the xxxx

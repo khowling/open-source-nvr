@@ -1,6 +1,6 @@
 //import logo from './logo.svg';
 //import './App.css';
-import React, { useCallback, useRef, useEffect } from 'react';
+import React, { /* useCallback , */ useRef, useEffect } from 'react';
 import videojs from 'video.js'
 import { Fabric, DetailsList, SelectionMode, Stack } from '@fluentui/react'
 
@@ -8,26 +8,25 @@ function App() {
 
   const [moments, setMoments] = React.useState([])
 
-
-  const video_ref = useCallback(node => {
-    if (node !== null) {
-      let mPlayer = videojs(node, {
-        autoplay: true,
-        controls: true//,
-        // sources: [{
-        //   src: '/video/mp4/out-test-2020-11-05_18-30-30.mp4',
-        //   type: 'video/mp4'
-        //  }]
-      }, function onPlayerReady() {
-        console.log('onPlayerReady', this)
-      })
-    }
-  })
-
   /*
+    const video_ref = useCallback(node => {
+      if (node !== null) {
+        videojs(node, {
+          autoplay: true,
+          controls: true//,
+          // sources: [{
+          //   src: '/video/mp4/out-test-2020-11-05_18-30-30.mp4',
+          //   type: 'video/mp4'
+          //  }]
+        }, function onPlayerReady() {
+          console.log('onPlayerReady', this)
+        })
+      }
+    }, [])
+  */
+
   const video_ref = useRef(null);
   useEffect(() => {
-    //let mPlayer = videojs(node, {
     let mPlayer = videojs(video_ref.current, {
       autoplay: true,
       controls: true//,
@@ -43,8 +42,8 @@ function App() {
       mPlayer.dispose()
     }
 
-  }, []);
-*/
+  }, [video_ref]);
+
 
   useEffect(() => {
     fetch("/api/movements")
@@ -63,8 +62,11 @@ function App() {
   }, [])
 
   function _onItemInvoked(e) {
-    mPlayer.src({ type: "video/mp4", src: `/video/mp4/${e.file}` })
-    mPlayer.currentTime(e.index)
+    let mPlayer = videojs(video_ref.current)
+    if (mPlayer.src() !== `/video/mp4/${e.file}`) {
+      mPlayer.src({ type: "video/mp4", src: `/video/mp4/${e.file}` })
+    }
+    mPlayer.currentTime(Math.max(0, e.index - 4)) // 4 seconds before movement
     console.log(e)
   }
 
@@ -79,7 +81,7 @@ function App() {
               compact={true}
               columns={[
                 { name: "Start", key: "start", fieldName: "start" },
-                { name: "Duration (secs)", key: "duration", fieldName: "duration" },
+                { name: "secs", key: "duration", fieldName: "duration" },
                 { name: "File", key: "file", fieldName: "file" }
               ]}
               selectionMode={SelectionMode.none}

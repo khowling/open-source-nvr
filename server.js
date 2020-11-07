@@ -21,13 +21,13 @@ async function startWeb() {
 
                 const [range_start, range_end] = ctx.headers.range.replace(/bytes=/, "").split("-"),
                     start = parseInt(range_start, 10),
-                    maxchunk = Math.min(1024 * 1024 * 32, size - start - 1),
-                    end = range_end ? parseInt(range_end, 10) : start + maxchunk
+                    chunklength = range_end ? parseInt(range_end, 10) - start + 1 : Math.min(1024 * 1024 * 32 /* 32KB default */, size - start /* whats left in the file */),
+                    end = start + chunklength - 1
 
                 console.log(`serving video request range: ${range_start} -> ${range_end},  providing ${start} -> ${end} / ${size}`)
 
                 ctx.set('Accept-Ranges', 'bytes');
-                ctx.set('Content-Length', end - start + 1) // 38245154
+                ctx.set('Content-Length', chunklength) // 38245154
                 ctx.set('Content-Range', `bytes ${start}-${end}/${size}`) // bytes 29556736-67801889/67801890
 
                 streamoptions = { ...streamoptions, start, end }
