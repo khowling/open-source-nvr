@@ -280,7 +280,7 @@ async function init_web() {
 
     const nav = new Router()
         .get('/live', async (ctx, next) => {
-            ctx.redirect(`http://${process.env.CAMERA_IP}?user=admin&password=${process.env.CAMERA_PASSWD}`)
+            ctx.redirect(`http://${process.env.CAMERA_IP}`)
         })
         .get('/network', async (ctx, next) => {
             ctx.redirect(`http://${req.headers.host.split(":")[0]}:3998`)
