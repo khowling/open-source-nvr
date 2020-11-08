@@ -2,7 +2,7 @@
 import './App.css';
 import React, { /* useCallback , */ useRef, useEffect } from 'react';
 import videojs from 'video.js'
-import { Fabric, CompoundButton, DetailsList, SelectionMode, Stack, Checkbox, CommandBarButton, Link, Text } from '@fluentui/react'
+import { Fabric, CompoundButton, DetailsList, SelectionMode, Stack, Checkbox } from '@fluentui/react'
 import { initializeIcons } from '@fluentui/react/lib/Icons';
 
 initializeIcons(/* optional base url */);
@@ -121,13 +121,13 @@ function App() {
       <main id="mainContent" data-grid="container">
 
         <nav className="header">
-          <a href="" className="logo">Home Surveillance</a>
+          <div className="logo">Home Surveillance Recordings</div>
           <input className="menu-btn" type="checkbox" id="menu-btn" />
           <label className="menu-icon" for="menu-btn"><span className="navicon"></span></label>
           <ul className="menu">
-            <li><a href="#work">CCTV</a></li>
-            <li><a href="#about">Network</a></li>
-            <li><a href="#contact">Other</a></li>
+            <li><a href="/live">Live Feed</a></li>
+            <li><a href="/metics">Network Metrics</a></li>
+            <li><a href="/network">Network Control</a></li>
           </ul>
         </nav>
 

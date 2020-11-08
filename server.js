@@ -278,8 +278,20 @@ async function init_web() {
             }).filter(i => i.web ? i.web.reviewed === "false" : true)
         })
 
+    const nav = new Router()
+        .get('/live', async (ctx, next) => {
+            ctx.redirect(`http://${process.env.CAMERA_IP}?user=admin&password=${process.env.CAMERA_PASSWD}`)
+        })
+        .get('/network', async (ctx, next) => {
+            ctx.redirect(`http://${req.headers.host.split(":")[0]}:3998`)
+        })
+        .get('/metrics', async (ctx, next) => {
+            ctx.redirect(`http://${req.headers.host.split(":")[0]}:3000/d/T3OrKihMk/our-house?orgId=1`)
+        })
+
     app.use(require('koa-body-parser')())
     app.use(api.routes())
+    app.use(nav.routes())
     app.use(static.routes())
     /*
         app.use(async (ctx) => {
