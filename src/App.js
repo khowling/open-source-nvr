@@ -126,7 +126,7 @@ function App() {
           <label className="menu-icon" for="menu-btn"><span className="navicon"></span></label>
           <ul className="menu">
             <li><a href="/live">Live Feed</a></li>
-            <li><a href="/metics">Network Metrics</a></li>
+            <li><a href="/metrics">Network Metrics</a></li>
             <li><a href="/network">Network Control</a></li>
           </ul>
         </nav>

@@ -283,10 +283,10 @@ async function init_web() {
             ctx.redirect(`http://${process.env.CAMERA_IP}`)
         })
         .get('/network', async (ctx, next) => {
-            ctx.redirect(`http://${req.headers.host.split(":")[0]}:3998`)
+            ctx.redirect(`http://${ctx.headers.host.split(":")[0]}:3998`)
         })
         .get('/metrics', async (ctx, next) => {
-            ctx.redirect(`http://${req.headers.host.split(":")[0]}:3000/d/T3OrKihMk/our-house?orgId=1`)
+            ctx.redirect(`http://${ctx.headers.host.split(":")[0]}:3000/d/T3OrKihMk/our-house?orgId=1`)
         })
 
     app.use(require('koa-body-parser')())
