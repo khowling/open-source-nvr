@@ -1,4 +1,5 @@
 const
+    assert = require('assert'),
     Koa = require('koa'),
     Router = require('koa-router'),
     send = require('koa-send'),
@@ -8,12 +9,22 @@ const
 
 //const PassThrough = require('stream').PassThrough;
 
-async function startWeb() {
+async function init() {
+
+    assert(process.env.FILEPATH, "FILEPATH not set")
+    assert(process.env.CAMERA_NAME, "CAMERA_NAME not set")
+
+    const mp4dir = `${process.env.FILEPATH}/${process.env.CAMERA_NAME}/mp4`
+    const movdir = `${process.env.FILEPATH}/${process.env.CAMERA_NAME}/mov`
+    const webdir = `${process.env.FILEPATH}/${process.env.CAMERA_NAME}/web`
+
+    await fs.promises.mkdir(webdir, { recursive: true })
+
 
     var static = new Router()
         .get(['/video/(.*)'], async (ctx, next) => {
             console.log(`serving video: ${ctx.params[0]}`)
-            const filepath = `${__dirname}/video/${ctx.params[0]}`
+            const filepath = `${mp4dir}/${ctx.params[0]}`
             let streamoptions = { encoding: null }
             if (ctx.headers.range) {
 
@@ -43,29 +54,32 @@ async function startWeb() {
 
     const api = new Router({ prefix: '/api' })
         .post('/movements', async (ctx, next) => {
-            const d = new Date()
 
-            const filename = `${process.env.FILEPATH}/web-${process.env.CAMERA_NAME}-${d.getFullYear()}-${('0' + (d.getMonth() + 1)).slice(-2)}-${('0' + d.getDate()).slice(-2)}.csv`
-            console.log(`writing movement ${filename}`)
-            await fs.promises.appendFile(filename, ctx.request.body.map(m => `${m.movement_key};${m.file};${m.reviewed || "false"};${m.save || "false"}`).join("\n") + "\n")
-            ctx.status = 201
+            if (ctx.request.body && ctx.request.body.length > 0) {
+                const d = new Date()
+
+                const filename = `${webdir}/${process.env.CAMERA_NAME}-${d.getFullYear()}-${('0' + (d.getMonth() + 1)).slice(-2)}-${('0' + d.getDate()).slice(-2)}.csv`
+                console.log(`writing movement ${filename}`)
+                await fs.promises.appendFile(filename, ctx.request.body.map(m => `${m.movement_key};${m.video.file};${m.reviewed || "false"};${m.save || "false"}`).join("\n") + "\n")
+                ctx.status = 201
+            }
         })
         .get('/movements', async (ctx, next) => {
 
 
             function add_in_order(new_val, array) {
 
-                for (let i in array) {
-                    if (!(new_val.start > array[i].start)) {
-                        return [...array.slice(0, i), new_val, ...array.slice(i + 1)]
+                for (let i = 0; i < array.length; i++) {
+                    if (new_val.start <= array[i].start) {
+                        return [...array.slice(0, i), new_val, ...array.slice(new_val.start === array[i].start ? i + 1 : i)]
                     }
                 }
                 return [...array, new_val]
             }
 
             let sorted_mp4 = []
-            const local_video = await fs.promises.readdir(process.env.FILEPATH + "/mp4")
-            const local_video_re = new RegExp(`^out-${process.env.CAMERA_NAME}-(\\d{4})-(\\d{2})-(\\d{2})_(\\d{2})-(\\d{2})-(\\d{2}).mp4`)
+            const local_video = await fs.promises.readdir(mp4dir)
+            const local_video_re = new RegExp(`^(\\d{4})-(\\d{2})-(\\d{2})_(\\d{2})-(\\d{2})-(\\d{2}).mp4`)
             for (let dir_entry of local_video) {
                 const entry_match = dir_entry.match(local_video_re)
                 if (entry_match) {
@@ -75,35 +89,45 @@ async function startWeb() {
                 }
             }
 
-            let sorted_mov = []
-            const movement_dir = await fs.promises.readdir(process.env.FILEPATH)
-            const movement_re = new RegExp(`^mov-${process.env.CAMERA_NAME}-(\\d{4})-(\\d{2})-(\\d{2}).csv`)
-            for (let dir_entry of movement_dir) {
-                const entry_match = dir_entry.match(movement_re)
-                if (entry_match) {
-                    const [file, year, month, day] = entry_match
-                    if (file) {
-                        const data = await fs.promises.readFile(process.env.FILEPATH + '/' + file, 'UTF-8')
-                        for (let mov_line of data.split(/\r?\n/)) {
-                            const [start, duration] = mov_line.split(';')
-                            if (start && duration) {
-                                sorted_mov = add_in_order({ start: new Date(start).getTime(), duration, file_key: start }, sorted_mov)
+            async function readFiles(dir, labels) {
+                let sorted_out = []
+                const movement_dir = await fs.promises.readdir(dir)
+                const movement_re = new RegExp(`^${process.env.CAMERA_NAME}-(\\d{4})-(\\d{2})-(\\d{2}).csv`)
+                for (let dir_entry of movement_dir) {
+                    const entry_match = dir_entry.match(movement_re)
+                    if (entry_match) {
+                        const [file, year, month, day] = entry_match
+                        if (file) {
+                            const data = await fs.promises.readFile(dir + '/' + file, 'UTF-8')
+                            for (let mov_line of data.split(/\r?\n/)) {
+                                const [start, ...rest] = mov_line.split(';')
+                                if (start) {
+                                    sorted_out = add_in_order({ key: start, start: new Date(start).getTime(), ...rest.reduce((o, v, i) => { return { ...o, [labels[i]]: v } }, {}) }, sorted_out)
+                                }
                             }
                         }
                     }
                 }
+                return sorted_out
             }
 
+            const sorted_mov = await readFiles(movdir, ["duration"])
+            const sorted_web = await readFiles(webdir, ["file", "reviewed", "save"])
+
             let mp4_idx = 0
-            ctx.body = sorted_mov.map(function (sm) {
-                const out = { movement_key: sm.file_key, start: new Date(sm.start).toUTCString().replace(/ \d{4}/, "").replace(/ GMT$/, ""), duration: sm.duration }
+            let web_idx = 0
+            ctx.body = sorted_mov.map(function (mov) {
+                let out = { movement_key: mov.key, start: new Date(mov.start).toUTCString().replace(/ \d{4}/, "").replace(/ GMT$/, ""), duration: mov.duration }
+
+                // match movement entry to mp4 file and starttime
                 while (mp4_idx < sorted_mp4.length) {
                     const curr_mp4_start = sorted_mp4[mp4_idx].start
-                    if (sm.start >= curr_mp4_start) {
+                    if (mov.start >= curr_mp4_start) {
                         // movemet time is greater than current mp4 start time
                         const next_mp4_start = (mp4_idx + 1 < sorted_mp4.length) ? sorted_mp4[mp4_idx + 1].start : null
-                        if (next_mp4_start === null || sm.start < next_mp4_start) {
-                            return { ...out, file: sorted_mp4[mp4_idx].file, index: parseInt((sm.start - curr_mp4_start) / 1000, 10) }
+                        if (next_mp4_start === null || mov.start < next_mp4_start) {
+                            out = { ...out, video: { file: sorted_mp4[mp4_idx].file, index: parseInt((mov.start - curr_mp4_start) / 1000, 10) } }
+                            break
                         } else {
                             // movement time is after or equal the next mp4 start time
                             mp4_idx++
@@ -111,11 +135,25 @@ async function startWeb() {
 
                     } else {
                         // movemet time is older than current mp4 (mp4 no longer on local disk!)
-                        return out
+                        break
                     }
                 }
 
-            })
+                // match movement entry to updates from web
+                while (web_idx < sorted_web.length) {
+                    const curr_web_start = sorted_web[web_idx].start
+                    if (mov.start === curr_web_start) {
+                        out = { ...out, web: sorted_web[web_idx] }
+                        break
+                    } else if (mov.start < sorted_web[web_idx].start) {
+                        break
+                    }
+                    web_idx++
+                }
+
+                return out
+
+            }).filter(i => i.web ? i.web.reviewed === "false" : true)
         })
 
     app.use(require('koa-body-parser')())
@@ -130,5 +168,6 @@ async function startWeb() {
     app.listen(8080)
 }
 
-startWeb()
+
+init()
 

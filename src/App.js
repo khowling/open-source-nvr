@@ -67,14 +67,14 @@ function App() {
   }, [])
 
   function _onItemInvoked(e, idx) {
-    if (idx !== state.current_idx) {
+    if (idx !== state.current_idx && e.video) {
       setState({ current_idx: idx, inputs: { ...state.inputs, [idx]: { reviewed: true } } })
       //setMoments([...moments.slice(0, idx), { ...moments[idx], reviewed: true }, ...moments.slice(idx + 1)])
       let mPlayer = videojs(video_ref.current)
-      if (mPlayer.src() !== `/video/mp4/${e.file}`) {
-        mPlayer.src({ type: "video/mp4", src: `/video/mp4/${e.file}` })
+      if (mPlayer.src() !== `/video/${e.video.file}`) {
+        mPlayer.src({ type: "video/mp4", src: `/video/${e.video.file}` })
       }
-      mPlayer.currentTime(Math.max(0, e.index - 4)) // 4 seconds before moments
+      mPlayer.currentTime(Math.max(0, e.video.index - 4)) // 4 seconds before moments
       mPlayer.play()
       //console.log(mPlayer.remainingTime())
       //if (mPlayer.remainingTime() < e.duration + 4) {
