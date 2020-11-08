@@ -1,8 +1,8 @@
 //import logo from './logo.svg';
-//import './App.css';
+import './App.css';
 import React, { /* useCallback , */ useRef, useEffect } from 'react';
 import videojs from 'video.js'
-import { Fabric, CompoundButton, DetailsList, SelectionMode, Stack, Checkbox } from '@fluentui/react'
+import { Fabric, CompoundButton, DetailsList, SelectionMode, Stack, Checkbox, CommandBarButton, Link, Text } from '@fluentui/react'
 import { initializeIcons } from '@fluentui/react/lib/Icons';
 
 initializeIcons(/* optional base url */);
@@ -119,7 +119,21 @@ function App() {
   return (
     <Fabric>
       <main id="mainContent" data-grid="container">
-        <Stack horizontal wrap tokens={{ childrenGap: 5 }}>
+
+        <nav className="header">
+          <a href="" className="logo">Home Surveillance</a>
+          <input className="menu-btn" type="checkbox" id="menu-btn" />
+          <label className="menu-icon" for="menu-btn"><span className="navicon"></span></label>
+          <ul className="menu">
+            <li><a href="#work">CCTV</a></li>
+            <li><a href="#about">Network</a></li>
+            <li><a href="#contact">Other</a></li>
+          </ul>
+        </nav>
+
+        <div style={{ "height": "43px", "width": "100%" }} />
+
+        <Stack horizontal wrap >
 
           <Stack.Item styles={{ root: { width: "700px" } }} grow={1}>
             <video ref={video_ref} className="video-js vjs-default-skin" width="640" height="268" />
