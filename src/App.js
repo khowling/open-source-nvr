@@ -2,7 +2,7 @@
 //import './App.css';
 import React, { /* useCallback , */ useRef, useEffect } from 'react';
 import videojs from 'video.js'
-import { Fabric, PrimaryButton, DetailsList, SelectionMode, Selection, Stack, Checkbox } from '@fluentui/react'
+import { Fabric, CompoundButton, DetailsList, SelectionMode, Stack, Checkbox } from '@fluentui/react'
 import { initializeIcons } from '@fluentui/react/lib/Icons';
 
 initializeIcons(/* optional base url */);
@@ -29,12 +29,14 @@ function App() {
     }, [])
   */
 
-  const video_ref = useRef(null);
+  const video_ref = useRef(null)
   useEffect(() => {
     console.log(`initialising videojs on ${video_ref.current}`)
     let mPlayer = videojs(video_ref.current, {
       autoplay: true,
-      controls: true//,
+      controls: true,
+      aspectRatio: '4:3'
+      //,
       // sources: [{
       //   src: '/video/mp4/out-test-2020-11-05_18-30-30.mp4',
       //   type: 'video/mp4'
@@ -47,10 +49,10 @@ function App() {
       mPlayer.dispose()
     }
 
-  }, [video_ref]);
+  }, [video_ref])
 
+  function getMovements() {
 
-  useEffect(() => {
     fetch("/api/movements")
       .then(res => res.json())
       .then(
@@ -64,7 +66,8 @@ function App() {
           console.warn(error)
         }
       )
-  }, [])
+  }
+  useEffect(getMovements, [])
 
   function _onItemInvoked(e, idx) {
     if (idx !== state.current_idx && e.video) {
@@ -84,6 +87,10 @@ function App() {
     }
   }
 
+  function reset() {
+    setState({ current_idx: null, inputs: {} })
+  }
+
   function process() {
     const body = JSON.stringify(Object.keys(state.inputs).map((i) => { return { ...moments[i], ...state.inputs[i] } }))
 
@@ -98,7 +105,9 @@ function App() {
       if (!res.ok) {
         console.error(`non 200 err : ${res.status}`)
       } else if (res.status === 201) {
-        window.location.reload(true)
+        //window.location.reload(true)
+        getMovements()
+        setState({ current_idx: null, inputs: {} })
       } else {
         console.error(`non 200 err : ${res.status}`)
       }
@@ -110,20 +119,29 @@ function App() {
   return (
     <Fabric>
       <main id="mainContent" data-grid="container">
-        <Stack horizontal wrap tokens={{ childrenGap: 15 }}>
+        <Stack horizontal wrap tokens={{ childrenGap: 5 }}>
+
+          <Stack.Item styles={{ root: { width: "700px" } }} grow={1}>
+            <video ref={video_ref} className="video-js vjs-default-skin" width="640" height="268" />
+            <div>{state.current_idx ? `${moments[state.current_idx].video.file} (${moments[state.current_idx].video.index})` : ""}</div>
+          </Stack.Item>
+
+
           <Stack.Item styles={{ root: { width: "300px" } }} grow={1}>
             <DetailsList
               items={moments}
-              compact={true}
+              compact={false}
+              listProps={state}
               columns={[
                 {
                   name: "Reviewed Movement (seconds)", key: "start", minWidth: 200, maxWidth: 200, onRender: (i, idx) => {
-                    return <Checkbox label={`${i.start} (${i.duration})`} checked={state.inputs[idx] && state.inputs[idx].reviewed} disabled />
+                    console.log(`rendering ${idx} - input ${state.inputs[idx]}`)
+                    return <Checkbox label={`${i.start} (${i.duration})`} checked={state.inputs[idx] ? state.inputs[idx].reviewed : false} disabled />
                   }
                 },
                 {
-                  name: "Save", key: "stat", onRender: (i, idx) => {
-                    return <div> <Checkbox checked={state.inputs[idx] && state.inputs[idx].save} onChange={(e, val) => setState({ current_idx: idx, inputs: { ...state.inputs, [idx]: { reviewed: true, save: val } } })} /> </div>
+                  name: "Save", key: "stat", minWidth: 80, maxWidth: 80, onRender: (i, idx) => {
+                    return <div> <Checkbox checked={state.inputs[idx] ? state.inputs[idx].save : false} onChange={(e, val) => setState({ current_idx: idx, inputs: { ...state.inputs, [idx]: { reviewed: true, save: val } } })} /> </div>
                   }
                 }
               ]}
@@ -131,14 +149,11 @@ function App() {
               isHeaderVisible={true}
               onActiveItemChanged={_onItemInvoked}
             />
-            <PrimaryButton text="Update" onClick={process} />
+            <CompoundButton primary secondaryText="they will not appear again" onClick={process} style={{ "marginTop": 10, "marginLeft": 50 }}>Record Reviews</CompoundButton>
+            <CompoundButton secondaryText="clear your reviews" onClick={reset} style={{ "marginTop": 10, "marginLeft": 50 }}>Reset</CompoundButton>
           </Stack.Item>
 
-          <Stack.Item styles={{ root: { width: "700px" } }} grow={1}>
-            <div >
-              <video ref={video_ref} className="video-js vjs-default-skin" width="640" height="268" />
-            </div>
-          </Stack.Item>
+
         </Stack>
       </main>
     </Fabric >
