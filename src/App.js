@@ -2,7 +2,7 @@
 import './App.css';
 import React, { /* useCallback , */ useRef, useEffect } from 'react';
 import videojs from 'video.js'
-import { Fabric, CompoundButton, DetailsList, SelectionMode, Stack, Checkbox } from '@fluentui/react'
+import { Fabric, CompoundButton, DetailsList, SelectionMode, Stack, Checkbox, Selection } from '@fluentui/react'
 import { initializeIcons } from '@fluentui/react/lib/Icons';
 
 initializeIcons(/* optional base url */);
@@ -10,7 +10,8 @@ initializeIcons(/* optional base url */);
 function App() {
 
   const [moments, setMoments] = React.useState([])
-  const [state, setState] = React.useState({ current_idx: null, inputs: {} })
+  const [inputState, setInputState] = React.useState({ current_idx: null, allSelected: false, inputs: {} })
+
 
   /*
     const video_ref = useCallback(node => {
@@ -69,30 +70,46 @@ function App() {
   }
   useEffect(getMovements, [])
 
+
+
   function _onItemInvoked(e, idx) {
-    if (idx !== state.current_idx && e.video) {
-      setState({ current_idx: idx, inputs: { ...state.inputs, [idx]: { reviewed: true } } })
+    setInputState({ ...inputState, inputs: { ...inputState.inputs, [idx]: { reviewed: false } } })
+  }
+
+  function _itemChanged(e, idx) {
+    // (_section.isAllSelected ${_selection.isAllSelected()})
+    console.log(`_onItemInvoked ${idx} (old ${inputState.current_idx})  (allSelected ${inputState.allSelected})`)
+    if (idx !== inputState.current_idx) {
+      setInputState({ current_idx: idx, allSelected: inputState.allSelected, inputs: { ...inputState.inputs, [idx]: { reviewed: true } } })
       //setMoments([...moments.slice(0, idx), { ...moments[idx], reviewed: true }, ...moments.slice(idx + 1)])
-      let mPlayer = videojs(video_ref.current)
-      if (mPlayer.src() !== `/video/${e.video.file}`) {
-        mPlayer.src({ type: "video/mp4", src: `/video/${e.video.file}` })
+      if (e.video) {
+        let mPlayer = videojs(video_ref.current)
+        if (mPlayer.src() !== `/video/${e.video.file}`) {
+          mPlayer.src({ type: "video/mp4", src: `/video/${e.video.file}` })
+        }
+        mPlayer.currentTime(Math.max(0, e.video.index - 4)) // 4 seconds before moments
+        mPlayer.play()
       }
-      mPlayer.currentTime(Math.max(0, e.video.index - 4)) // 4 seconds before moments
-      mPlayer.play()
-      //console.log(mPlayer.remainingTime())
-      //if (mPlayer.remainingTime() < e.duration + 4) {
-      //  alert('movement goes onto the next file')
-      //}
-      console.log(e)
     }
   }
 
   function reset() {
-    setState({ current_idx: null, inputs: {} })
+    setInputState({ current_idx: null, allSelected: inputState.allSelected, inputs: {} })
   }
 
+  const _selection = new Selection({
+    //isAllSelected: (e) => {
+    onSelectionChanged: function () {
+      console.log(`onSelectionChanged ${_selection.isAllSelected()}, current idx ${inputState.current_idx}`)
+      //setInputState({ ...inputState, allSelected: _selection.isAllSelected() })
+
+    }
+  })
+
+
+
   function process() {
-    const body = JSON.stringify(Object.keys(state.inputs).map((i) => { return { ...moments[i], ...state.inputs[i] } }))
+    const body = JSON.stringify(Object.keys(inputState.inputs).map((i) => { return { ...moments[i], ...inputState.inputs[i] } }))
 
     fetch('/api/movements', {
       body,
@@ -107,7 +124,7 @@ function App() {
       } else if (res.status === 201) {
         //window.location.reload(true)
         getMovements()
-        setState({ current_idx: null, inputs: {} })
+        setInputState({ current_idx: null, allSelected: false, inputs: {} })
       } else {
         console.error(`non 200 err : ${res.status}`)
       }
@@ -123,7 +140,7 @@ function App() {
         <nav className="header">
           <div className="logo">Home Surveillance Recordings</div>
           <input className="menu-btn" type="checkbox" id="menu-btn" />
-          <label className="menu-icon" for="menu-btn"><span className="navicon"></span></label>
+          <label className="menu-icon" htmlFor="menu-btn"><span className="navicon"></span></label>
           <ul className="menu">
             <li><a href="/live">Live Feed</a></li>
             <li><a href="/metrics">Network Metrics</a></li>
@@ -137,7 +154,7 @@ function App() {
 
           <Stack.Item styles={{ root: { width: "700px" } }} grow={1}>
             <video ref={video_ref} className="video-js vjs-default-skin" width="640" height="268" />
-            <div>{state.current_idx ? `${moments[state.current_idx].video.file} (${moments[state.current_idx].video.index})` : ""}</div>
+            <div>{inputState.current_idx !== null && moments[inputState.current_idx].video ? `${moments[inputState.current_idx].video.file} (${moments[inputState.current_idx].video.index})` : ""}</div>
           </Stack.Item>
 
 
@@ -145,23 +162,29 @@ function App() {
             <DetailsList
               items={moments}
               compact={false}
-              listProps={state}
+              //listProps={state}
               columns={[
                 {
                   name: "Reviewed Movement (seconds)", key: "start", minWidth: 200, maxWidth: 200, onRender: (i, idx) => {
-                    console.log(`rendering ${idx} - input ${state.inputs[idx]}`)
-                    return <Checkbox label={`${i.start} (${i.duration})`} checked={state.inputs[idx] ? state.inputs[idx].reviewed : false} disabled />
+                    //console.log(`rendering ${idx} - input ${state.inputs[idx]}`)
+                    return <Checkbox label={`${i.start} (${i.duration})`} checked={inputState.allSelected ? true : (inputState.inputs[idx] ? inputState.inputs[idx].reviewed : false)} disabled />
                   }
                 },
                 {
                   name: "Save", key: "stat", minWidth: 80, maxWidth: 80, onRender: (i, idx) => {
-                    return <div> <Checkbox checked={state.inputs[idx] ? state.inputs[idx].save : false} onChange={(e, val) => setState({ current_idx: idx, inputs: { ...state.inputs, [idx]: { reviewed: true, save: val } } })} /> </div>
+                    if (i.video) {
+                      return <Checkbox checked={inputState.inputs[idx] ? inputState.inputs[idx].save : false} onChange={(e, val) => setInputState({ current_idx: idx, allSelected: inputState.allSelected, inputs: { ...inputState.inputs, [idx]: { reviewed: true, save: val } } })} label={`${i.video.file} (${i.video.index})`} />
+                    } else {
+                      return <div>no video</div>
+                    }
                   }
                 }
               ]}
-              selectionMode={SelectionMode.single}
+              selectionMode={SelectionMode.multiple}
+              //selection={_selection}
               isHeaderVisible={true}
-              onActiveItemChanged={_onItemInvoked}
+              onActiveItemChanged={_itemChanged}
+              onItemInvoked={_onItemInvoked}
             />
             <CompoundButton primary secondaryText="they will not appear again" onClick={process} style={{ "marginTop": 10, "marginLeft": 50 }}>Record Reviews</CompoundButton>
             <CompoundButton secondaryText="clear your reviews" onClick={reset} style={{ "marginTop": 10, "marginLeft": 50 }}>Reset</CompoundButton>

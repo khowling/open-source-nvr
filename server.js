@@ -182,12 +182,13 @@ async function init_web() {
 
                 const filename = `${webdir}/${process.env.CAMERA_NAME}-${d.getFullYear()}-${('0' + (d.getMonth() + 1)).slice(-2)}-${('0' + d.getDate()).slice(-2)}.csv`
                 console.log(`writing movement ${filename}`)
-                await fs.promises.appendFile(filename, ctx.request.body.map(m => `${m.movement_key};${m.video.file};${m.reviewed || "false"};${m.save || "false"}`).join("\n") + "\n")
+                await fs.promises.appendFile(filename, ctx.request.body.map(m => `${m.movement_key};${m.video ? m.video.file : "missing"};${m.reviewed || "false"};${m.save || "false"}`).join("\n") + "\n")
                 ctx.status = 201
             }
         })
-        .get('/movements', async (ctx, next) => {
+        .get('/movements/:mode*', async (ctx, next) => {
 
+            const mode = ctx.params.mode
 
             function add_in_order(new_val, array) {
 
@@ -211,7 +212,9 @@ async function init_web() {
                 }
             }
 
-            async function readFiles(dir, labels) {
+
+
+            async function readFiles(dir, labels, newerthan) {
                 let sorted_out = []
                 const movement_dir = await fs.promises.readdir(dir)
                 const movement_re = new RegExp(`^${process.env.CAMERA_NAME}-(\\d{4})-(\\d{2})-(\\d{2}).csv`)
@@ -219,7 +222,7 @@ async function init_web() {
                     const entry_match = dir_entry.match(movement_re)
                     if (entry_match) {
                         const [file, year, month, day] = entry_match
-                        if (file) {
+                        if (file, new Date(year, parseInt(month) - 1, day).getTime() >= newerthan) {
                             const data = await fs.promises.readFile(dir + '/' + file, 'UTF-8')
                             for (let mov_line of data.split(/\r?\n/)) {
                                 const [start, ...rest] = mov_line.split(';')
@@ -233,49 +236,66 @@ async function init_web() {
                 return sorted_out
             }
 
-            const sorted_mov = await readFiles(movdir, ["duration"])
-            const sorted_web = await readFiles(webdir, ["file", "reviewed", "save"])
+            if (mode === "video_only") {
+                ctx.body = sorted_mp4
 
-            let mp4_idx = 0
-            let web_idx = 0
-            ctx.body = sorted_mov.map(function (mov) {
-                let out = { movement_key: mov.key, start: new Date(mov.start).toUTCString().replace(/ \d{4}/, "").replace(/ GMT$/, ""), duration: mov.duration }
+            } else if (sorted_mp4.length > 0) {
 
-                // match movement entry to mp4 file and starttime
-                while (mp4_idx < sorted_mp4.length) {
-                    const curr_mp4_start = sorted_mp4[mp4_idx].start
-                    if (mov.start >= curr_mp4_start) {
-                        // movemet time is greater than current mp4 start time
-                        const next_mp4_start = (mp4_idx + 1 < sorted_mp4.length) ? sorted_mp4[mp4_idx + 1].start : null
-                        if (next_mp4_start === null || mov.start < next_mp4_start) {
-                            out = { ...out, video: { file: sorted_mp4[mp4_idx].file, index: parseInt((mov.start - curr_mp4_start) / 1000, 10) } }
-                            break
+                const oldest_mp4 = new Date(sorted_mp4[0].start),
+                    oldest_mp4_date = new Date(oldest_mp4.getFullYear(), oldest_mp4.getMonth(), oldest_mp4.getDate()).getTime()
+
+
+                const sorted_mov = await readFiles(movdir, ["duration"], oldest_mp4_date)
+                const sorted_web = await readFiles(webdir, ["file", "reviewed", "save"], oldest_mp4_date)
+
+                let mp4_idx = 0
+                let web_idx = 0
+
+                const MAX_MP4_DURATION_SEC = 60 * 60 * 2 // 2hrs
+                ctx.body = sorted_mov.map(function (mov) {
+                    let out = { movement_key: mov.key, start: new Date(mov.start).toUTCString().replace(/ \d{4}/, "").replace(/ GMT$/, ""), duration: mov.duration }
+
+                    // match movement entry to mp4 file and starttime
+                    while (mp4_idx < sorted_mp4.length) {
+                        const curr_mp4_start = sorted_mp4[mp4_idx].start
+                        if (mov.start >= curr_mp4_start) {
+                            // movemet time is greater than current mp4 start time
+                            const next_mp4_start = (mp4_idx + 1 < sorted_mp4.length) ? sorted_mp4[mp4_idx + 1].start : null
+                            if (next_mp4_start === null || mov.start < next_mp4_start) {
+                                const index_in_seconds = parseInt((mov.start - curr_mp4_start) / 1000, 10)
+                                if (index_in_seconds < MAX_MP4_DURATION_SEC) {
+                                    out = { ...out, video: { file: sorted_mp4[mp4_idx].file, index: index_in_seconds } }
+                                }
+                                break
+                            } else {
+                                // movement time is after or equal the next mp4 start time
+                                mp4_idx++
+                            }
+
                         } else {
-                            // movement time is after or equal the next mp4 start time
-                            mp4_idx++
+                            // movemet time is older than current mp4 (mp4 no longer on local disk!)
+                            break
                         }
-
-                    } else {
-                        // movemet time is older than current mp4 (mp4 no longer on local disk!)
-                        break
                     }
-                }
 
-                // match movement entry to updates from web
-                while (web_idx < sorted_web.length) {
-                    const curr_web_start = sorted_web[web_idx].start
-                    if (mov.start === curr_web_start) {
-                        out = { ...out, web: sorted_web[web_idx] }
-                        break
-                    } else if (mov.start < sorted_web[web_idx].start) {
-                        break
+                    // match movement entry to updates from web
+                    while (web_idx < sorted_web.length) {
+                        const curr_web_start = sorted_web[web_idx].start
+                        if (mov.start === curr_web_start) {
+                            out = { ...out, web: sorted_web[web_idx] }
+                            break
+                        } else if (mov.start < sorted_web[web_idx].start) {
+                            break
+                        }
+                        web_idx++
                     }
-                    web_idx++
-                }
 
-                return out
+                    return out
 
-            }).filter(i => i.web ? i.web.reviewed === "false" : true)
+                }).filter(i => i.web ? i.web.reviewed === "false" : true)
+            } else {
+                ctx.body = []
+            }
         })
 
     const nav = new Router()
