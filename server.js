@@ -170,8 +170,9 @@ async function init_web() {
             //ctx.body = fs.createReadStream(filepath, { encoding: null, start, end }).on('error', ctx.onerror).pipe(PassThrough());
 
         }).get(['/(.*)'], async (ctx, next) => {
-            console.log(`serving static: ${ctx.params[0]}`)
-            await send(ctx, ctx.params[0] || '/index.html', { root: __dirname + '/build' })
+            const path = ctx.params[0]
+            console.log(`serving static: ${path}`)
+            await send(ctx, !path || path === "video_only" ? '/index.html' : path, { root: __dirname + '/build' })
         })
 
     const api = new Router({ prefix: '/api' })
@@ -292,7 +293,7 @@ async function init_web() {
 
                     return out
 
-                }).filter(i => i.web ? i.web.reviewed === "false" : true)
+                }).filter(i => i.video ? (i.web ? i.web.reviewed === "false" : true) : false)
             } else {
                 ctx.body = []
             }

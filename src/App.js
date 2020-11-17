@@ -9,6 +9,7 @@ initializeIcons(/* optional base url */);
 
 function App() {
 
+  const [video_mode] = React.useState(window.location.pathname === '/' ? "" : window.location.pathname)
   const [moments, setMoments] = React.useState([])
   const [inputState, setInputState] = React.useState({ current_idx: null, allSelected: false, inputs: {} })
 
@@ -54,7 +55,7 @@ function App() {
 
   function getMovements() {
 
-    fetch("/api/movements")
+    fetch("/api/movements" + video_mode)
       .then(res => res.json())
       .then(
         (result) => {
@@ -80,14 +81,21 @@ function App() {
     // (_section.isAllSelected ${_selection.isAllSelected()})
     console.log(`_onItemInvoked ${idx} (old ${inputState.current_idx})  (allSelected ${inputState.allSelected})`)
     if (idx !== inputState.current_idx) {
-      setInputState({ current_idx: idx, allSelected: inputState.allSelected, inputs: { ...inputState.inputs, [idx]: { reviewed: true } } })
-      //setMoments([...moments.slice(0, idx), { ...moments[idx], reviewed: true }, ...moments.slice(idx + 1)])
-      if (e.video) {
+
+      let video = e.video
+      if (video_mode !== '/video_only') {
+        setInputState({ current_idx: idx, allSelected: inputState.allSelected, inputs: { ...inputState.inputs, [idx]: { reviewed: true } } })
+      } else {
+        video = e
+      }
+
+
+      if (video) {
         let mPlayer = videojs(video_ref.current)
-        if (mPlayer.src() !== `/video/${e.video.file}`) {
-          mPlayer.src({ type: "video/mp4", src: `/video/${e.video.file}` })
+        if (mPlayer.src() !== `/video/${video.file}`) {
+          mPlayer.src({ type: "video/mp4", src: `/video/${video.file}` })
         }
-        mPlayer.currentTime(Math.max(0, e.video.index - 4)) // 4 seconds before moments
+        mPlayer.currentTime(Math.max(0, video.index - 4)) // 4 seconds before moments
         mPlayer.play()
       }
     }
@@ -142,6 +150,8 @@ function App() {
           <input className="menu-btn" type="checkbox" id="menu-btn" />
           <label className="menu-icon" htmlFor="menu-btn"><span className="navicon"></span></label>
           <ul className="menu">
+            <li><a href="/">Recorded Movements</a></li>
+            <li><a href="/video_only">Recorded Video</a></li>
             <li><a href="/live">Live Feed</a></li>
             <li><a href="/metrics">Network Metrics</a></li>
             <li><a href="/network">Network Control</a></li>
@@ -163,23 +173,27 @@ function App() {
               items={moments}
               compact={false}
               //listProps={state}
-              columns={[
-                {
-                  name: "Reviewed Movement (seconds)", key: "start", minWidth: 200, maxWidth: 200, onRender: (i, idx) => {
-                    //console.log(`rendering ${idx} - input ${state.inputs[idx]}`)
-                    return <Checkbox label={`${i.start} (${i.duration})`} checked={inputState.allSelected ? true : (inputState.inputs[idx] ? inputState.inputs[idx].reviewed : false)} disabled />
-                  }
-                },
-                {
-                  name: "Save", key: "stat", minWidth: 80, maxWidth: 80, onRender: (i, idx) => {
-                    if (i.video) {
-                      return <Checkbox checked={inputState.inputs[idx] ? inputState.inputs[idx].save : false} onChange={(e, val) => setInputState({ current_idx: idx, allSelected: inputState.allSelected, inputs: { ...inputState.inputs, [idx]: { reviewed: true, save: val } } })} label={`${i.video.file} (${i.video.index})`} />
-                    } else {
-                      return <div>no video</div>
+              columns={video_mode === '/video_only' ? [
+                { name: "Video file", key: "file", fieldName: "file" }
+              ]
+                :
+                [
+                  {
+                    name: "Reviewed Movement (seconds)", key: "start", minWidth: 200, maxWidth: 200, onRender: (i, idx) => {
+                      //console.log(`rendering ${idx} - input ${state.inputs[idx]}`)
+                      return <Checkbox label={`${i.start} (${i.duration})`} checked={inputState.allSelected ? true : (inputState.inputs[idx] ? inputState.inputs[idx].reviewed : false)} disabled />
+                    }
+                  },
+                  {
+                    name: "Save", key: "stat", minWidth: 80, maxWidth: 80, onRender: (i, idx) => {
+                      if (i.video) {
+                        return <Checkbox checked={inputState.inputs[idx] ? inputState.inputs[idx].save : false} onChange={(e, val) => setInputState({ current_idx: idx, allSelected: inputState.allSelected, inputs: { ...inputState.inputs, [idx]: { reviewed: true, save: val } } })} label={`${i.video.file} (${i.video.index})`} />
+                      } else {
+                        return <div>no video</div>
+                      }
                     }
                   }
-                }
-              ]}
+                ]}
               selectionMode={SelectionMode.multiple}
               //selection={_selection}
               isHeaderVisible={true}
