@@ -14,16 +14,22 @@ To create a logical volume from a volume group storage pool, use the ```lvcreate
 sudo lvcreate -L 40G -n video-files ubuntu-vg
 ```
 
-format
+format:
 ```
 sudo mkfs -t ext4 /dev/mapper/ubuntu--vg-video--files
 ```
 
-mount
+mount:
 
 ```
 mkdir /video
 sudo mount /dev/mapper/ubuntu--vg-video--files  /video
+```
+
+ensure its always mounted:
+```
+sudo vi /etc/fstab
+/dev/mapper/ubuntu--vg-video--files /video ext4 defaults 0 0
 ```
 
 ## Create a shell script to start ffmpeg
@@ -39,7 +45,7 @@ create a file called ```ffmpeg_start.sh```
 # segment_time: segment duration to time Default value is "2" seconds (600 = 10mins). 
 # reset_timestamps : allows videojs seek bar to function
 
-ffmpeg -rtsp_transport tcp -i rtsp://admin:qwerty@192.168.0.76:554/h264Preview_01_main -c copy -map 0 -f segment  -strftime 1 -segment_time 120 -reset_timestamps 1 -segment_format mp4  "static/video/mp4/out%Y-%m-%d_%H-%M-%S.mp4"
+ffmpeg -rtsp_transport tcp -i rtsp://admin:xxxxx@xxx.xxx.0.xxx:554/h264Preview_01_main -c copy -map 0 -f segment  -strftime 1 -segment_time 120 -reset_timestamps 1 -segment_format mp4  "static/video/mp4/out%Y-%m-%d_%H-%M-%S.mp4"
 ```
 
 Copy the ```camera1_ffmpeg.service``` file to ```/etc/systemd/system``` , and replacing the xxxx
