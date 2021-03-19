@@ -2,7 +2,7 @@
 import './App.css';
 import React, { /* useCallback , */ useRef, useEffect } from 'react';
 import videojs from 'video.js'
-import { Fabric, CompoundButton, DetailsList, SelectionMode, Stack, Checkbox, Selection } from '@fluentui/react'
+import { Fabric, CompoundButton, DetailsList, SelectionMode, Stack, Checkbox, Selection, PrimaryButton } from '@fluentui/react'
 import { initializeIcons } from '@fluentui/react/lib/Icons';
 
 initializeIcons(/* optional base url */);
@@ -37,12 +37,12 @@ function App() {
     let mPlayer = videojs(video_ref.current, {
       autoplay: true,
       controls: true,
-      aspectRatio: '4:3'
-      //,
-      // sources: [{
-      //   src: '/video/mp4/out-test-2020-11-05_18-30-30.mp4',
-      //   type: 'video/mp4'
-      //  }]
+      aspectRatio: '4:3',
+      liveui: true,
+      sources: [{
+        src: '/video/' + 'test' + '/live/stream.m3u8',
+        type: 'application/x-mpegURL'
+      }]
     }, function onPlayerReady() {
       console.log('onPlayerReady', this)
     })
@@ -55,11 +55,15 @@ function App() {
 
   function getMovements() {
 
-    fetch("/api/movements" + video_mode)
+    fetch("/api/movements/" + "test")
       .then(res => res.json())
       .then(
         (result) => {
-          setMoments(result);
+          setMoments([{
+            "startDate": "Live",
+            "movement_key": "live",
+            "seconds": "0"
+          }, ...result]);
         },
         // Note: it's important to handle errors here
         // instead of a catch() block so that we don't swallow
@@ -82,22 +86,25 @@ function App() {
     console.log(`_onItemInvoked ${idx} (old ${inputState.current_idx})  (allSelected ${inputState.allSelected})`)
     if (idx !== inputState.current_idx) {
 
-      let video = e.video
-      if (video_mode !== '/video_only') {
-        setInputState({ current_idx: idx, allSelected: inputState.allSelected, inputs: { ...inputState.inputs, [idx]: { reviewed: true } } })
-      } else {
-        video = e
-      }
+      //let video = e.video
+      //if (video_mode !== '/video_only') {
+      setInputState({ current_idx: idx, allSelected: inputState.allSelected, inputs: { ...inputState.inputs, [idx]: { reviewed: true } } })
+      //} else {
+      //  video = e
+      //}
 
-
-      if (video) {
-        let mPlayer = videojs(video_ref.current)
-        if (mPlayer.src() !== `/video/${video.file}`) {
-          mPlayer.src({ type: "video/mp4", src: `/video/${video.file}` })
-        }
-        mPlayer.currentTime(Math.max(0, video.index - 4)) // 4 seconds before moments
-        mPlayer.play()
-      }
+      console.log(e)
+      //if (video) {
+      let mPlayer = videojs(video_ref.current)
+      //if (mPlayer.src() !== `/video/${video.file}`) {
+      mPlayer.src({
+        src: '/video/' + 'test' + `/${e.movement_key}/stream.m3u8`,
+        type: 'application/x-mpegURL'
+      })
+      //}
+      //mPlayer.currentTime(Math.max(0, video.index - 4)) // 4 seconds before moments
+      mPlayer.play()
+      //}
     }
   }
 
@@ -119,7 +126,7 @@ function App() {
   function process() {
     const body = JSON.stringify(Object.keys(inputState.inputs).map((i) => { return { ...moments[i], ...inputState.inputs[i] } }))
 
-    fetch('/api/movements', {
+    fetch('/api/movements' + '/test', {
       body,
       method: "POST",
       headers: {
@@ -165,6 +172,7 @@ function App() {
           <Stack.Item styles={{ root: { width: "700px" } }} grow={1}>
             <video ref={video_ref} className="video-js vjs-default-skin" width="640" height="268" />
             <div>{inputState.current_idx !== null && moments[inputState.current_idx].video ? `${moments[inputState.current_idx].video.file} (${moments[inputState.current_idx].video.index})` : ""}</div>
+
           </Stack.Item>
 
 
@@ -181,17 +189,24 @@ function App() {
                   {
                     name: "Reviewed Movement (seconds)", key: "start", minWidth: 200, maxWidth: 200, onRender: (i, idx) => {
                       //console.log(`rendering ${idx} - input ${state.inputs[idx]}`)
-                      return <Checkbox label={`${i.start} (${i.duration})`} checked={inputState.allSelected ? true : (inputState.inputs[idx] ? inputState.inputs[idx].reviewed : false)} disabled />
+                      return <Checkbox label={`${i.startDate} (${i.seconds})`} checked={inputState.allSelected ? true : (inputState.inputs[idx] ? inputState.inputs[idx].reviewed : false)} disabled />
                     }
                   },
                   {
-                    name: "Save", key: "stat", minWidth: 80, maxWidth: 80, onRender: (i, idx) => {
-                      if (i.video) {
-                        return <Checkbox checked={inputState.inputs[idx] ? inputState.inputs[idx].save : false} onChange={(e, val) => setInputState({ current_idx: idx, allSelected: inputState.allSelected, inputs: { ...inputState.inputs, [idx]: { reviewed: true, save: val } } })} label={`${i.video.file} (${i.video.index})`} />
-                      } else {
-                        return <div>no video</div>
-                      }
+                    name: "Save", key: "stat", minWidth: 80, maxWidth: 80, onRender: (i, idx) =>
+                      <a target="_blank" href={`/image/` + 'test' + `/${i.movement_key}`}>image</a>
+                    /*
+                    if (i.video) {
+                      return <Checkbox checked={inputState.inputs[idx] ? inputState.inputs[idx].save : false} onChange={(e, val) => {
+                        console.log('check')
+                        setInputState({ current_idx: idx, allSelected: inputState.allSelected, inputs: { ...inputState.inputs, [idx]: { reviewed: true, save: val } } })
+
+                      }} label={`${i.video.file} (${i.video.index})`} />
+                    } else {
+                      return <div>no video</div>
                     }
+                    */
+
                   }
                 ]}
               selectionMode={SelectionMode.multiple}

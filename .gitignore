@@ -26,4 +26,5 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-ffmpeg_start.sh
+ffmpeg_start*.sh
+mydb

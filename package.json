@@ -3,17 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "dependencies": {
-    "@testing-library/jest-dom": "^5.11.5",
-    "@testing-library/react": "^11.1.1",
-    "@testing-library/user-event": "^12.2.0",
-    "koa": "^2.13.0",
+    "koa": "^2.13.1",
     "koa-body-parser": "^1.1.2",
     "koa-router": "^10.0.0",
     "koa-send": "^5.0.1",
+    "level": "^6.0.1",
+    "lexicographic-integer": "^1.1.0",
     "react": "^17.0.1",
     "react-dom": "^17.0.1",
-    "react-scripts": "4.0.0",
-    "web-vitals": "^0.2.4"
+    "react-scripts": "^4.0.3",
+    "subleveldown": "^5.0.1"
   },
   "scripts": {
     "start": "react-scripts start",
@@ -40,8 +39,8 @@
     ]
   },
   "devDependencies": {
-    "@fluentui/react": "^7.149.4",
-    "video.js": "^7.10.2"
+    "@fluentui/react": "^8.2.1",
+    "video.js": "^7.11.7"
   },
   "proxy": "http://localhost:8080"
 }
