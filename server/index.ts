@@ -1,34 +1,110 @@
 const
     assert = require('assert'),
     Koa = require('koa'),
-    Router = require('koa-router'),
     send = require('koa-send'),
     fs = require('fs'),
     path = require('path'),
-    server_fetch = require('./server_fetch'),
-    level = require('level'),
-    sub = require('subleveldown'),
-    lexint = require('lexicographic-integer');
+    lexint = require('lexicographic-integer'),
+    leveldown = require('leveldown')
 
+import server_fetch from './server_fetch'
+import Router from 'koa-router'
+import bodyParser from 'koa-bodyparser'
+import level, { LevelUp } from 'levelup'
+import sub from 'subleveldown'
 
+import { JobManager, JobStatus, JobReturn, JobData, JobTask } from './jobmanager'
 
 assert(process.env.FILEPATH, "FILEPATH not set")
 assert(process.env.CAMERA_NAME, "CAMERA_NAME not set")
 
 const VIDEO_PATH = `${process.env.FILEPATH}`
 
-
+interface MovementEntry {
+    startDate: Date;
+    startSegment: number;
+    lhs_seg_duration_seq: number;
+    seconds: number;
+    consecutivesecondswithout: number;
+}
 
 var spawn = require('child_process').spawn;
 
-async function init_movement_poll(movementdb, camera_name) {
+async function init_movement_poll(db: LevelUp, movementdb: LevelUp, camera_name: string) {
+
+
+    const jobman = new JobManager(db, 1, async function (seq: number, d: JobData): Promise<JobReturn> {
+
+        let newJob: JobData | null = null
+        if (d.task === JobTask.ML) {
+
+            const m = await movementdb.get(d.movement_key)
+            const input = `${VIDEO_PATH}/${camera_name}/image${d.movement_key}.jpg`
+            await new Promise((acc, rej) => {
+                let stdout = ''
+                var ml = spawn('/bin/ls', ['-l', input]);
+
+                ml.stdout.on('data', (data: string) => {
+                    stdout += data
+                    console.log(`ml stdout: ${data}`);
+                })
+
+                ml.stderr.on('data', (data: string) => {
+                    stdout += data
+                    console.error(`ml stderr: ${data}`);
+                });
+
+                ml.on('close', async (code: number) => {
+                    if (code === 0) {
+                        await movementdb.put(d.movement_key, { ...m, ml: { success: true, tags: ["test"] } })
+                    } else {
+                        await movementdb.put(d.movement_key, { ...m, ml: { success: false, stdout } })
+                    }
+                    acc(code)
+                });
+
+            })
+            return { seq, status: JobStatus.Success }
+
+        } else if (d.task === JobTask.Snapshot) {
+
+            const m = await movementdb.get(d.movement_key)
+            newJob = await new Promise((acc, rej) => {
+                let newJob: JobData
+                var ffmpeg = spawn('/usr/bin/ffmpeg', ['-ss', '0', '-i', `${VIDEO_PATH}/${camera_name}/stream${(m.startSegment + 2)}.ts`, '-vframes', '1', '-q:v', '2', `${VIDEO_PATH}/${camera_name}/image${d.movement_key}.jpg`]);
+                let stdout = ''
+                ffmpeg.stdout.on('data', (data: string) => {
+                    stdout += data
+                    console.log(`ffmpeg stdout: ${data}`);
+                })
+
+                ffmpeg.stderr.on('data', (data: string) => {
+                    stdout += data
+                    console.error(`ffmpeg stderr: ${data}`);
+                });
+
+                ffmpeg.on('close', async (code: number) => {
+                    if (code === 0) {
+                        await movementdb.put(d.movement_key, { ...m, ffmpeg: { success: true } })
+                        newJob = { task: JobTask.ML, movement_key: d.movement_key }
+                    } else {
+                        await movementdb.put(d.movement_key, { ...m, ffmpeg: { success: false, stdout } })
+                        //rej(`ffmpeg process exited with code ${code}`)
+                    }
+                    acc(newJob)
+                });
+            })
+        }
+        return { seq, status: JobStatus.Success, ...(newJob && { newJob }) }
+    })
+    jobman.start(false)
 
     const SECS_WITHOUT_MOVEMENT = 10
 
     const re = new RegExp(`stream([\\d]+).ts`, 'g');
     //await fs.promises.mkdir(movdir, { recursive: true })
 
-    let movement_entry
+    let movement_entry: MovementEntry
     async function processMovement() {
         try {
             const body_json = await server_fetch(`http://${process.env.CAMERA_IP}/api.cgi?cmd=GetMdState&user=admin&password=${process.env.CAMERA_PASSWD}`)
@@ -60,11 +136,11 @@ async function init_movement_poll(movementdb, camera_name) {
                     if (movement_entry.consecutivesecondswithout > SECS_WITHOUT_MOVEMENT) {
                         //const filename = `${movdir}/${process.env.CAMERA_NAME}-${movement_entry.startDate.getFullYear()}-${('0' + (movement_entry.startDate.getMonth() + 1)).slice(-2)}-${('0' + movement_entry.startDate.getDate()).slice(-2)}.csv`
                         console.log(`writing movement`)
-                        const movement_key = movement_entry.startDate.getTime()
-                        movementdb.put(movement_key, movement_entry)
+                        const movement_key = (movement_entry.startDate.getTime() / 1000 | 0) - 1600000000
+                        await movementdb.put(movement_key, movement_entry)
                         //await fs.promises.appendFile(filename, `${movement_entry.startDate.toISOString()};${movement_entry.seconds}` + "\n")
 
-                        var proc = spawn('/usr/bin/ffmpeg', ['-ss', '0', '-i', `${VIDEO_PATH}/${camera_name}/stream${(movement_entry.startSegment + 2)}.ts`, '-vframes', '1', '-q:v', '2', `${VIDEO_PATH}/${camera_name}/image${movement_key}.jpg`]);
+                        await jobman.submit({ task: JobTask.Snapshot, movement_key })
                         movement_entry = null
 
                     } else {
@@ -82,9 +158,9 @@ async function init_movement_poll(movementdb, camera_name) {
 }
 
 
-async function init_web(movementdb) {
+async function init_web(movementdb: LevelUp) {
 
-    var static = new Router()
+    var assets = new Router()
         .get('/image/:camera/:moment', async (ctx, next) => {
             const camera_name = ctx.params.camera
             const moment = ctx.params.moment
@@ -141,7 +217,7 @@ stream${n + startSegment}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n"
         }).get(['/mp4/(.*)'], async (ctx, next) => {
             console.log(`serving video: ${ctx.params[0]}`)
             const filepath = `${VIDEO_PATH}/${ctx.params[0]}`
-            let streamoptions = { encoding: null }
+            let streamoptions: any = { encoding: null }
             if (ctx.headers.range) {
 
                 const { size } = await fs.promises.stat(filepath)
@@ -154,7 +230,7 @@ stream${n + startSegment}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n"
                 console.log(`serving video request range: ${range_start} -> ${range_end},  providing ${start} -> ${end} / ${size}`)
 
                 ctx.set('Accept-Ranges', 'bytes');
-                ctx.set('Content-Length', chunklength) // 38245154
+                ctx.set('Content-Length', chunklength.toString()) // 38245154
                 ctx.set('Content-Range', `bytes ${start}-${end}/${size}`) // bytes 29556736-67801889/67801890
 
                 streamoptions = { ...streamoptions, start, end }
@@ -166,22 +242,23 @@ stream${n + startSegment}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n"
         }).get(['/(.*)'], async (ctx, next) => {
             const path = ctx.params[0]
             console.log(`serving static: ${path}`)
-            await send(ctx, !path || path === "video_only" ? '/index.html' : path, { root: __dirname + '/build' })
+            await send(ctx, !path || path === "video_only" ? '/index.html' : path, { root: './build' })
         })
 
     const api = new Router({ prefix: '/api' })
         .post('/movements/:camera', async (ctx, next) => {
             const camera = ctx.params.camera
             if (ctx.request.body && ctx.request.body.length > 0) {
-                const cmd = ctx.request.body.map(m => { return { type: 'del', key: m.movement_key } })
-                const succ = await movementdb.batch(cmd)
+                const confirmed: { movement_key: number }[] = ctx.request.body
+                const cmd = confirmed.map(m => { return { type: 'del', key: m.movement_key } })
+                const succ = await movementdb.batch(cmd as any)
                 ctx.status = 201
             }
         }).get('/movements/:camera', async (ctx, next) => {
             const camera = ctx.params.camera
             ctx.response.set("content-type", "application/json");
             ctx.body = await new Promise(async (res, rej) => {
-                let runningKeys = []
+                let runningKeys: MovementEntry[] = []
 
                 let first_seq_on_disk = 0
                 const local_video = await fs.promises.readdir(`${VIDEO_PATH}/${camera}`)
@@ -337,10 +414,10 @@ stream${n + startSegment}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n"
         })
 
     const app = new Koa()
-    app.use(require('koa-body-parser')())
+    app.use(bodyParser())
     app.use(api.routes())
     app.use(nav.routes())
-    app.use(static.routes())
+    app.use(assets.routes())
     /*
         app.use(async (ctx) => {
             
@@ -351,7 +428,7 @@ stream${n + startSegment}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n"
 }
 
 async function main() {
-    const db = level('./mydb')
+    const db = level(leveldown('./mydb'))
 
     const movementdb = sub(db, 'movements', {
         keyEncoding: {
@@ -362,7 +439,7 @@ async function main() {
         }, valueEncoding: 'json'
     })
     //await movementdb.clear()
-    init_movement_poll(movementdb, process.env.CAMERA_NAME)
+    init_movement_poll(db, movementdb, process.env.CAMERA_NAME)
     init_web(movementdb)
 
     //db.close()

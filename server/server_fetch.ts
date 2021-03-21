@@ -1,15 +1,15 @@
 const http = require('http')
 
 
-module.exports = async function (url, method = 'GET', headers = {}, body) {
-    const opts = { method, headers }
+export default async function (url: string, method = 'GET', headers = {}, body?: string): Promise<any> {
+    const opts: any = { method, headers }
 
     if (body) {
         opts.headers['content-length'] = Buffer.byteLength(body)
     }
 
     return new Promise(function (resolve, reject) {
-        const req = http.request(url, opts, (res) => {
+        const req = http.request(url, opts, (res: any) => {
 
             if (res.statusCode !== 200 && res.statusCode !== 201) {
                 let error = new Error(`Request Failed: Status Code: ${res.statusCode}`)
@@ -24,14 +24,14 @@ module.exports = async function (url, method = 'GET', headers = {}, body) {
                 const contentType = res.headers['content-type']
 
                 // collect the data chunks
-                var strings = []
-                res.on('data', function (chunk) {
+                var strings: string[] = []
+                res.on('data', function (chunk: string) {
                     strings.push(chunk)
                 })
                 res.on('end', () => {
 
                     if (strings.length === 0) {
-                        resolve()
+                        resolve(0)
                     } else {
 
                         let body = strings.join('')
@@ -54,7 +54,7 @@ module.exports = async function (url, method = 'GET', headers = {}, body) {
                     }
                 })
             }
-        }).on('error', (e) => {
+        }).on('error', (e: any) => {
             console.error(`server_fetch: ${e.message}`)
             reject(e)
         })
