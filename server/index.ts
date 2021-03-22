@@ -41,8 +41,9 @@ async function init_movement_poll(db: LevelUp, movementdb: LevelUp, camera_name:
             const m = await movementdb.get(d.movement_key)
             const input = `${VIDEO_PATH}/${camera_name}/image${d.movement_key}.jpg`
             await new Promise((acc, rej) => {
-                let stdout = ''
-                var ml = spawn('/bin/ls', ['-l', input]);
+                let stdout = '', stderr = ''
+                var ml = spawn('./darknet', ['detect', 'cfg/yolov3.cfg', 'cfg/yolov3.weights', input], { cwd: '/home/kehowli/darknet' });
+
 
                 ml.stdout.on('data', (data: string) => {
                     stdout += data
@@ -50,15 +51,24 @@ async function init_movement_poll(db: LevelUp, movementdb: LevelUp, camera_name:
                 })
 
                 ml.stderr.on('data', (data: string) => {
-                    stdout += data
+                    stderr += data
                     console.error(`ml stderr: ${data}`);
                 });
 
                 ml.on('close', async (code: number) => {
                     if (code === 0) {
-                        await movementdb.put(d.movement_key, { ...m, ml: { success: true, tags: ["test"] } })
+                        console.log(stdout)
+                        const tags = stdout.match(/([\w]+): ([\d]+)%/g).map(d => { const i = d.indexOf(': '); return { tag: d.substr(0, i), probability: parseInt(d.substr(i + 2, d.length - i - 3)) } })
+                        var mv = spawn('/usr/bin/mv', ['/home/kehowli/darknet/predictions.jpg', `${VIDEO_PATH}/${camera_name}/mlimage${d.movement_key}.jpg`]);
+                        mv.on('close', async (code: number) => {
+                            if (code === 0) {
+                                await movementdb.put(d.movement_key, { ...m, ml: { success: true, tags } })
+                            } else {
+                                await movementdb.put(d.movement_key, { ...m, ml: { success: false, tags, stderr: 'move failed' } })
+                            }
+                        })
                     } else {
-                        await movementdb.put(d.movement_key, { ...m, ml: { success: false, stdout } })
+                        await movementdb.put(d.movement_key, { ...m, ml: { success: false, stderr } })
                     }
                     acc(code)
                 });
@@ -72,15 +82,15 @@ async function init_movement_poll(db: LevelUp, movementdb: LevelUp, camera_name:
             newJob = await new Promise((acc, rej) => {
                 let newJob: JobData
                 var ffmpeg = spawn('/usr/bin/ffmpeg', ['-ss', '0', '-i', `${VIDEO_PATH}/${camera_name}/stream${(m.startSegment + 2)}.ts`, '-vframes', '1', '-q:v', '2', `${VIDEO_PATH}/${camera_name}/image${d.movement_key}.jpg`]);
-                let stdout = ''
+                let stdout = '', stderr = ''
                 ffmpeg.stdout.on('data', (data: string) => {
                     stdout += data
                     console.log(`ffmpeg stdout: ${data}`);
                 })
 
                 ffmpeg.stderr.on('data', (data: string) => {
-                    stdout += data
-                    console.error(`ffmpeg stderr: ${data}`);
+                    stderr += data
+                    //console.error(`ffmpeg stderr: ${data}`);
                 });
 
                 ffmpeg.on('close', async (code: number) => {
@@ -88,7 +98,7 @@ async function init_movement_poll(db: LevelUp, movementdb: LevelUp, camera_name:
                         await movementdb.put(d.movement_key, { ...m, ffmpeg: { success: true } })
                         newJob = { task: JobTask.ML, movement_key: d.movement_key }
                     } else {
-                        await movementdb.put(d.movement_key, { ...m, ffmpeg: { success: false, stdout } })
+                        await movementdb.put(d.movement_key, { ...m, ffmpeg: { success: false, stderr } })
                         //rej(`ffmpeg process exited with code ${code}`)
                     }
                     acc(newJob)
@@ -111,9 +121,10 @@ async function init_movement_poll(db: LevelUp, movementdb: LevelUp, camera_name:
             const body = JSON.parse(body_json)
             //console.log(body[0].value)
             if (body[0].value.state === 1) {
-                console.log(`got movement`)
+
                 if (!movement_entry) {
                     // get the current segment that will contain the movement
+                    console.log(`got movement`)
 
                     const filepath = `${VIDEO_PATH}/${camera_name}/stream.m3u8`
                     const hls = (await fs.promises.readFile(filepath)).toString()
@@ -135,7 +146,7 @@ async function init_movement_poll(db: LevelUp, movementdb: LevelUp, camera_name:
                 if (movement_entry) {
                     if (movement_entry.consecutivesecondswithout > SECS_WITHOUT_MOVEMENT) {
                         //const filename = `${movdir}/${process.env.CAMERA_NAME}-${movement_entry.startDate.getFullYear()}-${('0' + (movement_entry.startDate.getMonth() + 1)).slice(-2)}-${('0' + movement_entry.startDate.getDate()).slice(-2)}.csv`
-                        console.log(`writing movement`)
+                        //console.log(`writing movement`)
                         const movement_key = (movement_entry.startDate.getTime() / 1000 | 0) - 1600000000
                         await movementdb.put(movement_key, movement_entry)
                         //await fs.promises.appendFile(filename, `${movement_entry.startDate.toISOString()};${movement_entry.seconds}` + "\n")
@@ -144,7 +155,7 @@ async function init_movement_poll(db: LevelUp, movementdb: LevelUp, camera_name:
                         movement_entry = null
 
                     } else {
-                        console.log(`no movement`)
+                        //console.log(`no movement`)
                         movement_entry.consecutivesecondswithout++
                     }
                 }
@@ -164,9 +175,10 @@ async function init_web(movementdb: LevelUp) {
         .get('/image/:camera/:moment', async (ctx, next) => {
             const camera_name = ctx.params.camera
             const moment = ctx.params.moment
-            //const { startSegment, lhs_seg_duration_seq, seconds } = await movementdb.get(parseInt(moment))
+
             try {
-                const serve = `${VIDEO_PATH}/${camera_name}/image${moment}.jpg`
+                const m = await movementdb.get(parseInt(moment))
+                const serve = `${VIDEO_PATH}/${camera_name}/${m.ml && m.ml.success ? 'mlimage' : 'image'}${moment}.jpg`
                 const { size } = await fs.promises.stat(serve)
                 ctx.set('content-type', 'image/jpeg')
                 ctx.body = fs.createReadStream(serve, { encoding: null }).on('error', ctx.onerror)
@@ -180,12 +192,17 @@ async function init_web(movementdb: LevelUp) {
             const moment = ctx.params.moment
             const file = ctx.params.file
 
-            console.log(`camera_name=${camera_name} moment=${moment} file=${file}`)
+            //console.log(`camera_name=${camera_name} moment=${moment} file=${file}`)
 
             if (moment === 'live') {
                 const serve = `${VIDEO_PATH}/${camera_name}/${file}`
-                console.log(`serving : ${serve}`)
-                ctx.body = fs.createReadStream(serve, { encoding: null }).on('error', ctx.onerror)
+                try {
+                    const { size } = await fs.promises.stat(serve)
+                    //console.log(`serving : ${serve}`)
+                    ctx.body = fs.createReadStream(serve, { encoding: null }).on('error', ctx.onerror)
+                } catch (e) {
+                    ctx.throw(`error e=${JSON.stringify(e)}`)
+                }
             } else if (!isNaN(moment)) {
 
                 if (file.endsWith('.m3u8')) {
@@ -200,7 +217,7 @@ stream${n + startSegment}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n"
                     ctx.body = body
                 } else if (file.endsWith('.ts')) {
                     const serve = `${VIDEO_PATH}/${camera_name}/${file}`
-                    console.log(`serving : ${serve}`)
+                    //console.log(`serving : ${serve}`)
                     try {
                         const { size } = await fs.promises.stat(serve)
                         ctx.body = fs.createReadStream(serve, { encoding: null }).on('error', ctx.onerror)
@@ -241,8 +258,8 @@ stream${n + startSegment}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n"
 
         }).get(['/(.*)'], async (ctx, next) => {
             const path = ctx.params[0]
-            console.log(`serving static: ${path}`)
-            await send(ctx, !path || path === "video_only" ? '/index.html' : path, { root: './build' })
+            //console.log(`serving static: ${path}`)
+            await send(ctx, !path || path === "video_only" ? '/index.html' : path, { root: process.env.WEBPATH || './build' })
         })
 
     const api = new Router({ prefix: '/api' })
@@ -428,7 +445,7 @@ stream${n + startSegment}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n"
 }
 
 async function main() {
-    const db = level(leveldown('./mydb'))
+    const db = level(leveldown(process.env.DBPATH || './mydb'))
 
     const movementdb = sub(db, 'movements', {
         keyEncoding: {

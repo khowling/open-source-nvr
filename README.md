@@ -5,6 +5,35 @@
 
 I need to see the videos, in a browser, fast navigate, and teir to cloud
 
+##
+
+Run ffmpeg
+```
+CAMERA_NAME="xxx" CAMERA_IP="xxx.xxx.xxx.xxx" CAMERA_PASSWD="xxx" FILEPATH="/video"
+
+mkdir -p ${FILEPATH}/${CAMERA_NAME}
+
+ffmpeg -rtsp_transport tcp -i rtsp://xxx:${CAMERA_PASSWD}@${CAMERA_IP}/h264Preview_01_main \
+ -r 25 \
+ -vcodec copy \
+ -start_number $(echo "$(date +%s) - 1600000000" | bc) \
+ ${FILEPATH}/${CAMERA_NAME}/stream.m3u8
+```
+Run web
+```
+# install dependencies
+npm i
+
+# build typescript
+npm run-script buildserver
+
+# build fromend
+REACT_APP_CAMERA_NAME=front npm run-script build
+
+# run
+CAMERA_NAME="xxx" CAMERA_IP="x.x.x.x" CAMERA_PASSWD="xxx" FILEPATH="/video" WEBPATH="/home/xxx/xxx/build" DBPATH="/home/xxx/xxx/mydb" node ./server/out/index.js
+
+```
 
 ## Create Logic Volume for the local files 
 

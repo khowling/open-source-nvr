@@ -221,12 +221,19 @@ function App() {
                     if (i.startDate === 'Live') {
                       return <div></div>
                     } else {
+                      const status = i.ml ? (i.ml.success ? i.ml.tags.map(t => <div>tag: {t.tag} - {t.probability}</div>) : <div>ml error: {i.ml.stderr}</div>) : (i.ffmpeg ? (i.ffmpeg.success ? <div>ffmpeg success</div> : <div>ffmpeg error: {i.ffmpeg.stderr}</div>) : <div>please wait..</div>)
                       const img = `/image/${process.env.REACT_APP_CAMERA_NAME}/${i.movement_key}`
                       if (imageReview) {
-                        return <img width="600" src={img}></img>
+                        return <div>
+                          {status}
+                          <img width="600" src={img}></img>
+                        </div>
 
                       } else {
-                        return <a target="_blank" href={img}>image</a>
+                        return <div>
+                          {status}
+                          <a target="_blank" href={img}>image</a>
+                        </div>
                       }
                     }
                     /*
