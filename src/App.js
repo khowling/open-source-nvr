@@ -11,7 +11,7 @@ function App() {
 
   //const [video_mode] = React.useState(window.location.pathname === '/' ? "" : window.location.pathname)
   const [moments, setMoments] = React.useState([])
-  const [inputState, setInputState] = React.useState({ current_idx: 0, allSelected: false, inputs: {} })
+  const [inputState, setInputState] = React.useState({ current_idx: 'none', allSelected: false, inputs: {} })
   const [taggedOnly, setTaggedOnly] = React.useState(true)
   const [showPlayer, setShowPlayer] = React.useState(true)
   const [playerReady, setPlayerReady] = React.useState(false)
@@ -27,8 +27,9 @@ function App() {
         liveui: true
       }, () => {
         console.log('player ready')
-        playVideo()
         setPlayerReady(true)
+        playVideo()
+
       })
 
       return () => {
@@ -71,16 +72,17 @@ function App() {
 
   function _itemChanged(m, idx) {
     // (_section.isAllSelected ${_selection.isAllSelected()})
-    console.log(`_onItemInvoked ${idx} (old ${inputState.current_idx})  (allSelected ${inputState.allSelected})`)
+    console.log(`_itemChanged ${idx} (old ${inputState.current_idx})  (allSelected ${inputState.allSelected})`)
     if (idx !== inputState.current_idx) {
       setInputState({ current_idx: idx, allSelected: inputState.allSelected, inputs: { ...inputState.inputs, [m.movement_key]: { reviewed: true } } })
-
-      playVideo(m.movement_key)
+      if (playerReady) {
+        playVideo(m.movement_key)
+      }
     }
   }
 
   function playVideo(movement) {
-    if (playerReady) {
+    if (video_ref.current) {
       let mPlayer = videojs(video_ref.current)
       //if (mPlayer.src() !== `/video/${video.file}`) {
       mPlayer.src({
@@ -94,7 +96,7 @@ function App() {
   }
 
   function reloadlist() {
-    setInputState({ current_idx: 0, allSelected: inputState.allSelected, inputs: {} })
+    setInputState({ current_idx: 'none', allSelected: inputState.allSelected, inputs: {} })
     getMovements()
   }
 
@@ -125,13 +127,29 @@ function App() {
       } else if (res.status === 201) {
         //window.location.reload(true)
         getMovements()
-        setInputState({ current_idx: null, allSelected: false, inputs: {} })
+        setInputState({ current_idx: 'none', allSelected: false, inputs: {} })
       } else {
         console.error(`non 200 err : ${res.status}`)
       }
     }, err => {
       console.error(`err : ${err}`)
     })
+  }
+
+  function renderImage(m, idx) {
+    const status = m.ml ? (m.ml.success ? m.ml.tags.filter(t => t.tag !== 'car').map(t => <div>{t.tag} ({t.probability})</div>) : <div>ml error: {m.ml.stderr}</div>) : (m.ffmpeg ? (m.ffmpeg.success ? <div>ffmpeg success</div> : <div>ffmpeg error: {m.ffmpeg.stderr}</div>) : <div>please wait..</div>)
+    const img = `/image/${process.env.REACT_APP_CAMERA_NAME}/${m.movement_key}`
+    if (showPlayer) {
+      return <div>
+        {status}
+        <a target="_blank" href={img}>image</a>
+      </div>
+    } else {
+      return <div>
+        {status}
+        <img src={img} style={{ maxWidth: "100%" }} />
+      </div>
+    }
   }
 
 
@@ -163,10 +181,10 @@ function App() {
         <Stack.Item styles={showPlayer ? { root: { width: "300px" } } : {}} grow={1}>
           <Stack horizontal>
             <Toggle inlineLabel onText="Tag'd" offText="All" styles={{ root: { "marginTop": "5px" } }} onChange={(e, val) => setTaggedOnly(val)} checked={taggedOnly} />
-            <Toggle inlineLabel onText="Video Review" offText="Image Review" styles={{ root: { "marginTop": "5px" } }} onChange={(e, val) => setShowPlayer(val)} checked={showPlayer} />
-            <PrimaryButton onClick={recordReview} >Store</PrimaryButton>
-            <DefaultButton onClick={reloadlist} >refresh</DefaultButton>
-            <DefaultButton onClick={() => playVideo()} >Live</DefaultButton>
+            <Toggle inlineLabel onText="Video" offText="Image" styles={{ root: { "marginTop": "5px" } }} onChange={(e, val) => setShowPlayer(val)} checked={showPlayer} />
+            <PrimaryButton styles={{ root: { minWidth: '50px' } }} onClick={recordReview} >Save</PrimaryButton>
+            <DefaultButton styles={{ root: { minWidth: '50px' } }} onClick={reloadlist} >Load</DefaultButton>
+            <DefaultButton styles={{ root: { minWidth: '50px' } }} onClick={() => playerReady && playVideo()} >Live</DefaultButton>
           </Stack>
           <DetailsList
             isHeaderVisible={false}
@@ -175,31 +193,18 @@ function App() {
             //listProps={state}
             columns={[
               {
-                name: "Reviewed Movement (seconds)", key: "start", minWidth: 200, maxWidth: 200, onRender: (m, idx) =>
+                name: "Reviewed Movement (seconds)", key: "start", minWidth: 200, ...(showPlayer && { maxWidth: 200 }), onRender: (m, idx) => [
                   //console.log(`rendering ${idx} - input ${state.inputs[idx]}`)
-                  <Checkbox label={`${m.startDate} (${m.seconds})`} checked={inputState.allSelected ? true : (inputState.inputs[m.movement_key] ? inputState.inputs[m.movement_key].reviewed : false)} disabled />
-
-              },
-              {
-                name: "Save", key: "stat", minWidth: 80, maxWidth: 80, onRender: (m, idx) => {
-                  const status = m.ml ? (m.ml.success ? m.ml.tags.filter(t => t.tag !== 'car').map(t => <div>{t.tag} ({t.probability})</div>) : <div>ml error: {m.ml.stderr}</div>) : (m.ffmpeg ? (m.ffmpeg.success ? <div>ffmpeg success</div> : <div>ffmpeg error: {m.ffmpeg.stderr}</div>) : <div>please wait..</div>)
-                  const img = `/image/${process.env.REACT_APP_CAMERA_NAME}/${m.movement_key}`
-                  if (showPlayer) {
-                    return <div>
-                      {status}
-                      <a target="_blank" href={img}>image</a>
-                    </div>
-
-                  } else {
-                    return <div>
-                      {status}
-                      <img width="600" src={img}></img>
-
-                    </div>
-                  }
-                }
+                  <div>
+                    <Checkbox label={`${m.startDate} (${m.seconds})`} checked={inputState.allSelected ? true : (inputState.inputs[m.movement_key] ? inputState.inputs[m.movement_key].reviewed : false)} disabled />
+                    {!showPlayer && renderImage(m, idx)}
+                  </div>
+                ]
               }
-            ]}
+            ].concat(showPlayer ? {
+              name: "Save", key: "stat", minWidth: 80, maxWidth: 80, onRender: renderImage
+            } : [])
+            }
             selectionMode={SelectionMode.multiple}
             onActiveItemChanged={_itemChanged}
             onItemInvoked={_onItemInvoked}
