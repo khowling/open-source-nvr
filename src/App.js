@@ -9,39 +9,41 @@ initializeIcons(/* optional base url */);
 
 function App() {
 
-  const [video_mode] = React.useState(window.location.pathname === '/' ? "" : window.location.pathname)
-  const [moments, setMoments] = React.useState([{
-    "startDate": "Live",
-    "movement_key": "live",
-    "seconds": "0"
-  }])
+  //const [video_mode] = React.useState(window.location.pathname === '/' ? "" : window.location.pathname)
+  const [moments, setMoments] = React.useState([])
   const [inputState, setInputState] = React.useState({ current_idx: 0, allSelected: false, inputs: {} })
-  const [imageReview, setImageReview] = React.useState(false)
+  const [taggedOnly, setTaggedOnly] = React.useState(true)
+  const [showPlayer, setShowPlayer] = React.useState(true)
   const [playerReady, setPlayerReady] = React.useState(false)
 
-  const video_ref = useRef(null)
+  let video_ref = useRef(null)
   useEffect(() => {
-    console.log(`initialising videojs on ${video_ref.current}`)
-    let mPlayer = videojs(video_ref.current, {
-      autoplay: true,
-      controls: true,
-      aspectRatio: '4:3',
-      liveui: true,
-      sources: [{
-        src: `/video/${process.env.REACT_APP_CAMERA_NAME}/live/stream.m3u8`,
-        type: 'application/x-mpegURL'
-      }]
-    }, () => {
-      console.log('player ready')
-      setPlayerReady(true)
-    })
+    if (showPlayer) {
+      console.log(`useEffect: initialising videojs on ${video_ref.current}`)
+      let mPlayer = videojs(video_ref.current, {
+        autoplay: true,
+        controls: true,
+        aspectRatio: '4:3',
+        liveui: true
+      }, () => {
+        console.log('player ready')
+        playVideo()
+        setPlayerReady(true)
+      })
 
-    return () => {
+      return () => {
+        console.log(`useEffect: dispose return`)
+        setPlayerReady(false)
+        if (mPlayer) mPlayer.dispose()
+      }
+    } else {
+      console.log(`useEffect: disposing videojs on ${video_ref.current}`)
       setPlayerReady(false)
-      if (mPlayer) mPlayer.dispose()
+      if (video_ref.current) {
+        videojs(video_ref.current).dispose()
+      }
     }
-
-  }, [video_ref])
+  }, [video_ref, showPlayer])
 
   function getMovements() {
 
@@ -49,11 +51,7 @@ function App() {
       .then(res => res.json())
       .then(
         (result) => {
-          setMoments([{
-            "startDate": "Live",
-            "movement_key": "live",
-            "seconds": "0"
-          }, ...result]);
+          setMoments(result)
         },
         // Note: it's important to handle errors here
         // instead of a catch() block so that we don't swallow
@@ -67,40 +65,35 @@ function App() {
 
 
 
-  function _onItemInvoked(e, idx) {
-    if (idx > 0) { // 0 is live
-      setInputState({ ...inputState, inputs: { ...inputState.inputs, [idx]: { reviewed: false } } })
-    }
+  function _onItemInvoked(m, idx) {
+    setInputState({ ...inputState, inputs: { ...inputState.inputs, [m.movement_key]: { reviewed: false } } })
   }
 
-  function _itemChanged(e, idx) {
+  function _itemChanged(m, idx) {
     // (_section.isAllSelected ${_selection.isAllSelected()})
     console.log(`_onItemInvoked ${idx} (old ${inputState.current_idx})  (allSelected ${inputState.allSelected})`)
     if (idx !== inputState.current_idx) {
+      setInputState({ current_idx: idx, allSelected: inputState.allSelected, inputs: { ...inputState.inputs, [m.movement_key]: { reviewed: true } } })
 
-      //let video = e.video
-      //if (video_mode !== '/video_only') {
-      setInputState({ current_idx: idx, allSelected: inputState.allSelected, inputs: idx > 0 ? { ...inputState.inputs, [idx]: { reviewed: true } } : inputState.inputs })
-      //} else {
-      //  video = e
-      //}
-
-      console.log(e)
-      if (playerReady) {
-        let mPlayer = videojs(video_ref.current)
-        //if (mPlayer.src() !== `/video/${video.file}`) {
-        mPlayer.src({
-          src: `/video/${process.env.REACT_APP_CAMERA_NAME}/${e.movement_key}/stream.m3u8`,
-          type: 'application/x-mpegURL'
-        })
-        //}
-        //mPlayer.currentTime(Math.max(0, video.index - 4)) // 4 seconds before moments
-        mPlayer.play()
-      }
+      playVideo(m.movement_key)
     }
   }
 
-  function reset() {
+  function playVideo(movement) {
+    if (playerReady) {
+      let mPlayer = videojs(video_ref.current)
+      //if (mPlayer.src() !== `/video/${video.file}`) {
+      mPlayer.src({
+        src: `/video/${process.env.REACT_APP_CAMERA_NAME}/${movement || 'live'}/stream.m3u8`,
+        type: 'application/x-mpegURL'
+      })
+      //}
+      //mPlayer.currentTime(Math.max(0, video.index - 4)) // 4 seconds before moments
+      mPlayer.play()
+    }
+  }
+
+  function reloadlist() {
     setInputState({ current_idx: 0, allSelected: inputState.allSelected, inputs: {} })
     getMovements()
   }
@@ -117,7 +110,7 @@ function App() {
 
 
   function recordReview() {
-    const body = JSON.stringify(Object.keys(inputState.inputs).map((i) => { return { ...moments[i], ...inputState.inputs[i] } }))
+    const body = JSON.stringify(Object.keys(inputState.inputs).filter(i => inputState.inputs[i].reviewed).map((i) => { return { movement_key: i } }))
 
     fetch(`/api/movements/${process.env.REACT_APP_CAMERA_NAME}`, {
       body,
@@ -146,7 +139,7 @@ function App() {
     <main id="mainContent" data-grid="container">
 
       <nav className="header">
-        <div className="logo">Home Surveillance Recordings</div>
+        <div className="logo">Home Surveillance</div>
         <input className="menu-btn" type="checkbox" id="menu-btn" />
         <label className="menu-icon" htmlFor="menu-btn"><span className="navicon"></span></label>
         <ul className="menu">
@@ -161,98 +154,53 @@ function App() {
       <div style={{ "height": "43px", "width": "100%" }} />
 
       <Stack horizontal wrap >
+        {showPlayer &&
+          <Stack.Item styles={{ root: { width: "700px" } }} grow={1}>
+            <video ref={video_ref} className="video-js vjs-default-skin" width="640" height="268" />
+          </Stack.Item>
+        }
 
-        <Stack.Item styles={imageReview ? {} : { root: { width: "700px" } }} grow={1}>
-          <video ref={video_ref} className="video-js vjs-default-skin" width="640" height="268" />
-          <div>{inputState.current_idx !== null && moments[inputState.current_idx].video ? `${moments[inputState.current_idx].video.file} (${moments[inputState.current_idx].video.index})` : ""}</div>
-
-        </Stack.Item>
-
-
-        <Stack.Item styles={imageReview ? {} : { root: { width: "300px" } }} grow={1}>
+        <Stack.Item styles={showPlayer ? { root: { width: "300px" } } : {}} grow={1}>
           <Stack horizontal>
-            <Toggle inlineLabel onText="Image Review" offText="Video Review" styles={{ root: { "marginTop": "5px" } }} onChange={(e, val) => {
-              if (val) {
-                setPlayerReady(false)
-                videojs(video_ref.current).dispose()
-                console.log('player dispose')
-              } else {
-                videojs(video_ref.current, {
-                  autoplay: true,
-                  controls: true,
-                  aspectRatio: '4:3',
-                  liveui: true,
-                  sources: [{
-                    src: `/video/${process.env.REACT_APP_CAMERA_NAME}/live/stream.m3u8`,
-                    type: 'application/x-mpegURL'
-                  }]
-                }, () => {
-                  console.log('player ready')
-                  setPlayerReady(true)
-                })
-              }
-              setImageReview(val)
-            }} />
-            <PrimaryButton onClick={recordReview} >Record Reviews</PrimaryButton>
-            <DefaultButton onClick={reset} >Reset</DefaultButton>
+            <Toggle inlineLabel onText="Tag'd" offText="All" styles={{ root: { "marginTop": "5px" } }} onChange={(e, val) => setTaggedOnly(val)} checked={taggedOnly} />
+            <Toggle inlineLabel onText="Video Review" offText="Image Review" styles={{ root: { "marginTop": "5px" } }} onChange={(e, val) => setShowPlayer(val)} checked={showPlayer} />
+            <PrimaryButton onClick={recordReview} >Store</PrimaryButton>
+            <DefaultButton onClick={reloadlist} >refresh</DefaultButton>
+            <DefaultButton onClick={() => playVideo()} >Live</DefaultButton>
           </Stack>
           <DetailsList
             isHeaderVisible={false}
-            items={moments}
+            items={taggedOnly ? moments.filter(m => m.ml && m.ml.success && m.ml.tags.filter(t => t.tag !== 'car').length > 0) : moments}
             compact={true}
             //listProps={state}
-            columns={video_mode === '/video_only' ? [
-              { name: "Video file", key: "file", fieldName: "file" }
-            ]
-              :
-              [
-                {
-                  name: "Reviewed Movement (seconds)", key: "start", minWidth: 200, maxWidth: 200, onRender: (i, idx) => {
-                    //console.log(`rendering ${idx} - input ${state.inputs[idx]}`)
-                    if (i.startDate === 'Live') {
-                      return <div>Live</div>
-                    } else {
-                      return <Checkbox label={`${i.startDate} (${i.seconds})`} checked={inputState.allSelected ? true : (inputState.inputs[idx] ? inputState.inputs[idx].reviewed : false)} disabled />
-                    }
-                  }
-                },
-                {
-                  name: "Save", key: "stat", minWidth: 80, maxWidth: 80, onRender: (i, idx) => {
-                    if (i.startDate === 'Live') {
-                      return <div></div>
-                    } else {
-                      const status = i.ml ? (i.ml.success ? i.ml.tags.map(t => <div>tag: {t.tag} - {t.probability}</div>) : <div>ml error: {i.ml.stderr}</div>) : (i.ffmpeg ? (i.ffmpeg.success ? <div>ffmpeg success</div> : <div>ffmpeg error: {i.ffmpeg.stderr}</div>) : <div>please wait..</div>)
-                      const img = `/image/${process.env.REACT_APP_CAMERA_NAME}/${i.movement_key}`
-                      if (imageReview) {
-                        return <div>
-                          {status}
-                          <img width="600" src={img}></img>
-                        </div>
+            columns={[
+              {
+                name: "Reviewed Movement (seconds)", key: "start", minWidth: 200, maxWidth: 200, onRender: (m, idx) =>
+                  //console.log(`rendering ${idx} - input ${state.inputs[idx]}`)
+                  <Checkbox label={`${m.startDate} (${m.seconds})`} checked={inputState.allSelected ? true : (inputState.inputs[m.movement_key] ? inputState.inputs[m.movement_key].reviewed : false)} disabled />
 
-                      } else {
-                        return <div>
-                          {status}
-                          <a target="_blank" href={img}>image</a>
-                        </div>
-                      }
-                    }
-                    /*
-                    if (i.video) {
-                      return <Checkbox checked={inputState.inputs[idx] ? inputState.inputs[idx].save : false} onChange={(e, val) => {
-                        console.log('check')
-                        setInputState({ current_idx: idx, allSelected: inputState.allSelected, inputs: { ...inputState.inputs, [idx]: { reviewed: true, save: val } } })
- 
-                      }} label={`${i.video.file} (${i.video.index})`} />
-                    } else {
-                      return <div>no video</div>
-                    }
-                    */
+              },
+              {
+                name: "Save", key: "stat", minWidth: 80, maxWidth: 80, onRender: (m, idx) => {
+                  const status = m.ml ? (m.ml.success ? m.ml.tags.filter(t => t.tag !== 'car').map(t => <div>{t.tag} ({t.probability})</div>) : <div>ml error: {m.ml.stderr}</div>) : (m.ffmpeg ? (m.ffmpeg.success ? <div>ffmpeg success</div> : <div>ffmpeg error: {m.ffmpeg.stderr}</div>) : <div>please wait..</div>)
+                  const img = `/image/${process.env.REACT_APP_CAMERA_NAME}/${m.movement_key}`
+                  if (showPlayer) {
+                    return <div>
+                      {status}
+                      <a target="_blank" href={img}>image</a>
+                    </div>
+
+                  } else {
+                    return <div>
+                      {status}
+                      <img width="600" src={img}></img>
+
+                    </div>
                   }
                 }
-              ]}
+              }
+            ]}
             selectionMode={SelectionMode.multiple}
-            //selection={_selection}
-
             onActiveItemChanged={_itemChanged}
             onItemInvoked={_onItemInvoked}
           />
