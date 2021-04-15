@@ -5,21 +5,24 @@
 
 I need to see the videos, in a browser, fast navigate, and teir to cloud
 
-##
+## Ops
 
-Run ffmpeg
+### list services
 ```
-CAMERA_NAME="xxx" CAMERA_IP="xxx.xxx.xxx.xxx" CAMERA_PASSWD="xxx" FILEPATH="/video"
-
-mkdir -p ${FILEPATH}/${CAMERA_NAME}
-
-ffmpeg -rtsp_transport tcp -i rtsp://xxx:${CAMERA_PASSWD}@${CAMERA_IP}/h264Preview_01_main \
- -r 25 \
- -vcodec copy \
- -start_number $(echo "$(date +%s) - 1600000000" | bc) \
- ${FILEPATH}/${CAMERA_NAME}/stream.m3u8
+systemctl --type=service
 ```
-Run web
+### list logs
+```
+sudo journalctl -u camera1_ffmpeg.service -f
+sudo journalctl -u camera1_web.service -f
+```
+### stop/start/enable
+```
+sudo systemctl stop  camera1_web.service
+```
+
+## Build & Run web
+
 ```
 # install dependencies
 npm i
@@ -28,10 +31,10 @@ npm i
 npm run-script buildserver
 
 # build fromend
-REACT_APP_CAMERA_NAME=front npm run-script build
+REACT_APP_CAMERA_NAME=mycamera npm run-script build
 
 # run
-CAMERA_NAME="xxx" CAMERA_IP="x.x.x.x" CAMERA_PASSWD="xxx" FILEPATH="/video" WEBPATH="/home/xxx/xxx/build" DBPATH="/home/xxx/xxx/mydb" node ./server/out/index.js
+CAMERA_NAME="mycamera" CAMERA_IP="x.x.x.x" CAMERA_PASSWD="xxx" FILEPATH="/video" WEBPATH="/home/xxx/xxx/build" DBPATH="/home/xxx/xxx/mydb" node ./server/out/index.js
 
 ```
 
@@ -66,15 +69,27 @@ sudo vi /etc/fstab
 create a file called ```ffmpeg_start.sh```
 
 ```
-#!/bin/bash
+CAMERA_NAME="xxx" CAMERA_IP="xxx.xxx.xxx.xxx" CAMERA_PASSWD="xxx" FILEPATH="/video"
+export CAMERA_NAME CAMERA_IP CAMERA_PASSWD FILEPATH
+mkdir -p ${FILEPATH}/${CAMERA_NAME}
 
+#ffmpeg -rtsp_transport tcp -i rtsp://admin:${CAMERA_PASSWD}@${CAMERA_IP}/h264Preview_01_main \
+# -r 25 \
+# -hide_banner -loglevel error \
+# -vcodec copy \
+# -start_number $(echo "$(date +%s) - 1600000000" | bc) \
+# ${FILEPATH}/${CAMERA_NAME}/stream.m3u8
 
-# Copy all output streams with the -c copy option, (split the video at keyframes)
-# additionally map everything from input to the output with -map 0
-# segment_time: segment duration to time Default value is "2" seconds (600 = 10mins). 
-# reset_timestamps : allows videojs seek bar to function
-
-ffmpeg -rtsp_transport tcp -i rtsp://admin:xxxxx@xxx.xxx.0.xxx:554/h264Preview_01_main -c copy -map 0 -f segment  -strftime 1 -segment_time 120 -reset_timestamps 1 -segment_format mp4  "static/video/mp4/out%Y-%m-%d_%H-%M-%S.mp4"
+TOKEN=$(curl -X POST -d "[{\"cmd\":\"Login\",\"action\":0,\"param\":{\"User\":{\"userName\":\"admin\",\"password\":\"${CAMERA_PASSWD}\"}}}]" "http://${CAMERA_IP}/cgi-bin/api.cgi?cmd=Login&token=null" \
+  | grep \"name\" | sed -E 's/.*"name" : "?([^,"]*)"?.*/\1/')
+  
+export TOKEN
+ffmpeg -i "rtmp://admin:${CAMERA_PASSWD}@${CAMERA_IP}/bcs/channel0_main.bcs?token=${TOKEN}&channel=0&stream=0" \
+  -r 25 \
+  -hide_banner -loglevel error \
+  -vcodec copy \
+  -start_number $(echo "$(date +%s) - 1600000000" | bc) \
+  ${FILEPATH}/${CAMERA_NAME}/stream.m3u8
 ```
 
 Copy the ```camera1_ffmpeg.service``` file to ```/etc/systemd/system``` , and replacing the xxxx

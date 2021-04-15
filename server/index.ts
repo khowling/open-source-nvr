@@ -47,12 +47,12 @@ async function init_movement_poll(db: LevelUp, movementdb: LevelUp, camera_name:
 
                 ml.stdout.on('data', (data: string) => {
                     stdout += data
-                    console.log(`ml stdout: ${data}`);
+                    //console.log(`ml stdout: ${data}`);
                 })
 
                 ml.stderr.on('data', (data: string) => {
                     stderr += data
-                    console.error(`ml stderr: ${data}`);
+                    //console.error(`ml stderr: ${data}`);
                 });
 
                 ml.on('close', async (code: number) => {
@@ -61,31 +61,31 @@ async function init_movement_poll(db: LevelUp, movementdb: LevelUp, camera_name:
                         const tags = stdout.match(/([\w]+): ([\d]+)%/g).map(d => { const i = d.indexOf(': '); return { tag: d.substr(0, i), probability: parseInt(d.substr(i + 2, d.length - i - 3)) } })
                         var mv = spawn('/usr/bin/mv', ['/home/kehowli/darknet/predictions.jpg', `${VIDEO_PATH}/${camera_name}/mlimage${d.movement_key}.jpg`]);
                         mv.on('close', async (code: number) => {
-                            if (code === 0) {
-                                await movementdb.put(d.movement_key, { ...m, ml: { success: true, tags } })
-                            } else {
-                                await movementdb.put(d.movement_key, { ...m, ml: { success: false, tags, stderr: 'move failed' } })
-                            }
+                            await movementdb.put(d.movement_key, { ...m, ml: { success: code === 0, tags, stderr, stdout, moveCode: code } })
                         })
                     } else {
-                        await movementdb.put(d.movement_key, { ...m, ml: { success: false, stderr } })
+                        await movementdb.put(d.movement_key, { ...m, ml: { success: false, code, stderr, stdout } })
                     }
                     acc(code)
                 });
 
+                ml.on('error', async (error: any) => {
+                    await movementdb.put(d.movement_key, { ...m, ml: { success: false, error, stderr, stdout } })
+                    acc(-1)
+                })
+
             })
-            return { seq, status: JobStatus.Success }
 
         } else if (d.task === JobTask.Snapshot) {
 
             const m = await movementdb.get(d.movement_key)
-            newJob = await new Promise((acc, rej) => {
-                let newJob: JobData
+            await new Promise((acc, rej) => {
+
                 var ffmpeg = spawn('/usr/bin/ffmpeg', ['-ss', '0', '-i', `${VIDEO_PATH}/${camera_name}/stream${(m.startSegment + 2)}.ts`, '-vframes', '1', '-q:v', '2', `${VIDEO_PATH}/${camera_name}/image${d.movement_key}.jpg`]);
                 let stdout = '', stderr = ''
                 ffmpeg.stdout.on('data', (data: string) => {
                     stdout += data
-                    console.log(`ffmpeg stdout: ${data}`);
+                    //console.log(`ffmpeg stdout: ${data}`);
                 })
 
                 ffmpeg.stderr.on('data', (data: string) => {
@@ -95,14 +95,19 @@ async function init_movement_poll(db: LevelUp, movementdb: LevelUp, camera_name:
 
                 ffmpeg.on('close', async (code: number) => {
                     if (code === 0) {
-                        await movementdb.put(d.movement_key, { ...m, ffmpeg: { success: true } })
+                        await movementdb.put(d.movement_key, { ...m, ffmpeg: { success: true, stderr, stdout } })
                         newJob = { task: JobTask.ML, movement_key: d.movement_key }
                     } else {
-                        await movementdb.put(d.movement_key, { ...m, ffmpeg: { success: false, stderr } })
+                        await movementdb.put(d.movement_key, { ...m, ffmpeg: { success: false, code, stderr, stdout } })
                         //rej(`ffmpeg process exited with code ${code}`)
                     }
-                    acc(newJob)
+                    acc(code)
                 });
+
+                ffmpeg.on('error', async (error: any) => {
+                    await movementdb.put(d.movement_key, { ...m, ffmpeg: { success: false, error, stderr, stdout } })
+                    acc(-1)
+                })
             })
         }
         return { seq, status: JobStatus.Success, ...(newJob && { newJob }) }
@@ -203,7 +208,7 @@ async function init_web(movementdb: LevelUp) {
                 } catch (e) {
                     ctx.throw(`error e=${JSON.stringify(e)}`)
                 }
-            } else if (!isNaN(moment)) {
+            } else if (!isNaN(moment as any)) {
 
                 if (file.endsWith('.m3u8')) {
                     // need to return a segement file for the movement
