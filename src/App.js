@@ -161,10 +161,7 @@ function App() {
         <input className="menu-btn" type="checkbox" id="menu-btn" />
         <label className="menu-icon" htmlFor="menu-btn"><span className="navicon"></span></label>
         <ul className="menu">
-          <li><a href="/">Recorded Movements</a></li>
-          <li><a href="/video_only">Recorded Video</a></li>
-          <li><a href="/live">Live Feed</a></li>
-          <li><a href="/metrics">Network Metrics</a></li>
+          <li><a href="/grafana/?orgId=1">Grafana</a></li>
           <li><a href="/network">Network Control</a></li>
         </ul>
       </nav>

@@ -28,4 +28,5 @@ yarn-debug.log*
 yarn-error.log*
 
 ffmpeg_start*.sh
+web.sh
 mydb
