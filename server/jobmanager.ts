@@ -226,7 +226,7 @@ export class JobManager {
                     clearInterval(interval)
                     resolve(true)
                 }
-            }, 1000)
+            }, 10000)
         })
     }
     /*

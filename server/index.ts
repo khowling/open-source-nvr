@@ -40,74 +40,62 @@ async function init_movement_poll(db: LevelUp, movementdb: LevelUp, camera_name:
 
             const m = await movementdb.get(d.movement_key)
             const input = `${VIDEO_PATH}/${camera_name}/image${d.movement_key}.jpg`
-            await new Promise((acc, rej) => {
-                let stdout = '', stderr = ''
-                var ml = spawn('./darknet', ['detect', 'cfg/yolov3.cfg', 'cfg/yolov3.weights', input], { cwd: '/home/kehowli/darknet' });
+            const code = await new Promise((acc, rej) => {
+                let ml_stdout = '', ml_stderr = '', ml_error = ''
+                const ml_task = spawn('./darknet', ['detect', 'cfg/yolov3.cfg', 'cfg/yolov3.weights', input], { cwd: '/home/kehowli/darknet', timeout: 120000 });
 
+                ml_task.stdout.on('data', (data: string) => { ml_stdout += data })
+                ml_task.stderr.on('data', (data: string) => { ml_stderr += data })
+                ml_task.on('error', async (error: Error) => { ml_error = `${error.name}: ${error.message}` })
 
-                ml.stdout.on('data', (data: string) => {
-                    stdout += data
-                    //console.log(`ml stdout: ${data}`);
-                })
-
-                ml.stderr.on('data', (data: string) => {
-                    stderr += data
-                    //console.error(`ml stderr: ${data}`);
-                });
-
-                ml.on('close', async (code: number) => {
+                // The 'close' event will always emit after 'exit' was already emitted, or 'error' if the child failed to spawn.
+                ml_task.on('close', async (code: number) => {
+                    const ml = { success: code === 0, code, ml_stderr, ml_stdout, ml_error, tags: {} }
                     if (code === 0) {
-                        console.log(stdout)
-                        const tags = stdout.match(/([\w]+): ([\d]+)%/g).map(d => { const i = d.indexOf(': '); return { tag: d.substr(0, i), probability: parseInt(d.substr(i + 2, d.length - i - 3)) } })
-                        var mv = spawn('/usr/bin/mv', ['/home/kehowli/darknet/predictions.jpg', `${VIDEO_PATH}/${camera_name}/mlimage${d.movement_key}.jpg`]);
-                        mv.on('close', async (code: number) => {
-                            await movementdb.put(d.movement_key, { ...m, ml: { success: code === 0, tags, stderr, stdout, moveCode: code } })
-                        })
-                    } else {
-                        await movementdb.put(d.movement_key, { ...m, ml: { success: false, code, stderr, stdout } })
-                    }
-                    acc(code)
-                });
+                        //console.log(stdout)
+                        ml.tags = ml_stdout.match(/([\w]+): ([\d]+)%/g).map(d => { const i = d.indexOf(': '); return { tag: d.substr(0, i), probability: parseInt(d.substr(i + 2, d.length - i - 3)) } })
+                        await movementdb.put(d.movement_key, { ...m, ml })
 
-                ml.on('error', async (error: any) => {
-                    await movementdb.put(d.movement_key, { ...m, ml: { success: false, error, stderr, stdout } })
-                    acc(-1)
-                })
+                        let mv_stdout = '', mv_stderr = '', mv_error = ''
+                        const mv_task = spawn('/usr/bin/mv', ['/home/kehowli/darknet/predictions.jpg', `${VIDEO_PATH}/${camera_name}/mlimage${d.movement_key}.jpg`], { timeout: 5000 })
+
+                        mv_task.stdout.on('data', (data: string) => { mv_stdout += data })
+                        mv_task.stderr.on('data', (data: string) => { mv_stderr += data })
+                        mv_task.on('error', async (error: Error) => { mv_error = `${error.name}: ${error.message}` })
+
+                        mv_task.on('close', async (code: number) => {
+                            await movementdb.put(d.movement_key, { ...m, ml, ml_movejpg: { success: code === 0, mv_stderr, mv_stdout, mv_error } })
+                            acc(code)
+                        })
+
+                    } else {
+                        await movementdb.put(d.movement_key, { ...m, ml })
+                        acc(code)
+                    }
+
+                });
 
             })
 
         } else if (d.task === JobTask.Snapshot) {
 
             const m = await movementdb.get(d.movement_key)
-            await new Promise((acc, rej) => {
+            const code = await new Promise((acc, rej) => {
 
-                var ffmpeg = spawn('/usr/bin/ffmpeg', ['-ss', '0', '-i', `${VIDEO_PATH}/${camera_name}/stream${(m.startSegment + 2)}.ts`, '-vframes', '1', '-q:v', '2', `${VIDEO_PATH}/${camera_name}/image${d.movement_key}.jpg`]);
-                let stdout = '', stderr = ''
-                ffmpeg.stdout.on('data', (data: string) => {
-                    stdout += data
-                    //console.log(`ffmpeg stdout: ${data}`);
-                })
+                var ffmpeg = spawn('/usr/bin/ffmpeg', ['-ss', '0', '-i', `${VIDEO_PATH}/${camera_name}/stream${(m.startSegment + 2)}.ts`, '-vframes', '1', '-q:v', '2', `${VIDEO_PATH}/${camera_name}/image${d.movement_key}.jpg`], { timeout: 120000 });
+                let ff_stdout = '', ff_stderr = '', ff_error = ''
 
-                ffmpeg.stderr.on('data', (data: string) => {
-                    stderr += data
-                    //console.error(`ffmpeg stderr: ${data}`);
-                });
+                ffmpeg.stdout.on('data', (data: string) => { ff_stdout += data })
+                ffmpeg.stderr.on('data', (data: string) => { ff_stderr += data })
+                ffmpeg.on('error', async (error: Error) => { ff_error = `${error.name}: ${error.message}` })
 
                 ffmpeg.on('close', async (code: number) => {
+                    await movementdb.put(d.movement_key, { ...m, ffmpeg: { success: true, ff_stderr, ff_stdout, ff_error } })
                     if (code === 0) {
-                        await movementdb.put(d.movement_key, { ...m, ffmpeg: { success: true, stderr, stdout } })
                         newJob = { task: JobTask.ML, movement_key: d.movement_key }
-                    } else {
-                        await movementdb.put(d.movement_key, { ...m, ffmpeg: { success: false, code, stderr, stdout } })
-                        //rej(`ffmpeg process exited with code ${code}`)
                     }
                     acc(code)
                 });
-
-                ffmpeg.on('error', async (error: any) => {
-                    await movementdb.put(d.movement_key, { ...m, ffmpeg: { success: false, error, stderr, stdout } })
-                    acc(-1)
-                })
             })
         }
         return { seq, status: JobStatus.Success, ...(newJob && { newJob }) }
