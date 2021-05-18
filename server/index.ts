@@ -52,21 +52,27 @@ async function init_movement_poll(db: LevelUp, movementdb: LevelUp, camera_name:
                 ml_task.on('close', async (code: number) => {
                     const ml = { success: code === 0, code, ml_stderr, ml_stdout, ml_error, tags: {} }
                     if (code === 0) {
-                        //console.log(stdout)
-                        ml.tags = ml_stdout.match(/([\w]+): ([\d]+)%/g).map(d => { const i = d.indexOf(': '); return { tag: d.substr(0, i), probability: parseInt(d.substr(i + 2, d.length - i - 3)) } })
-                        await movementdb.put(d.movement_key, { ...m, ml })
+                        let mltags = ml_stdout.match(/([\w]+): ([\d]+)%/g)
+                        if (mltags) {
 
-                        let mv_stdout = '', mv_stderr = '', mv_error = ''
-                        const mv_task = spawn('/usr/bin/mv', ['/home/kehowli/darknet/predictions.jpg', `${VIDEO_PATH}/${camera_name}/mlimage${d.movement_key}.jpg`], { timeout: 5000 })
+                            ml.tags = mltags.map(d => { const i = d.indexOf(': '); return { tag: d.substr(0, i), probability: parseInt(d.substr(i + 2, d.length - i - 3)) } })
+                            await movementdb.put(d.movement_key, { ...m, ml })
 
-                        mv_task.stdout.on('data', (data: string) => { mv_stdout += data })
-                        mv_task.stderr.on('data', (data: string) => { mv_stderr += data })
-                        mv_task.on('error', async (error: Error) => { mv_error = `${error.name}: ${error.message}` })
+                            let mv_stdout = '', mv_stderr = '', mv_error = ''
+                            const mv_task = spawn('/usr/bin/mv', ['/home/kehowli/darknet/predictions.jpg', `${VIDEO_PATH}/${camera_name}/mlimage${d.movement_key}.jpg`], { timeout: 5000 })
 
-                        mv_task.on('close', async (code: number) => {
-                            await movementdb.put(d.movement_key, { ...m, ml, ml_movejpg: { success: code === 0, mv_stderr, mv_stdout, mv_error } })
+                            mv_task.stdout.on('data', (data: string) => { mv_stdout += data })
+                            mv_task.stderr.on('data', (data: string) => { mv_stderr += data })
+                            mv_task.on('error', async (error: Error) => { mv_error = `${error.name}: ${error.message}` })
+
+                            mv_task.on('close', async (code: number) => {
+                                await movementdb.put(d.movement_key, { ...m, ml, ml_movejpg: { success: code === 0, mv_stderr, mv_stdout, mv_error } })
+                                acc(code)
+                            })
+                        } else {
+                            await movementdb.put(d.movement_key, { ...m, ml })
                             acc(code)
-                        })
+                        }
 
                     } else {
                         await movementdb.put(d.movement_key, { ...m, ml })
