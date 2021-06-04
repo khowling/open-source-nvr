@@ -137,7 +137,7 @@ function App() {
   }
 
   function renderImage(m, idx) {
-    const status = m.ml ? (m.ml.success ? m.ml.tags.filter(t => t.tag !== 'car').map(t => <div>{t.tag} ({t.probability})</div>) : <div>ml error: {m.ml.stderr}</div>) : (m.ffmpeg ? (m.ffmpeg.success ? <div>ffmpeg success</div> : <div>ffmpeg error: {m.ffmpeg.stderr}</div>) : <div>please wait..</div>)
+    const status = m.ml ? ((m.ml.success && Array.isArray(m.ml.tags)) ? m.ml.tags.filter(t => t.tag !== 'car').map(t => <div>{t.tag} ({t.probability})</div>) : <div>ml error: {m.ml.stderr}</div>) : (m.ffmpeg ? (m.ffmpeg.success ? <div>ffmpeg success</div> : <div>ffmpeg error: {m.ffmpeg.stderr}</div>) : <div>please wait..</div>)
     const img = `/image/${process.env.REACT_APP_CAMERA_NAME}/${m.movement_key}`
     if (showPlayer) {
       return <div>
@@ -185,7 +185,7 @@ function App() {
           </Stack>
           <DetailsList
             isHeaderVisible={false}
-            items={taggedOnly ? moments.filter(m => m.ml && m.ml.success && m.ml.tags.filter(t => t.tag !== 'car').length > 0) : moments}
+            items={taggedOnly ? moments.filter(m => m.ml && m.ml.success && Array.isArray(m.ml.tags) && m.ml.tags.filter(t => t.tag !== 'car').length > 0) : moments}
             compact={true}
             //listProps={state}
             columns={[

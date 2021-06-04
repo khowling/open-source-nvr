@@ -2,8 +2,6 @@
 
 .vscode
 
-video
-
 # dependencies
 /node_modules
 /.pnp
@@ -30,3 +28,5 @@ yarn-error.log*
 ffmpeg_start*.sh
 web.sh
 mydb
+video
+*.service

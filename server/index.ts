@@ -26,6 +26,20 @@ interface MovementEntry {
     lhs_seg_duration_seq: number;
     seconds: number;
     consecutivesecondswithout: number;
+    ml?: MLData;
+    ml_movejpg?: SpawnData;
+    ffmpeg?: SpawnData;
+}
+
+interface SpawnData {
+    success: boolean;
+    code: number;
+    stdout: string;
+    stderr: string;
+    error: string;
+}
+interface MLData extends SpawnData {
+    tags: any[];
 }
 
 var spawn = require('child_process').spawn;
@@ -38,7 +52,7 @@ async function init_movement_poll(db: LevelUp, movementdb: LevelUp, camera_name:
         let newJob: JobData | null = null
         if (d.task === JobTask.ML) {
 
-            const m = await movementdb.get(d.movement_key)
+            const m: MovementEntry = await movementdb.get(d.movement_key)
             const input = `${VIDEO_PATH}/${camera_name}/image${d.movement_key}.jpg`
             const code = await new Promise((acc, rej) => {
                 let ml_stdout = '', ml_stderr = '', ml_error = ''
@@ -50,13 +64,13 @@ async function init_movement_poll(db: LevelUp, movementdb: LevelUp, camera_name:
 
                 // The 'close' event will always emit after 'exit' was already emitted, or 'error' if the child failed to spawn.
                 ml_task.on('close', async (code: number) => {
-                    const ml = { success: code === 0, code, ml_stderr, ml_stdout, ml_error, tags: {} }
+                    const ml: MLData = { success: code === 0, code, stderr: ml_stderr, stdout: ml_stdout, error: ml_error, tags: [] }
                     if (code === 0) {
                         let mltags = ml_stdout.match(/([\w]+): ([\d]+)%/g)
                         if (mltags) {
 
                             ml.tags = mltags.map(d => { const i = d.indexOf(': '); return { tag: d.substr(0, i), probability: parseInt(d.substr(i + 2, d.length - i - 3)) } })
-                            await movementdb.put(d.movement_key, { ...m, ml })
+                            await movementdb.put(d.movement_key, { ...m, ml } as MovementEntry)
 
                             let mv_stdout = '', mv_stderr = '', mv_error = ''
                             const mv_task = spawn('/usr/bin/mv', ['/home/kehowli/darknet/predictions.jpg', `${VIDEO_PATH}/${camera_name}/mlimage${d.movement_key}.jpg`], { timeout: 5000 })
@@ -66,7 +80,7 @@ async function init_movement_poll(db: LevelUp, movementdb: LevelUp, camera_name:
                             mv_task.on('error', async (error: Error) => { mv_error = `${error.name}: ${error.message}` })
 
                             mv_task.on('close', async (code: number) => {
-                                await movementdb.put(d.movement_key, { ...m, ml, ml_movejpg: { success: code === 0, mv_stderr, mv_stdout, mv_error } })
+                                await movementdb.put(d.movement_key, { ...m, ml, ml_movejpg: { success: code === 0, stderr: mv_stderr, stdout: mv_stdout, error: mv_error } as SpawnData })
                                 acc(code)
                             })
                         } else {
@@ -96,7 +110,7 @@ async function init_movement_poll(db: LevelUp, movementdb: LevelUp, camera_name:
                 ffmpeg.on('error', async (error: Error) => { ff_error = `${error.name}: ${error.message}` })
 
                 ffmpeg.on('close', async (code: number) => {
-                    await movementdb.put(d.movement_key, { ...m, ffmpeg: { success: true, ff_stderr, ff_stdout, ff_error } })
+                    await movementdb.put(d.movement_key, { ...m, ffmpeg: { success: true, stderr: ff_stderr, stdout: ff_stdout, error: ff_error } as SpawnData })
                     if (code === 0) {
                         newJob = { task: JobTask.ML, movement_key: d.movement_key }
                     }
@@ -295,7 +309,7 @@ stream${n + startSegment}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n"
                 // Everything in the _queue with a sequence# < nextToRun should be running (all completed will have been deleted)
                 const feed = movementdb.createReadStream({ reverse: true }).on('data', ({ key, value }) => {
                     if (value.startSegment >= first_seq_on_disk) {
-                        runningKeys.push({ ...value, movement_key: key, startDate: (new Date(value.startDate)).toUTCString().replace(/ \d{4}/, "").replace(/ GMT$/, "") })
+                        runningKeys.push({ ...value, movement_key: key, startDate: new Intl.DateTimeFormat('en-GB', { /*dateStyle: 'full',*/ timeStyle: 'short', hour12: true }).format(new Date(value.startDate)) })
                     }
                 }).on('end', () => {
                     res(JSON.stringify(runningKeys))
