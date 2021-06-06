@@ -25,8 +25,8 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-ffmpeg_start*.sh
-web.sh
 mydb
 video
 *.service
+.env
+web.sh

@@ -14,37 +14,20 @@ This is a indepth process, and all pre-requsites may not be fully documented her
 
 ### Stream your cameras output to your harddrive
 
-Create a file called ```ffmpeg_start.sh``` that will launch a ffmpeg process that streams the video from your cameras rtmp endpoint, and saves the files to your local hardrive partition in [HLS](https://en.wikipedia.org/wiki/HTTP_Live_Streaming) segments
+The repo contains a file called ```ffmpeg_start.sh``` that will launch a ffmpeg process that streams the video from your cameras rtmp endpoint, and saves the files to your local hardrive partition in [HLS](https://en.wikipedia.org/wiki/HTTP_Live_Streaming) segments. The script takes the following parameters
 
-```
-CAMERA_NAME="xxx" CAMERA_IP="xxx.xxx.0.xxx" CAMERA_PASSWD="xxx" FILEPATH="/video"
-export CAMERA_NAME CAMERA_IP CAMERA_PASSWD FILEPATH
-mkdir -p ${FILEPATH}/${CAMERA_NAME}
+ * ```-n``` name of camera
+ * ```-f``` base directory for the video files
+ * ```-i``` IP address of camera
+ * ```-p``` Password for camera
 
-#ffmpeg -rtsp_transport tcp -i rtsp://admin:${CAMERA_PASSWD}@${CAMERA_IP}/h264Preview_01_main \
-# -r 25 \
-# -hide_banner -loglevel error \
-# -vcodec copy \
-# -start_number $(echo "$(date +%s) - 1600000000" | bc) \
-# ${FILEPATH}/${CAMERA_NAME}/stream.m3u8
 
-TOKEN=$(curl -X POST -d "[{\"cmd\":\"Login\",\"action\":0,\"param\":{\"User\":{\"userName\":\"admin\",\"password\":\"${CAMERA_PASSWD}\"}}}]" "http://${CAMERA_IP}/cgi-bin/api.cgi?cmd=Login&token=null" \
-  | grep \"name\" | sed -E 's/.*"name" : "?([^,"]*)"?.*/\1/')
-  
-export TOKEN
-ffmpeg -i "rtmp://admin:${CAMERA_PASSWD}@${CAMERA_IP}/bcs/channel0_main.bcs?token=${TOKEN}&channel=0&stream=0" \
-  -r 25 \
-  -hide_banner -loglevel error \
-  -vcodec copy \
-  -start_number $(echo "$(date +%s) - 1600000000" | bc) \
-  ${FILEPATH}/${CAMERA_NAME}/stream.m3u8
-```
 
-Create a ```camera1_ffmpeg.service``` file for Linux Systemd service managers, to ensure your ffmpeg process starts when the machine starts & will be kept running
+Create a ```ffmpeg_front.service``` file for Linux Systemd service managers, to ensure your ffmpeg process starts when the machine starts & will be kept running
 
 ```
 [Unit]
-Description=camera1_ffmpeg
+Description=ffmpeg_front
 Wants=network-online.target
 After=network-online.target
 
@@ -52,21 +35,34 @@ After=network-online.target
 User=xxx
 Group=xxx
 Type=simple
-Restart=always
-ExecStart=/home/xxx/ip-camera-manager/ffmpeg_start.sh
+# If ffmpeg stops, dont try to restart, the crontab runcheck will do it
+Restart=no
+#Restart=always
+#RestartSec=30
+#StartLimitBurst=5
+ExecStart=/bin/bash /home/xxx/ip-camera-manager/ffmpeg_start.sh -n xxx -f /xxx -i xxx.xxx.0.xxx -p xxx
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-Copy the ```camera1_ffmpeg.service``` file to ```/etc/systemd/system``` , and replacing the ```xxx```
+Copy the ```ffmpeg_front.service``` file to ```/etc/systemd/system``` , and replacing the ```xxx```
 
 Enable & run the service
 
 ```
-sudo systemctl enable  camera1_ffmpeg.service
-sudo systemctl start  camera1_ffmpeg.service
+sudo systemctl enable  ffmpeg_front.service
+sudo systemctl start  ffmpeg_front.service
 ```
+
+### ffmpeg Wokrarond for camera reboot
+
+If the rtmp stream is interrupted for any reason, maybe by a camera reboot, the ffmpeg process just hangs, it does not terminate, therefore, adding the ```ffmpeg_runcheck.sh``` script to your root crontab will check every minute to see if new video files are being produced, if not, it will restart the ffmeg service. For example
+
+```
+* * * * * /bin/bash /home/xxx/ip-camera-manager/ffmpeg_runcheck.sh -n <camera_name> -f /dir
+```
+
 
 ### Build & Run Web App
 
@@ -103,7 +99,6 @@ After=network-online.target
 User=xxx
 Group=xxx
 Type=simple
-Restart=always
 ExecStart=/home/xxx/ip-camera-manager/web.sh
 
 [Install]
@@ -137,7 +132,8 @@ systemctl --type=service
 ```
 ### list logs
 ```
-sudo journalctl -u camera1_ffmpeg.service -f
+sudo journalctl -u ffmpeg_front.service -f
+sudo journalctl -u ffmpeg_front.service -n 100 --no-pager
 sudo journalctl -u camera1_web.service -f
 ```
 ### stop/start/enable
