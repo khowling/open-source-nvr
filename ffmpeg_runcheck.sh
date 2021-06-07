@@ -14,14 +14,18 @@ do
 done
 
 if [ -z "${camera_name}" ] || [ -z "${filepath}" ]; then
-    echo "Missing arguments"
+    echo "$(date): ERROR: Missing arguments" >>/tmp/ffmpeg_runcheck.crontab
     exit 1
+fi
+
+systemctl is-active  ffmpeg_${camera_name}.service
+if [ "$?" -ne 0 ]; then 
+    echo "$(date): ffmpeg_${camera_name}.service is not active, just exit" >>/tmp/ffmpeg_runcheck.crontab
+    exit 0
 fi
 
 
 if [ $(($(date +%s) - $(stat -c %Y -- ${filepath}/${camera_name}/stream.m3u8))) -gt 30 ]; then
-    echo "Restaring ffmpeg for ${camera_name}"
+    echo "$(date): No output for over 30seconds, RESTARTING ffmpeg_${camera_name}.service..." >>/tmp/ffmpeg_runcheck.crontab
     systemctl restart  ffmpeg_${camera_name}.service
-else
-    echo "ffmpeg ${camera_name} running ok"
 fi
