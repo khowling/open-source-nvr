@@ -84,13 +84,14 @@ function App() {
   function playVideo(movement) {
     if (video_ref.current) {
       let mPlayer = videojs(video_ref.current)
-      //if (mPlayer.src() !== `/video/${video.file}`) {
+
       mPlayer.src({
         src: `/video/${process.env.REACT_APP_CAMERA_NAME}/${movement || 'live'}/stream.m3u8`,
         type: 'application/x-mpegURL'
       })
-      //}
-      //mPlayer.currentTime(Math.max(0, video.index - 4)) // 4 seconds before moments
+      if (movement) {
+        mPlayer.currentTime(18) // 20 seconds into stream (coresponds with 'segments_prior_to_movement')
+      }
       mPlayer.play()
     }
   }

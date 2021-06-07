@@ -98,11 +98,13 @@ async function init_movement_poll(db: LevelUp, movementdb: LevelUp, camera_name:
             })
 
         } else if (d.task === JobTask.Snapshot) {
+            // Take a single frame snapshot to corispond to the start of the movement segment recorded in startSegment.
+            // -ss seek to the first frame in the segment file
 
             const m = await movementdb.get(d.movement_key)
             const code = await new Promise((acc, rej) => {
 
-                var ffmpeg = spawn('/usr/bin/ffmpeg', ['-ss', '0', '-i', `${VIDEO_PATH}/${camera_name}/stream${(m.startSegment + 2)}.ts`, '-vframes', '1', '-q:v', '2', `${VIDEO_PATH}/${camera_name}/image${d.movement_key}.jpg`], { timeout: 120000 });
+                var ffmpeg = spawn('/usr/bin/ffmpeg', ['-ss', '0', '-i', `${VIDEO_PATH}/${camera_name}/stream${(m.startSegment + 1)}.ts`, '-frames:v', '1', '-q:v', '2', `${VIDEO_PATH}/${camera_name}/image${d.movement_key}.jpg`], { timeout: 120000 });
                 let ff_stdout = '', ff_stderr = '', ff_error = ''
 
                 ffmpeg.stdout.on('data', (data: string) => { ff_stdout += data })
@@ -110,7 +112,7 @@ async function init_movement_poll(db: LevelUp, movementdb: LevelUp, camera_name:
                 ffmpeg.on('error', async (error: Error) => { ff_error = `${error.name}: ${error.message}` })
 
                 ffmpeg.on('close', async (code: number) => {
-                    await movementdb.put(d.movement_key, { ...m, ffmpeg: { success: true, stderr: ff_stderr, stdout: ff_stdout, error: ff_error } as SpawnData })
+                    await movementdb.put(d.movement_key, { ...m, ffmpeg: { success: code === 0, stderr: ff_stderr, stdout: ff_stdout, error: ff_error } as SpawnData })
                     if (code === 0) {
                         newJob = { task: JobTask.ML, movement_key: d.movement_key }
                     }
@@ -139,14 +141,16 @@ async function init_movement_poll(db: LevelUp, movementdb: LevelUp, camera_name:
                     // get the current segment that will contain the movement
                     console.log(`got movement`)
 
+                    // Need to determine the segment that corrisponds to the movement
+                    // Read the curren live stream.m3u8, and get a array of all the stream23059991.ts files
+                    // set startSegment to the LAST segment file index in the array (most recent) + 1 (+1 due to ffmpeg lag!)
                     const filepath = `${VIDEO_PATH}/${camera_name}/stream.m3u8`
                     const hls = (await fs.promises.readFile(filepath)).toString()
-
                     const hls_segments = [...hls.matchAll(re)].map(m => m[1])
                     const lhs_seg_duration_seq = hls.match(/#EXT-X-TARGETDURATION:([\d])/)[1]
                     movement_entry = {
                         startDate: new Date(),
-                        startSegment: parseInt(hls_segments[hls_segments.length - 1]),
+                        startSegment: parseInt(hls_segments[hls_segments.length - 1]) + 1,
                         lhs_seg_duration_seq,
                         seconds: 1,
                         consecutivesecondswithout: 0
@@ -221,11 +225,14 @@ async function init_web(movementdb: LevelUp) {
                 if (file.endsWith('.m3u8')) {
                     // need to return a segement file for the movement
                     const { startSegment, lhs_seg_duration_seq, seconds } = await movementdb.get(parseInt(moment))
+
+                    const segments_prior_to_movement: number = 10 // 20 seconds
+                    const segments_post_movement: number = 10 // 20 seconds
                     const body = `#EXTM3U
 #EXT-X-VERSION:3
 #EXT-X-TARGETDURATION:${lhs_seg_duration_seq}
-` + [...Array(seconds + 3).keys()].map(n => `#EXTINF:2.000000,
-stream${n + startSegment}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n"
+` + [...Array(Math.round(seconds / 2) + segments_prior_to_movement + segments_post_movement).keys()].map(n => `#EXTINF:2.000000,
+stream${n + startSegment - segments_prior_to_movement}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n"
 
                     ctx.body = body
                 } else if (file.endsWith('.ts')) {
