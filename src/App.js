@@ -154,13 +154,13 @@ function App() {
   */
 
   function renderTags(movement, idx) {
-    const img = `/ image / ${movement.key}`
+    const img = `/image/${movement.key}`
     const m = movement.movement
     return m.ml ? ((m.ml.success && Array.isArray(m.ml.tags)) ?
       m.ml.tags.filter(t => t.tag !== 'car').map((t, idx) => <a key={idx} target="_blank" href={img}><Text variant="mediumPlus" >{t.tag} ({t.probability}); </Text></a>)
       : <div>ml error: {m.ml.stderr}</div>)
       : (m.ffmpeg ? (m.ffmpeg.success ?
-        <div>ffmpeg success</div>
+        <a key={idx} target="_blank" href={img}><div>ffmpeg success</div></a>
         : <div key={1}>ffmpeg error: {m.ffmpeg.stderr}</div>) : <div key={1}>please wait..</div>)
   }
 
@@ -218,7 +218,7 @@ function App() {
                 name: "Reviewed Movement (seconds)", key: "start", minWidth: 200, ...(showPlayer && { maxWidth: 200 }), onRender: (m, idx) =>
                   <div>
                     <Text key={idx + 1} variant="mediumPlus">{m.startDateGb} ({m.movement.seconds}s {m.movement.cameraName})</Text>
-                    {!showPlayer && <div key={idx + 2}><img src={`/ image / ${m.key}`} style={{ maxWidth: "100%" }} /></div>}
+                    {!showPlayer && <div key={idx + 2}><img src={`/image/${m.key}`} style={{ maxWidth: "100%" }} /></div>}
                   </div>
 
 
