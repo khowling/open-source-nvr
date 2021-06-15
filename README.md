@@ -77,7 +77,7 @@ npm i
 npm run-script buildserver
 
 # build fromend
-REACT_APP_CAMERA_NAME=mycamera npm run-script build
+npm run-script build
 ```
 
 Create lauch script file called ```web.sh```
@@ -85,6 +85,11 @@ Create lauch script file called ```web.sh```
 #!/bin/bash
 BACKGROUND="true" CAMERA_NAME="xxx" CAMERA_IP="xxx.xxx.0.xxx" CAMERA_PASSWD="xxx" FILEPATH="/video" WEBPATH="/home/xxx/ip-camera-manager/build" DBPATH="/home/xxx/ip-camera-manager/mydb" node /home/xxx/ip-camera-manager/server/out/index.js
 
+```
+
+Launch Dev Server
+```
+    BACKGROUND="true" CAMERA_NAME="xxx" CAMERA_IP="xxx.xxx.0.xxx" CAMERA_PASSWD="xxx" FILEPATH="/video" WEBPATH="/home/xxx/ip-camera-manager/build" DBPATH="/home/xxx/ip-camera-manager/mydb" npx ts-node ./server/index.ts
 ```
 
 Create a ```camera1_web.service``` file for Linux Systemd service managers, to ensure your website starts when the machine starts & will be kept running

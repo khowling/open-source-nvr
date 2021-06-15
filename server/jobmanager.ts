@@ -105,13 +105,13 @@ export class JobManager {
 
 
     private _limit
-    private _workerFn
+    private _workerFn: (seq: number, d: JobData) => Promise<JobReturn>
     private _mutex
     private _finishedPromise: Promise<boolean> | null
     private _nomore: boolean
 
 
-    constructor(db: LevelUp, concurrency: number, workerfn: (seq: number, d: JobData/*, r: JobRunningData*/) => Promise<JobReturn>) {
+    constructor(db: LevelUp, concurrency: number, workerfn: (seq: number, d: JobData) => Promise<JobReturn>) {
 
         this._db = db
         this._limit = concurrency
