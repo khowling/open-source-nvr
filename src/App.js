@@ -9,9 +9,9 @@ initializeIcons(/* optional base url */);
 
 function App() {
 
-  //const [video_mode] = React.useState(window.location.pathname === '/' ? "" : window.location.pathname)
-  const [movements, setMovements] = React.useState([])
-  const [cameras, setCameras] = React.useState([])
+  //const [movements, setMovements] = React.useState([])
+  //const [cameras, setCameras] = React.useState([])
+  const [data, setData] = React.useState({ cameras: [], movements: [] })
   const [inputState, setInputState] = React.useState({ current_idx: 'none', allSelected: false, inputs: {} })
   const [taggedOnly, setTaggedOnly] = React.useState(true)
   const [showPlayer, setShowPlayer] = React.useState(true)
@@ -29,8 +29,8 @@ function App() {
       }, () => {
         console.log('player ready')
         setPlayerReady(true)
-        if (cameras.length > 0) {
-          playVideo(cameras[0])
+        if (data.cameras.length > 0) {
+          playVideo(data.cameras[0])
         }
 
       })
@@ -49,14 +49,13 @@ function App() {
     }
   }, [video_ref, showPlayer])
 
-  function getMovements() {
+  function getServerData() {
 
     fetch(`/api/movements`)
       .then(res => res.json())
       .then(
         (result) => {
-          setMovements(result.movements)
-          setCameras(result.cameras)
+          setData(result)
         },
         // Note: it's important to handle errors here
         // instead of a catch() block so that we don't swallow
@@ -66,7 +65,7 @@ function App() {
         }
       )
   }
-  useEffect(getMovements, [])
+  useEffect(getServerData, [])
 
 
 
@@ -81,7 +80,7 @@ function App() {
       setInputState({ current_idx: idx, current_movement: m, allSelected: inputState.allSelected, inputs: { ...inputState.inputs, [m.key]: { reviewed: true } } })
     }
     if (playerReady) {
-      playVideo(cameras.find(c => c.name === m.movement.cameraName), m.key)
+      playVideo(data.cameras.find(c => c.name === m.movement.cameraName), m.key)
     }
   }
 
@@ -102,7 +101,7 @@ function App() {
 
   function reloadlist() {
     setInputState({ current_idx: 'none', allSelected: inputState.allSelected, inputs: {} })
-    getMovements()
+    getServerData()
   }
 
   const _selection = new Selection({
@@ -121,7 +120,7 @@ function App() {
     if (playerReady && inputState.current_movement) {
       let mPlayer = videojs(video_ref.current)
       console.log(mPlayer.currentTime())
-      const c = cameras.find(c => c.name === inputState.current_movement.movement.cameraName)
+      const c = data.cameras.find(c => c.name === inputState.current_movement.movement.cameraName)
       window.open(`/mp4/${inputState.current_movement.key}${c ? `?preseq=${c.segments_prior_to_movement}&postseq=${c.segments_post_movement}` : ''}`, '_blank').focus()
     }
 
@@ -152,26 +151,54 @@ function App() {
 
 }
   */
+  function filterIgnoreTags(event) {
+    const { movement } = event
+    if (movement && movement.ml && movement.ml.success && Array.isArray(movement.ml.tags) && movement.ml.tags.length > 0) {
+      const { ignore_tags } = data.cameras.find(c => c.name === movement.cameraName) || {}
+      if (ignore_tags && Array.isArray(ignore_tags) && ignore_tags.length > 0) {
+        return movement.ml.tags.reduce((a, c) => ignore_tags.includes(c.tag) ? a : a.concat(c), [])
+      } else {
+        return movement.ml.tags
+      }
+    }
+    return []
+  }
 
-  function renderTags(movement, idx) {
-    const img = `/image/${movement.key}`
-    const m = movement.movement
-    return m.ml ? ((m.ml.success && Array.isArray(m.ml.tags)) ?
-      m.ml.tags.filter(t => t.tag !== 'car').map((t, idx) => <a key={idx} target="_blank" href={img}><Text variant="mediumPlus" >{t.tag} ({t.probability}); </Text></a>)
-      : <div>ml error: {m.ml.stderr}</div>)
-      : (m.ffmpeg ? (m.ffmpeg.success ?
-        <a key={idx} target="_blank" href={img}><div>ffmpeg success</div></a>
-        : <div key={1}>ffmpeg error: {m.ffmpeg.stderr}</div>) : <div key={1}>please wait..</div>)
+  function renderTags(event, idx) {
+
+    const { key, movement } = event
+    const img = `/image/${key}`
+
+    if (movement.ml) {
+      if (movement.ml.success) {
+        const filteredTags = filterIgnoreTags(event)
+        if (filteredTags.length > 0) {
+          return filteredTags.map((t, idx) => <div><a key={idx} target="_blank" href={img}><Text variant="mediumPlus" >{t.tag} ({t.probability}); </Text></a></div>)
+        } else {
+          return <a key={idx} target="_blank" href={img}><Text variant="mediumPlus" >ML Image</Text></a>
+        }
+      } else {
+        return <Text variant="mediumPlus">ML error: {movement.ml.stderr}</Text>
+      }
+    } else if (movement.ffmpeg) {
+      if (movement.ffmpeg.success) {
+        return <a key={idx} target="_blank" href={img}><Text variant="mediumPlus">Image (wait for ML)</Text></a>
+      } else {
+        return <Text variant="mediumPlus">Error: {movement.ffmpeg.stderr}</Text>
+      }
+    } else {
+      return <Text variant="mediumPlus">please wait..</Text>
+    }
   }
 
   function playLive(arg1, item) {
     if (playerReady) {
       if (item) {
         console.log(`playing ${item.key}`)
-        playVideo(cameras.find(c => c.name === item.key))
-      } else if (cameras.length > 0) {
+        playVideo(data.cameras.find(c => c.name === item.key))
+      } else if (data.cameras.length > 0) {
         console.log('playing default')
-        playVideo(cameras[0])
+        playVideo(data.cameras[0])
       }
     } else {
       alert("Player not ready")
@@ -206,11 +233,11 @@ function App() {
             <Toggle inlineLabel onText="Video" offText="Image" styles={{ root: { "marginTop": "5px" } }} onChange={(e, val) => setShowPlayer(val)} checked={showPlayer} />
             <PrimaryButton styles={{ root: { minWidth: '50px' } }} onClick={recordReview} >Export</PrimaryButton>
             <DefaultButton styles={{ root: { minWidth: '50px' } }} onClick={reloadlist} >Refresh</DefaultButton>
-            <DefaultButton split menuProps={{ items: cameras.map(c => { return { key: c.name, text: c.name, onClick: playLive } }) }}  >Live</DefaultButton>
+            <DefaultButton split menuProps={{ items: data.cameras.map(c => { return { key: c.name, text: c.name, onClick: playLive } }) }}  >Live</DefaultButton>
           </Stack>
           <DetailsList
             isHeaderVisible={false}
-            items={taggedOnly ? movements.filter(m => m.movement.ml && m.movement.ml.success && Array.isArray(m.movement.ml.tags) && m.movement.ml.tags.filter(t => t.tag !== 'car').length > 0) : movements}
+            items={taggedOnly ? data.movements.filter(m => filterIgnoreTags(m).length > 0) : data.movements}
             compact={true}
             //listProps={state}
             columns={[

@@ -62,6 +62,7 @@ interface CameraEntry {
     mSPollFrequency: number;
     segments_prior_to_movement: number;
     segments_post_movement: number;
+    ignore_tags: string[];
 }
 
 var spawn = require('child_process').spawn;
@@ -407,8 +408,9 @@ ${m.cameraName}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-
                 let cameras: CameraEntry[] = []
                 cameradb.createValueStream()
                     .on('data', (c: CameraEntry) => {
-                        const { name, secWithoutMovement, mSPollFrequency, segments_prior_to_movement, segments_post_movement } = c
-                        cameras.push({ name, secWithoutMovement, mSPollFrequency, segments_prior_to_movement, segments_post_movement, ip: null, passwd: null })
+                        // Dont send password or IP to client
+                        const { name, secWithoutMovement, mSPollFrequency, segments_prior_to_movement, segments_post_movement, ignore_tags } = c
+                        cameras.push({ name, secWithoutMovement, mSPollFrequency, segments_prior_to_movement, segments_post_movement, ignore_tags, ip: null, passwd: null })
                     })
                     .on('end', () => {
                         res(cameras)
@@ -610,6 +612,7 @@ async function main() {
         mSPollFrequency: 1000,
         segments_prior_to_movement: 10, // 20 seconds (2second segments)
         segments_post_movement: 10, // 20 seconds (2second segments)
+        ignore_tags: ['car']
     } as CameraEntry)
 
 
