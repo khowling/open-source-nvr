@@ -2,11 +2,12 @@ const
     assert = require('assert'),
     Koa = require('koa'),
     send = require('koa-send'),
-    fs = require('fs'),
     path = require('path'),
     lexint = require('lexicographic-integer'),
     leveldown = require('leveldown')
 
+import { readFile, stat, readdir } from 'fs/promises'
+import { createReadStream } from 'fs'
 import server_fetch from './server_fetch'
 import Router from 'koa-router'
 import bodyParser from 'koa-bodyparser'
@@ -165,7 +166,6 @@ async function jobWorker(seq: number, d: JobData): Promise<JobReturn> {
 async function init_movement_poll(jobManager: JobManager) {
 
     const re = new RegExp(`stream([\\d]+).ts`, 'g');
-    //await fs.promises.mkdir(movdir, { recursive: true })
 
     let movement_entry: MovementEntry
     async function processMovement(camera: CameraEntry) {
@@ -183,9 +183,9 @@ async function init_movement_poll(jobManager: JobManager) {
                     // Read the curren live stream.m3u8, and get a array of all the stream23059991.ts files
                     // set startSegment to the LAST segment file index in the array (most recent) + 1 (+1 due to ffmpeg lag!)
                     const filepath = `${VIDEO_PATH}/${camera.name}/stream.m3u8`
-                    const hls = (await fs.promises.readFile(filepath)).toString()
+                    const hls = (await readFile(filepath)).toString()
                     const hls_segments = [...hls.matchAll(re)].map(m => m[1])
-                    const lhs_seg_duration_seq = hls.match(/#EXT-X-TARGETDURATION:([\d])/)[1]
+                    const lhs_seg_duration_seq = parseInt(hls.match(/#EXT-X-TARGETDURATION:([\d])/)[1])
                     movement_entry = {
                         cameraName: camera.name,
                         startDate: Date.now(),
@@ -205,7 +205,6 @@ async function init_movement_poll(jobManager: JobManager) {
                         //console.log(`writing movement`)
                         const movement_key = (movement_entry.startDate / 1000 | 0) - 1600000000
                         await movementdb.put(movement_key, movement_entry)
-                        //await fs.promises.appendFile(filename, `${movement_entry.startDate.toISOString()};${movement_entry.seconds}` + "\n")
 
                         await jobManager.submit({ task: JobTask.Snapshot, movement_key })
                         movement_entry = null
@@ -253,9 +252,9 @@ async function init_web() {
             try {
                 const m: MovementEntry = await movementdb.get(parseInt(moment))
                 const serve = `${VIDEO_PATH}/${m.cameraName}/${m.ml && m.ml.success ? 'mlimage' : 'image'}${moment}.jpg`
-                const { size } = await fs.promises.stat(serve)
+                const { size } = await stat(serve)
                 ctx.set('content-type', 'image/jpeg')
-                ctx.body = fs.createReadStream(serve, { encoding: null }).on('error', ctx.onerror)
+                ctx.body = createReadStream(serve, { encoding: null }).on('error', ctx.onerror)
             } catch (e) {
                 ctx.throw(`error e=${JSON.stringify(e)}`)
             }
@@ -273,9 +272,9 @@ async function init_web() {
                     const camera = await cameradb.get(movement)
                     try {
                         const serve = `${VIDEO_PATH}/${camera.name}/${file}`
-                        const { size } = await fs.promises.stat(serve)
+                        const { size } = await stat(serve)
                         //console.log(`serving : ${serve}`)
-                        ctx.body = fs.createReadStream(serve, { encoding: null }).on('error', ctx.onerror)
+                        ctx.body = createReadStream(serve, { encoding: null }).on('error', ctx.onerror)
                     } catch (e) {
                         ctx.throw(`error e=${JSON.stringify(e)}`)
                     }
@@ -311,8 +310,8 @@ ${m.cameraName}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-
                     const serve = `${VIDEO_PATH}/${camera}/stream${index}.${suffix}`
                     //console.log(`serving : ${serve}`)
                     try {
-                        const { size } = await fs.promises.stat(serve)
-                        ctx.body = fs.createReadStream(serve, { encoding: null }).on('error', ctx.onerror)
+                        const { size } = await stat(serve)
+                        ctx.body = createReadStream(serve, { encoding: null }).on('error', ctx.onerror)
                     } catch (e) {
                         ctx.throw(`error e=${JSON.stringify(e)}`)
                     }
@@ -348,7 +347,7 @@ ${m.cameraName}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-
                 })
 
                 ctx.set('Content-Type', 'video/mp4')
-                ctx.body = fs.createReadStream(serve, { encoding: null }).on('error', ctx.onerror)
+                ctx.body = createReadStream(serve, { encoding: null }).on('error', ctx.onerror)
 
             } catch (e) {
                 ctx.throw(`error mp4 gen error=${e}`)
@@ -360,7 +359,7 @@ ${m.cameraName}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-
             let streamoptions: any = { encoding: null }
             if (ctx.headers.range) {
 
-                const { size } = await fs.promises.stat(filepath)
+                const { size } = await stat(filepath)
 
                 const [range_start, range_end] = ctx.headers.range.replace(/bytes=/, "").split("-"),
                     start = parseInt(range_start, 10),
@@ -376,8 +375,7 @@ ${m.cameraName}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-
                 streamoptions = { ...streamoptions, start, end }
                 ctx.status = 206;
             }
-            ctx.body = fs.createReadStream(filepath, streamoptions).on('error', ctx.onerror)
-            //ctx.body = fs.createReadStream(filepath, { encoding: null, start, end }).on('error', ctx.onerror).pipe(PassThrough());
+            ctx.body = createReadStream(filepath, streamoptions).on('error', ctx.onerror)
 
         }).get(['/(.*)'], async (ctx, next) => {
             const path = ctx.params[0]
@@ -418,12 +416,15 @@ ${m.cameraName}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-
             })
 
             // find first segment on disk
-            async function findFirstSegmentOnDisk(cameraName: string, video_path: string): Promise<number> {
+            async function findFirstSegmentOnDisk(cameraName: string, video_path: string): Promise<{sequence: number, ctimeMs: number}> {
                 let first_seq_on_disk: number = 0
-                const local_video = await fs.promises.readdir(`${video_path}/${cameraName}`)
+                const local_video_path = `${video_path}/${cameraName}`
+                const local_video = await readdir(local_video_path)
                 const local_video_re = new RegExp(`^stream(\\d+).ts`)
+                // For each file in the directory
                 for (let dir_entry of local_video) {
                     const entry_match = dir_entry.match(local_video_re)
+                    // check the filename is from ffmpeg (not a image or anything else)
                     if (entry_match) {
                         const [file, seq] = entry_match
                         const seq_num = parseInt(seq)
@@ -434,28 +435,29 @@ ${m.cameraName}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-
                         }
                     }
                 }
-                return first_seq_on_disk
+                const {ctimeMs} = await stat (`${local_video_path}/stream${first_seq_on_disk}.ts`)
+                return {sequence: first_seq_on_disk, ctimeMs}
             }
 
-            let cameraFirstSegmentOnDisk: any = {}
+            let oldestctimeMs = 0
             for (let c of cameras) {
-                cameraFirstSegmentOnDisk[c.name] = await findFirstSegmentOnDisk(c.name, VIDEO_PATH)
+                const {ctimeMs} = await findFirstSegmentOnDisk(c.name, VIDEO_PATH)
+                if (oldestctimeMs === 0 || ctimeMs < oldestctimeMs ) oldestctimeMs = ctimeMs
             }
 
             ctx.response.set("content-type", "application/json");
             ctx.body = await new Promise(async (res, rej) => {
                 let movements: MovementToClient[] = []
 
-                // Everything in the _queue with a sequence# < nextToRun should be running (all completed will have been deleted)
-                const feed = movementdb.createReadStream({ reverse: true })
+                // Everything in movementdb, with key time (movement start date) greater than the creation date of the oldest sequence file on disk
+                const feed = movementdb.createReadStream({ reverse: true, gt: oldestctimeMs > 0 ? (oldestctimeMs / 1000 | 0) - 1600000000 : 0 })
                     .on('data', (m: MovementReadStream) => {
-                        if (m.value.startSegment >= cameraFirstSegmentOnDisk[m.value.cameraName]) {
                             movements.push({
                                 key: m.key,
                                 startDateGb: new Intl.DateTimeFormat('en-GB', { /*dateStyle: 'full',*/ timeStyle: 'medium', hour12: true }).format(new Date(m.value.startDate)),
                                 movement: m.value
                             })
-                        }
+                        //}
                     }).on('end', () => {
                         res(JSON.stringify({ cameras, movements }))
                     })

@@ -18,14 +18,23 @@ if [ -z "${camera_name}" ] || [ -z "${filepath}" ]; then
     exit 1
 fi
 
+#
+
+# Currently active (running)
 systemctl is-active  ffmpeg_${camera_name}.service
 if [ "$?" -ne 0 ]; then 
-    echo "$(date): ffmpeg_${camera_name}.service is not active, just exit" >>/tmp/ffmpeg_runcheck.crontab
-    exit 0
+    #  Its not running!
+    systemctl is-failed   ffmpeg_${camera_name}.service
+    if [ "$?" -ne 0 ]; then 
+        # Its not failed
+        echo "$(date): ffmpeg_${camera_name}.service is not active & not failed, just exit" >>/tmp/ffmpeg_runcheck.crontab
+        exit 0
+    fi
 fi
 
+# The system things the process is runing, or its failed, ensure we have output in the last 30seconds, or restart
 
-if [ $(($(date +%s) - $(stat -c %Y -- ${filepath}/${camera_name}/stream.m3u8))) -gt 30 ]; then
+if [ ! -f ${filepath}/${camera_name}/stream.m3u8 ] || [ $(($(date +%s) - $(stat -c %Y -- ${filepath}/${camera_name}/stream.m3u8))) -gt 30 ]; then
     echo "$(date): No output for over 30seconds, RESTARTING ffmpeg_${camera_name}.service..." >>/tmp/ffmpeg_runcheck.crontab
     systemctl restart  ffmpeg_${camera_name}.service
 fi
