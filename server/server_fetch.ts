@@ -42,7 +42,7 @@ export default async function (url: string, method = 'GET', headers = {}, body?:
                                 resolve(parsedData)
                             } catch (e) {
                                 console.error(`server_fetch: ${e}`)
-                                reject(new Error(e))
+                                reject(new Error(e as string))
                             }
                         } else if (/^text\/html/.test(contentType)) {
                             return resolve(body)

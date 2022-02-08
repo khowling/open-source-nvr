@@ -12,7 +12,9 @@
 
 # production
 /build
-out
+lib
+
+test_video
 
 # misc
 .DS_Store

@@ -2,16 +2,19 @@
 import './App.css';
 import React, { /* useCallback , */ useRef, useEffect } from 'react';
 import videojs from 'video.js'
-import { Text, Toggle, DefaultButton, DetailsList, SelectionMode, Stack, Checkbox, Selection, PrimaryButton } from '@fluentui/react'
+import { CommandBar, Text, Toggle, DefaultButton, DetailsList, SelectionMode, Stack, TextField, Slider, TagPicker, Separator, Label, MessageBar, MessageBarType, Checkbox, Selection, PrimaryButton, Panel, VerticalDivider } from '@fluentui/react'
 import { initializeIcons } from '@fluentui/react/lib/Icons';
 
 initializeIcons(/* optional base url */);
 
 function App() {
 
-  //const [movements, setMovements] = React.useState([])
-  //const [cameras, setCameras] = React.useState([])
+  const [panel, setPanel] = React.useState({open: false});
+  const [error, setError] = React.useState(null)
+  const [invalidArray, setInvalidArray] = React.useState([])
+
   const [data, setData] = React.useState({ cameras: [], movements: [] })
+  const [currentCamera, setCurrentCamera] = React.useState(null)
   const [inputState, setInputState] = React.useState({ current_idx: 'none', allSelected: false, inputs: {} })
   const [taggedOnly, setTaggedOnly] = React.useState(true)
   const [showPlayer, setShowPlayer] = React.useState(true)
@@ -80,7 +83,7 @@ function App() {
       setInputState({ current_idx: idx, current_movement: m, allSelected: inputState.allSelected, inputs: { ...inputState.inputs, [m.key]: { reviewed: true } } })
     }
     if (playerReady) {
-      playVideo(data.cameras.find(c => c.name === m.movement.cameraName), m.key)
+      playVideo(data.cameras.find(c => c.key === m.movement.cameraKey), m.key)
     }
   }
 
@@ -89,7 +92,7 @@ function App() {
       let mPlayer = videojs(video_ref.current)
 
       mPlayer.src({
-        src: `/video/${movementKey || camera.name}/stream.m3u8${movementKey ? `?preseq=${camera.segments_prior_to_movement}&postseq=${camera.segments_post_movement}` : ''}`,
+        src: `/video/${movementKey || `live/${camera.key}`}/stream.m3u8${movementKey ? `?preseq=${camera.segments_prior_to_movement}&postseq=${camera.segments_post_movement}` : ''}`,
         type: 'application/x-mpegURL'
       })
       if (movementKey) {
@@ -120,41 +123,16 @@ function App() {
     if (playerReady && inputState.current_movement) {
       let mPlayer = videojs(video_ref.current)
       console.log(mPlayer.currentTime())
-      const c = data.cameras.find(c => c.name === inputState.current_movement.movement.cameraName)
+      const c = data.cameras.find(c => c.key === inputState.current_movement.movement.cameraKey)
       window.open(`/mp4/${inputState.current_movement.key}${c ? `?preseq=${c.segments_prior_to_movement}&postseq=${c.segments_post_movement}` : ''}`, '_blank').focus()
     }
 
   }
-  /*
-  const body = JSON.stringify(Object.keys(inputState.inputs).filter(i => inputState.inputs[i].reviewed).map((i) => { return { movement_key: i } }))
 
-  fetch(`/ api / movements / ${ process.env.REACT_APP_CAMERA_NAME }`, {
-    body,
-    method: "POST",
-    headers: {
-      'content-type': 'application/json',
-      'content-length': Buffer.byteLength(body)
-    }
-  }).then(async (res) => {
-    if (!res.ok) {
-      console.error(`non 200 err : ${ res.status }`)
-    } else if (res.status === 201) {
-      //window.location.reload(true)
-      getMovements()
-      setInputState({ current_idx: 'none', allSelected: false, inputs: {} })
-    } else {
-      console.error(`non 200 err : ${ res.status }`)
-    }
-  }, err => {
-    console.error(`err : ${ err }`)
-  })
-
-}
-  */
   function filterIgnoreTags(event) {
     const { movement } = event
     if (movement && movement.ml && movement.ml.success && Array.isArray(movement.ml.tags) && movement.ml.tags.length > 0) {
-      const { ignore_tags } = data.cameras.find(c => c.name === movement.cameraName) || {}
+      const { ignore_tags } = data.cameras.find(c => c.key === movement.cameraKey) || {}
       if (ignore_tags && Array.isArray(ignore_tags) && ignore_tags.length > 0) {
         return movement.ml.tags.reduce((a, c) => ignore_tags.includes(c.tag) ? a : a.concat(c), [])
       } else {
@@ -191,18 +169,103 @@ function App() {
     }
   }
 
-  function playLive(arg1, item) {
+  function playLive(cKey) {
+    setCurrentCamera(cKey)
     if (playerReady) {
-      if (item) {
-        console.log(`playing ${item.key}`)
-        playVideo(data.cameras.find(c => c.name === item.key))
-      } else if (data.cameras.length > 0) {
-        console.log('playing default')
-        playVideo(data.cameras[0])
-      }
+      console.log(`playing ${cKey}`)
+      playVideo(data.cameras.find(c => c.key === cKey))
     } else {
       alert("Player not ready")
     }
+  }
+
+  function updatePanelValues(field, value) {
+    var calcFolder = panel.values.folder || ''
+    if (field === "name") {
+      if (!calcFolder) {
+        calcFolder = `./test_video/${value}`
+      } else if (calcFolder.includes(panel.values.name)) {
+        calcFolder = calcFolder.replace(panel.values.name, value)
+      }
+    }
+    setPanel({...panel, values: {...panel.values, [field]: value, ...(field !== 'folder' && {folder: calcFolder})}})
+  }
+
+  function getError(field) {
+    const idx = invalidArray.findIndex(e => e.field === field)
+    return idx >= 0 ? invalidArray[idx].message : ''
+  }
+
+  function invalidFn(field, invalid, message) {
+    const e = invalidArray.find(e => e.field === field)
+    if (!invalid && e) {
+      setInvalidArray((prev) => prev.filter((e) => e.field !== field))
+    } else if (invalid && !e) {
+      setInvalidArray((prev) => prev.concat({ field, message }))
+    }
+  }
+
+  if (panel.open) {
+    invalidFn('name', !panel.values.name || panel.values.name.match(/^[a-z0-9][_\-a-z0-9]+[a-z0-9]$/i) === null || panel.values.name>19,
+      <Text>Enter valid camera name</Text>)
+      if (panel.key === "new") {
+        invalidFn('ip', !panel.values.ip || panel.values.ip.match(/^([0-9]{1,3}\.){3}[0-9]{1,3}$/i) === null,
+          <Text>Enter valid camera IPv4 address</Text>)
+      } else {
+        invalidFn('ip', panel.values.ip && panel.values.ip.match(/^([0-9]{1,3}\.){3}[0-9]{1,3}$/i) === null,
+          <Text>Enter valid camera IPv4 address</Text>)
+      }
+  }
+
+  const testTags= [
+      'black',
+      'blue',
+      'brown',
+      'cyan',
+      'green',
+      'magenta',
+      'mauve',
+      'orange',
+      'pink',
+      'purple',
+      'red',
+      'rose',
+      'violet',
+      'white',
+      'yellow',
+    ].map(item => ({ key: item, name: item }));
+
+  const listContainsTagList = (tag, tagList) => {
+      if (!tagList || !tagList.length || tagList.length === 0) {
+        return false;
+      }
+      return tagList.some(compareTag => compareTag.key === tag.key);
+  }
+
+  function savePanel() {
+    setError(null)
+    fetch(`/api/camera/${panel.key}`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      mode: 'cors',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(panel.values)
+    }).then(succ => {
+      if (succ.ok) {
+        console.log(`created success : ${JSON.stringify(succ)}`)
+        setPanel({open: false})
+      } else {
+        const ferr = `created failed : ${succ.status} ${succ.statusText}`
+        console.error(ferr)
+        setError(ferr)
+      }
+      
+    }).catch(error => {
+      console.error(`created failed : ${error}`)
+      setError(`created failed : ${error}`)
+    })
   }
 
   return (
@@ -218,6 +281,61 @@ function App() {
         </ul>
       </nav>
 
+      <Panel
+        headerText="Camera Details"
+        isOpen={panel.open}
+        onDismiss={() => setPanel({...panel, open: false})}
+        // You MUST provide this prop! Otherwise screen readers will just say "button" with no label.
+        closeButtonAriaLabel="Close"
+      >
+          { panel.open && 
+          <>
+            <TextField label="Camera Name" required onChange={(ev, val) => updatePanelValues('name', val)} required errorMessage={getError('name')} value={panel.values.name} />
+            <TextField label="IP Address" prefix="IP" onChange={(ev, val) => updatePanelValues('ip', val)} required errorMessage={getError('ip')} value={panel.values.ip} />
+            <TextField label="admin Password" type="password"  value={panel.values.passwd} onChange={(ev, val) => updatePanelValues('passwd', val)} />
+            
+            <TextField label="Media Folder" iconProps={{ iconName: 'Folder' }}  required value={panel.values.folder} onChange={(ev, val) => updatePanelValues('folder', val)} />
+
+            <Label>Filter Tags</Label>
+            <TagPicker
+              onChange={(i) => panel.values.ignore_tags = i.map(i => i.key)}
+              defaultSelectedItems={panel.values.ignore_tags ? panel.values.ignore_tags.map(i => {return {key:i,name:i}} ) : []}
+              removeButtonAriaLabel="Remove"
+              selectionAriaLabel="Selected colors"
+              onResolveSuggestions={(filterText, tagList) => {
+                return filterText
+                  ? testTags.filter(
+                      tag => tag.name.toLowerCase().indexOf(filterText.toLowerCase()) === 0 && !listContainsTagList(tag, tagList),
+                    )
+                  : [];
+              }}
+              getTextFromItem={(i) => i.name}
+              pickerSuggestionsProps={{
+                suggestionsHeaderText: 'Suggested tags',
+                noResultsFoundText: 'No tags found',
+              }}
+            />
+
+            <Separator styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}><b>Movement processing</b></Separator>
+            <Slider label="Poll Frequency (mS)" min={0} max={10000} step={500} defaultValue={panel.values.mSPollFrequency} showValue onChange={(val) => updatePanelValues('mSPollFrequency', val)} />
+            <Slider label="Seconds without movement" min={0} max={50} step={1} defaultValue={panel.values.secWithoutMovement} showValue onChange={(val) => updatePanelValues('secWithoutMovement', val)} />
+            
+            <Separator styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}><b>Playback</b></Separator>
+            <Slider label="Segments(2s) prior to movement" min={0} max={60} step={1} defaultValue={panel.values.segments_prior_to_movement} showValue onChange={(val) => updatePanelValues('segments_prior_to_movement', val)} />
+            <Slider label="Segments(2s) post movement" min={0} max={60} step={1} defaultValue={panel.values.segments_post_movement} showValue onChange={(val) => updatePanelValues('segments_post_movement', val)} />
+        
+            <PrimaryButton styles={{ root: { marginTop: "15px !important"}}} disabled={invalidArray.length >0} text="Save" onClick={savePanel}/>
+
+            {error &&
+            <MessageBar messageBarType={MessageBarType.error} isMultiline={false} truncated={true}>
+              {error}
+            </MessageBar>
+          }
+        </>
+      }
+
+      </Panel>
+
       <div style={{ "height": "43px", "width": "100%" }} />
 
       <Stack horizontal wrap >
@@ -228,6 +346,8 @@ function App() {
         }
 
         <Stack.Item styles={showPlayer ? { root: { width: "300px" } } : {}} grow={1}>
+
+
           <Stack horizontal>
             <Toggle inlineLabel onText="Tag'd" offText="All" styles={{ root: { "marginTop": "5px" } }} onChange={(e, val) => setTaggedOnly(val)} checked={taggedOnly} />
             <Toggle inlineLabel onText="Video" offText="Image" styles={{ root: { "marginTop": "5px" } }} onChange={(e, val) => setShowPlayer(val)} checked={showPlayer} />
@@ -235,6 +355,91 @@ function App() {
             <DefaultButton styles={{ root: { minWidth: '50px' } }} onClick={reloadlist} >Refresh</DefaultButton>
             <DefaultButton split menuProps={{ items: data.cameras.map(c => { return { key: c.name, text: c.name, onClick: playLive } }) }}  >Live</DefaultButton>
           </Stack>
+
+          <CommandBar
+            items={[
+              {
+                key: 'camera',
+                text: `Live ${currentCamera ? data.cameras.find(c => c.key === currentCamera).name : ''}`,
+                cacheKey: 'myCacheKey', // changing this key will invalidate this item's cache
+                iconProps: { iconName: 'Webcam2' },
+                subMenuProps: {
+                  items: data.cameras.map(c => { return {
+                      key: c.key,
+                      text: c.name,
+                      iconProps: { iconName: 'FrontCamera' },
+                      ['data-automation-id']: 'newEmailButton', // optional
+                      onClick: () => playLive(c.key)
+                    }}).concat (
+                    {
+                      key: 'Add',
+                      text: 'Add',
+                      iconProps: { iconName: 'Add' },
+                      onClick: () => setPanel({...panel, open: true, key: 'new', values: {
+                        secWithoutMovement: 10,
+                        mSPollFrequency: 1000,
+                        segments_prior_to_movement: 10, // 20 seconds (2second segments)
+                        segments_post_movement: 10, // 20 seconds (2second segments)
+                        ignore_tags: ['car']
+                      }}),
+                    }
+                  )
+                },
+              },
+              {
+                key: 'download',
+                text: 'Download',
+                iconProps: { iconName: 'Download' },
+                onClick: () => console.log('Download'),
+              },
+              {
+                key: 'refresh',
+                text: 'Refresh',
+                iconProps: { iconName: 'Refresh' },
+                onClick: reloadlist,
+              },
+              {
+                key: 'filter',
+                text: 'Filter',
+                iconProps: { iconName: 'Filter' },
+                onClick: () => console.log('Filter')
+              },
+            ]}
+            farItems={[{
+              key: 'tile',
+              text: 'Image view',
+              // This needs an ariaLabel since it's icon-only
+              ariaLabel: 'Image view',
+              iconOnly: true,
+              iconProps: { iconName: 'Tiles' },
+              onClick: () => console.log('Tiles')
+            },{
+              key: 'settings',
+              text: 'Settings',
+              // This needs an ariaLabel since it's icon-only
+              ariaLabel: 'Settings',
+              iconOnly: true,
+              iconProps: { iconName: 'Settings' },
+              onClick: () => {
+                if (currentCamera) {
+                  const cc = data.cameras.find(c => c.key === currentCamera)
+                  setPanel({...panel, open: true, key: currentCamera, values: {
+                    name: cc.name,
+                    folder: cc.folder,
+                    secWithoutMovement: cc.secWithoutMovement,
+                    mSPollFrequency: cc.mSPollFrequency,
+                    segments_prior_to_movement: cc.segments_prior_to_movement,
+                    segments_post_movement: cc.segments_post_movement,
+                    ignore_tags: cc.ignore_tags
+                  }})
+                }
+              }
+            }]}
+            ariaLabel="Inbox actions"
+            primaryGroupAriaLabel="Email actions"
+            farItemsGroupAriaLabel="More actions"
+          />
+
           <DetailsList
             isHeaderVisible={false}
             items={taggedOnly ? data.movements.filter(m => filterIgnoreTags(m).length > 0) : data.movements}
