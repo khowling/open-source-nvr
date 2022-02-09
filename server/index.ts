@@ -57,6 +57,8 @@ interface CameraEntry {
     folder: string;
     ip?: string;
     passwd?: string;
+    enable_streaming: boolean;
+    enable_movement: boolean;
     secWithoutMovement: number;
     mSPollFrequency: number;
     segments_prior_to_movement: number;
@@ -65,11 +67,12 @@ interface CameraEntry {
 }
 
 interface ProcessInfo {
-    taskid: any
-    check_after: number;
+    taskid: ChildProcessWithoutNullStreams | null;
+    check_after?: number;
+    in_progress: boolean;
     error: boolean;
     running: boolean;
-    status?: string;
+    status: string;
 }
 
 interface Movement {
@@ -97,7 +100,7 @@ interface CameraCache {
 var cameraCache: CameraCache = {}
 
 
-var spawn = require('child_process').spawn;
+import {ChildProcess, ChildProcessWithoutNullStreams, spawn} from 'child_process'
 
 const db = level(process.env.DBPATH || './mydb')
 
@@ -213,7 +216,7 @@ async function processMovement(cid: number, jobManager: JobManager) {
         
         const current_movement = move && move.current_movement
 
-        const body_json = await server_fetch(`http://${ce.ip}/api.cgi?cmd=GetMdState&user=admin&password=${ce.passwd}`)
+        const body_json = await server_fetch(`http://${ce.ip}/api.cgi?cmd=GetMdState&user=admin&password=${ce.passwd}`, {timeout: 500})
         const body = JSON.parse(body_json)
         //console.log(body[0].value)
         if (body[0].error) {
@@ -273,37 +276,54 @@ async function processMovement(cid: number, jobManager: JobManager) {
 }
 
 
-async function checkFFMpeg(cid: number): Promise<ProcessInfo> {
-    //console.log (`checkFFMpeg for ${cid}`)
+async function StreamingController(cid: number): Promise<ProcessInfo | undefined> {
+    //console.log (`StreamingController for ${cid}`)
     const ce = cameraCache[cid].ce,
-          streamfile = `${ce.folder}/stream.m3u8`
+          streamfile = `${ce.folder}/stream.m3u8`,
+          proc = cameraCache[cid].ffmpeg_process
 
-    // check the proc status
-    const proc = cameraCache[cid].ffmpeg_process
-    if (proc && (proc.running || proc.error )) {
+    // chkecFFMpeg still running from last interval, skip this check.
+    if (proc?.in_progress) {
+        return proc
+    }
+
+    // No streaming enabled
+    if (!ce.enable_streaming) {
+        if (proc?.running) {
+            proc.taskid?.kill();
+        }
+        return proc
+    }
+
+    // check if ffmpeg has stopped, or has shopped producing output
+    if (proc) {
         // check the output from ffmpeg, if no updates in the last 10seconds, the process could of hung! so restart it.
         if (proc.check_after && proc.check_after < Date.now())   {
             
             if (proc.running) {
-                console.log (`Checking ffmpeg for [${ce.name}]`)
+                console.log (`Checking ffmpeg for [${ce.name}] running=${proc.running} error=${proc.error}...`)
                 try {
-                    const {mtimeMs} = await stat(streamfile)
-                    if (Date.now() - mtimeMs > 10000 /* 10 seconds */) {
+                    const {mtimeMs} = await stat(streamfile),
+                           last_updated_ago = Date.now() - mtimeMs
+                    if (last_updated_ago > 10000 /* 10 seconds */) {
                         console.warn (`ffmpeg no output for 10secs for ${ce.name} - file ${streamfile}, kill process`)
-                        // kill and will be restarted
-                        proc.taskid.kill();
+                        // kill, should trigger ffmpeg.on('close') thus shoud trigger check_after error nexttime around
+                        proc.taskid?.kill();
                     } else {
                         // its running fine, recheck in 30secs
-                        cameraCache[cid].ffmpeg_process = {...cameraCache[cid].ffmpeg_process as ProcessInfo, check_after: Date.now() + 30000}
-                        return cameraCache[cid].ffmpeg_process as ProcessInfo
+                        console.log (`Checking ffmpeg for [${ce.name}], all good, last_updated_ago=${last_updated_ago}mS, check again in 1minute`)
+                        cameraCache[cid].ffmpeg_process = {...cameraCache[cid].ffmpeg_process as ProcessInfo, check_after: Date.now() + 60000}
                     }
                 } catch (e) {
                     console.warn (`cannot access ffmpeg output for ${ce.name} - file ${streamfile}, kill process`)
-                    // kill and will be restarted
-                    proc.taskid.kill();
+                    // kill, should trigger ffmpeg.on('close') thus shoud trigger check_after error nexttime around
+                    proc.taskid?.kill();
                 }
+
+                return cameraCache[cid].ffmpeg_process as ProcessInfo
+
             } else {
-                console.warn (`Try to restart failed ffmpeg for ${ce.name}`)
+                console.warn (`Try to restart failed or stopped ffmpeg for [${ce.name}] running=${proc.running} error=${proc.error}`)
             }
         } else {
             // not time to re-check, just leave it
@@ -311,16 +331,20 @@ async function checkFFMpeg(cid: number): Promise<ProcessInfo> {
         }
     }
 
+    // start ffmpeg
     try {
-        const body_json = await server_fetch(`http://${ce.ip}/cgi-bin/api.cgi?cmd=Login&token=null`, 'POST', {}, JSON.stringify([{"cmd":"Login","action":0,"param":{"User":{"userName":"admin","password": ce.passwd}}}]))
+        console.log ((new Date()).toTimeString().substring(0,8) + ` Getting token for [${ce.name}]...`)
+        cameraCache[cid].ffmpeg_process = {taskid: null, running: false, error: false, in_progress: true, status: 'Getting token'}
+        
+        const body_json = await server_fetch(`http://${ce.ip}/cgi-bin/api.cgi?cmd=Login&token=null`, {timeout: 500}, [{"cmd":"Login","action":0,"param":{"User":{"userName":"admin","password": ce.passwd}}}])
         const body = JSON.parse(body_json)
         if (body[0].error) {
-            cameraCache[cid].ffmpeg_process = {taskid: null, running: false, error: true, status: `Unable to retrive token: ${JSON.stringify(body[0])}`, check_after: Date.now() + 60000};
+            cameraCache[cid].ffmpeg_process = {taskid: null, running: false, error: true, in_progress: false, status: `Unable to retrive token: ${JSON.stringify(body[0])}`, check_after: Date.now() + 60000};
         } else {
             const token = body[0].value.Token.name
-            console.log (`ffmpeg starting [${ce.name}] : ${streamfile}...`)
-            var ffmpeg = spawn('/usr/bin/ffmpeg', ['-r', '25', '-i', `rtmp://admin:${ce.passwd}@${ce.ip}/bcs/channel0_main.bcs?token=${token}&channel=0&stream=0`, '-hide_banner', '-loglevel', 'error', '-vcodec', 'copy', '-start_number', (Date.now() / 1000 | 0) - 1600000000, streamfile ])
-            cameraCache[cid].ffmpeg_process = {taskid: ffmpeg, running: true, error: false, status: 'Starting...\n', check_after: Date.now() + 30000 /* check it hasn't hung every 30seconds */};
+            console.log ((new Date()).toTimeString().substring(0,8) + ` starting ffmpeg for [${ce.name}] : ${streamfile}...`)
+            var ffmpeg : ChildProcessWithoutNullStreams = spawn('/usr/bin/ffmpeg', ['-r', '25', '-i', `rtmp://admin:${ce.passwd}@${ce.ip}/bcs/channel0_main.bcs?token=${token}&channel=0&stream=0`, '-hide_banner', '-loglevel', 'error', '-vcodec', 'copy', '-start_number', ((Date.now() / 1000 | 0) - 1600000000).toString(), streamfile ])
+            cameraCache[cid].ffmpeg_process = {taskid: ffmpeg, running: true, error: false, in_progress: false, status: 'Starting...\n', check_after: Date.now() + 60000 /* check it hasn't hung every 30seconds */};
 
 
             ffmpeg.stdout.on('data', (data: string) => {
@@ -337,15 +361,15 @@ async function checkFFMpeg(cid: number): Promise<ProcessInfo> {
             })
 
             ffmpeg.on('close', async (code: number) => {
-                console.warn (`ffmpeg on-close [${ce.name}]: code=${code}`)
-                cameraCache[cid].ffmpeg_process = {...cameraCache[cid].ffmpeg_process, taskid: null, running: false, error: code !== 0, check_after: code !== 0? Date.now() + 30000 : Date.now()};
+                console.warn ((new Date()).toTimeString().substring(0,8) + ` ffmpeg on-close [${ce.name}]: code=${code}`)
+                cameraCache[cid].ffmpeg_process = {...cameraCache[cid].ffmpeg_process as ProcessInfo, taskid: null, running: false, error: code !== 0, check_after: Date.now()};
             });
         }
 
         
     } catch (e) {
-        console.warn (`checkFFMpeg catch error [${ce.name}]: ${e}`)
-        cameraCache[cid].ffmpeg_process = {taskid: ffmpeg, running: false, error: true, status: e as string, check_after: Date.now() + 60000};
+        console.warn ((new Date()).toTimeString().substring(0,8) + ` FFMpeg catch error [${ce.name}]: ${e}, try again in 1minute`)
+        cameraCache[cid].ffmpeg_process = {...cameraCache[cid].ffmpeg_process as ProcessInfo, running: false, error: true, in_progress: false, status: e as string, check_after: Date.now() + 60000};
     }
 
     return  cameraCache[cid].ffmpeg_process as ProcessInfo
@@ -523,7 +547,7 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
                         // updating existing camera
                         try {
                             const key = parseInt(cid)
-                            const old_ce = await cameradb.get(key)
+                            const old_ce: CameraEntry = await cameradb.get(key)
                             if (old_ce.folder != new_ce.folder) {
                                 console.log ('creating directory')
                                 try {
@@ -533,9 +557,9 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
                                 }
                             }
                             
-                            const new_vals = {...old_ce, ...new_ce}
+                            const new_vals: CameraEntry = {...old_ce, ...new_ce}
                             await cameradb.put(key, new_vals) 
-                            cameraCache[key].ce = new_ce
+                            cameraCache[key].ce = new_vals
 
                             ctx.status = 201
                         } catch (e) {
@@ -666,8 +690,8 @@ async function main() {
     async function controll_loop() {
         for (let cid of Object.keys(cameraCache)) {
             const cid_int = parseInt(cid)
-            const pi = await checkFFMpeg(cid_int)
-            if (pi.running) {
+            const pi = await StreamingController(cid_int)
+            if (pi?.running) {
                 await processMovement(cid_int, jobman)
             }
         }

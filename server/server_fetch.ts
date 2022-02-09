@@ -1,15 +1,24 @@
-const http = require('http')
+import http from 'http'
 
 
-export default async function (url: string, method = 'GET', headers = {}, body?: string): Promise<any> {
-    const opts: any = { method, headers }
+export default async function (url: string, opts = {} as http.RequestOptions, body?: string | object): Promise<any> {
+
+    let options = {method: body? 'POST' : 'GET',  ...opts }
+    let bodystr: string 
 
     if (body) {
-        opts.headers['content-length'] = Buffer.byteLength(body)
+        bodystr = typeof body === 'object'? JSON.stringify(body) : body
+
+        if (typeof body === 'object' && !options.headers?.hasOwnProperty('content-type')) {
+            options = {...options, headers: {...options.headers, 'content-type': 'application/json'}}
+        }
+        if (!options.headers?.hasOwnProperty('content-length')) {
+            options = {...options, headers: {...options.headers, 'content-length': Buffer.byteLength(bodystr)}}
+        }
     }
 
     return new Promise(function (resolve, reject) {
-        const req = http.request(url, opts, (res: any) => {
+        const req = http.request(url, options, (res: any) => {
 
             if (res.statusCode !== 200 && res.statusCode !== 201) {
                 let error = new Error(`Request Failed: Status Code: ${res.statusCode}`)
@@ -55,13 +64,13 @@ export default async function (url: string, method = 'GET', headers = {}, body?:
                 })
             }
         }).on('error', (e: any) => {
-            console.error(`server_fetch: ${e.message}`)
+            //console.error(`server_fetch: ${e.message}`)
             reject(e)
         })
 
-        if (opts.method === 'POST' || opts.method === 'PUT') {
+        if (options.method === 'POST' || options.method === 'PUT') {
             // Write data to request body
-            req.end(body)
+            req.end(bodystr)
         } else {
             req.end()
         }

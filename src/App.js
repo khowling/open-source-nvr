@@ -188,7 +188,13 @@ function App() {
         calcFolder = calcFolder.replace(panel.values.name, value)
       }
     }
-    setPanel({...panel, values: {...panel.values, [field]: value, ...(field !== 'folder' && {folder: calcFolder})}})
+
+
+    setPanel({...panel, values: {...panel.values, 
+      [field]: value, 
+      ...(field === "enable_streaming" && value === false && {enable_movement: false}),
+      ...(field !== 'folder' && {folder: calcFolder})
+    }})
   }
 
   function getError(field) {
@@ -316,14 +322,22 @@ function App() {
               }}
             />
 
-            <Separator styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}><b>Movement processing</b></Separator>
-            <Slider label="Poll Frequency (mS)" min={0} max={10000} step={500} defaultValue={panel.values.mSPollFrequency} showValue onChange={(val) => updatePanelValues('mSPollFrequency', val)} />
-            <Slider label="Seconds without movement" min={0} max={50} step={1} defaultValue={panel.values.secWithoutMovement} showValue onChange={(val) => updatePanelValues('secWithoutMovement', val)} />
-            
             <Separator styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}><b>Playback</b></Separator>
-            <Slider label="Segments(2s) prior to movement" min={0} max={60} step={1} defaultValue={panel.values.segments_prior_to_movement} showValue onChange={(val) => updatePanelValues('segments_prior_to_movement', val)} />
-            <Slider label="Segments(2s) post movement" min={0} max={60} step={1} defaultValue={panel.values.segments_post_movement} showValue onChange={(val) => updatePanelValues('segments_post_movement', val)} />
-        
+            <Checkbox label="Enable Streaming" checked={panel.values.enable_streaming} onChange={(ev, val) => { updatePanelValues('enable_streaming', val)} } />
+            <Stack styles={{ root: { marginTop: "15px !important"} }}>
+              <Slider disabled={!panel.values.enable_streaming} label="Segments(2s) prior to movement" min={0} max={60} step={1} defaultValue={panel.values.segments_prior_to_movement} showValue onChange={(val) => updatePanelValues('segments_prior_to_movement', val)} />
+              <Slider disabled={!panel.values.enable_streaming} label="Segments(2s) post movement" min={0} max={60} step={1} defaultValue={panel.values.segments_post_movement} showValue onChange={(val) => updatePanelValues('segments_post_movement', val)} />
+            </Stack>
+
+            <Separator styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}><b>Movement processing</b></Separator>
+            
+            <Checkbox disabled={!panel.values.enable_streaming} label="Enable Movement" checked={panel.values.enable_movement} onChange={(ev, val) => updatePanelValues('enable_movement', val)} />
+            <Stack styles={{ root: { marginTop: "15px !important"} }}>
+              <Slider disabled={!panel.values.enable_movement} label="Poll Frequency (mS)" min={1000} max={10000} step={500} defaultValue={panel.values.mSPollFrequency} showValue onChange={(val) => updatePanelValues('mSPollFrequency', val)} />
+              <Slider disabled={!panel.values.enable_movement} label="Seconds without movement" min={0} max={50} step={1} defaultValue={panel.values.secWithoutMovement} showValue onChange={(val) => updatePanelValues('secWithoutMovement', val)} />
+            </Stack>
+
+
             <PrimaryButton styles={{ root: { marginTop: "15px !important"}}} disabled={invalidArray.length >0} text="Save" onClick={savePanel}/>
 
             {error &&
@@ -380,7 +394,9 @@ function App() {
                         mSPollFrequency: 1000,
                         segments_prior_to_movement: 10, // 20 seconds (2second segments)
                         segments_post_movement: 10, // 20 seconds (2second segments)
-                        ignore_tags: ['car']
+                        ignore_tags: ['car'],
+                        enable_streaming: true,
+                        enable_movement: true
                       }}),
                     }
                   )
@@ -430,7 +446,9 @@ function App() {
                     mSPollFrequency: cc.mSPollFrequency,
                     segments_prior_to_movement: cc.segments_prior_to_movement,
                     segments_post_movement: cc.segments_post_movement,
-                    ignore_tags: cc.ignore_tags
+                    ignore_tags: cc.ignore_tags,
+                    enable_streaming: cc.enable_streaming,
+                    enable_movement: cc.enable_movement
                   }})
                 }
               }
