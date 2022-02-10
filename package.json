@@ -47,6 +47,7 @@
     "koa-send": "^5.0.1",
     "level": "^7.0.1",
     "lexicographic-integer": "^1.1.0",
+    "react-scripts": "^5.0.0",
     "subleveldown": "^6.0.1"
   }
 }
