@@ -13,7 +13,8 @@ function App() {
   const [error, setError] = React.useState(null)
   const [invalidArray, setInvalidArray] = React.useState([])
 
-  const [data, setData] = React.useState({ cameras: [], movements: [] })
+  const init_data = { cameras: [], movements: [] }
+  const [data, setData] = React.useState(init_data)
   const [currentCamera, setCurrentCamera] = React.useState(null)
   const [inputState, setInputState] = React.useState({ current_idx: 'none', allSelected: false, inputs: {} })
   const [taggedOnly, setTaggedOnly] = React.useState(true)
@@ -32,10 +33,6 @@ function App() {
       }, () => {
         console.log('player ready')
         setPlayerReady(true)
-        if (data.cameras.length > 0) {
-          playVideo(data.cameras[0])
-        }
-
       })
 
       return () => {
@@ -53,17 +50,21 @@ function App() {
   }, [video_ref, showPlayer])
 
   function getServerData() {
-
+    setCurrentCamera(null)
+    setData({...init_data, status: 'fetching'})
     fetch(`/api/movements`)
       .then(res => res.json())
       .then(
         (result) => {
-          setData(result)
+          setData({...result, status: 'success'})
+          const {key} = result.cameras.filter(c => c.enable_streaming).shift() || {key:null}
+          key && playLive(key)
         },
         // Note: it's important to handle errors here
         // instead of a catch() block so that we don't swallow
         // exceptions from actual bugs in components.
         (error) => {
+          setData({...init_data, status: 'error', message: error})
           console.warn(error)
         }
       )
@@ -261,6 +262,7 @@ function App() {
     }).then(succ => {
       if (succ.ok) {
         console.log(`created success : ${JSON.stringify(succ)}`)
+        getServerData()
         setPanel({open: false})
       } else {
         const ferr = `created failed : ${succ.status} ${succ.statusText}`
@@ -361,64 +363,46 @@ function App() {
 
         <Stack.Item styles={showPlayer ? { root: { width: "300px" } } : {}} grow={1}>
 
-
-          <Stack horizontal>
-            <Toggle inlineLabel onText="Tag'd" offText="All" styles={{ root: { "marginTop": "5px" } }} onChange={(e, val) => setTaggedOnly(val)} checked={taggedOnly} />
-            <Toggle inlineLabel onText="Video" offText="Image" styles={{ root: { "marginTop": "5px" } }} onChange={(e, val) => setShowPlayer(val)} checked={showPlayer} />
-            <PrimaryButton styles={{ root: { minWidth: '50px' } }} onClick={recordReview} >Export</PrimaryButton>
-            <DefaultButton styles={{ root: { minWidth: '50px' } }} onClick={reloadlist} >Refresh</DefaultButton>
-            <DefaultButton split menuProps={{ items: data.cameras.map(c => { return { key: c.name, text: c.name, onClick: playLive } }) }}  >Live</DefaultButton>
-          </Stack>
-
           <CommandBar
             items={[
               {
                 key: 'camera',
-                text: `Live ${currentCamera ? data.cameras.find(c => c.key === currentCamera).name : ''}`,
+                text: currentCamera ? data.cameras.find(c => c.key === currentCamera).name : 'Live',
+                split: true,
                 cacheKey: 'myCacheKey', // changing this key will invalidate this item's cache
                 iconProps: { iconName: 'Webcam2' },
+                onClick: () => {
+                  currentCamera && playLive(currentCamera)
+                },
                 subMenuProps: {
-                  items: data.cameras.map(c => { return {
+                  items: data.cameras.filter(c => c.enable_streaming).map(c => { return {
                       key: c.key,
                       text: c.name,
                       iconProps: { iconName: 'FrontCamera' },
                       ['data-automation-id']: 'newEmailButton', // optional
                       onClick: () => playLive(c.key)
-                    }}).concat (
-                    {
-                      key: 'Add',
-                      text: 'Add',
-                      iconProps: { iconName: 'Add' },
-                      onClick: () => setPanel({...panel, open: true, key: 'new', values: {
-                        secWithoutMovement: 10,
-                        mSPollFrequency: 1000,
-                        segments_prior_to_movement: 10, // 20 seconds (2second segments)
-                        segments_post_movement: 10, // 20 seconds (2second segments)
-                        ignore_tags: ['car'],
-                        enable_streaming: true,
-                        enable_movement: true
-                      }}),
-                    }
-                  )
-                },
+                    }})
+                }
               },
               {
                 key: 'download',
                 text: 'Download',
                 iconProps: { iconName: 'Download' },
-                onClick: () => console.log('Download'),
+                onClick: recordReview,
               },
               {
                 key: 'refresh',
                 text: 'Refresh',
+                checked: data.status === "fetching",
                 iconProps: { iconName: 'Refresh' },
                 onClick: reloadlist,
               },
               {
                 key: 'filter',
                 text: 'Filter',
-                iconProps: { iconName: 'Filter' },
-                onClick: () => console.log('Filter')
+                iconProps: { iconName: taggedOnly? 'Filter': 'ClearFilter' },
+                checked: taggedOnly,
+                onClick: () => setTaggedOnly(!taggedOnly)
               },
             ]}
             farItems={[{
@@ -427,8 +411,9 @@ function App() {
               // This needs an ariaLabel since it's icon-only
               ariaLabel: 'Image view',
               iconOnly: true,
+              checked: !showPlayer,
               iconProps: { iconName: 'Tiles' },
-              onClick: () => console.log('Tiles')
+              onClick: () => setShowPlayer(!showPlayer)
             },{
               key: 'settings',
               text: 'Settings',
@@ -436,21 +421,41 @@ function App() {
               ariaLabel: 'Settings',
               iconOnly: true,
               iconProps: { iconName: 'Settings' },
-              onClick: () => {
-                if (currentCamera) {
-                  const cc = data.cameras.find(c => c.key === currentCamera)
-                  setPanel({...panel, open: true, key: currentCamera, values: {
-                    name: cc.name,
-                    folder: cc.folder,
-                    secWithoutMovement: cc.secWithoutMovement,
-                    mSPollFrequency: cc.mSPollFrequency,
-                    segments_prior_to_movement: cc.segments_prior_to_movement,
-                    segments_post_movement: cc.segments_post_movement,
-                    ignore_tags: cc.ignore_tags,
-                    enable_streaming: cc.enable_streaming,
-                    enable_movement: cc.enable_movement
-                  }})
-                }
+              subMenuProps: {
+                items: data.cameras.map(c => { return {
+                    key: c.key,
+                    text: `Settings "${c.name}"`,
+                    iconProps: { iconName: 'FrontCamera' },
+                    ['data-automation-id']: 'newEmailButton', // optional
+                    onClick: () => {
+                      setPanel({...panel, open: true, key: c.key, values: {
+                        name: c.name,
+                        folder: c.folder,
+                        secWithoutMovement: c.secWithoutMovement,
+                        mSPollFrequency: c.mSPollFrequency,
+                        segments_prior_to_movement: c.segments_prior_to_movement,
+                        segments_post_movement: c.segments_post_movement,
+                        ignore_tags: c.ignore_tags,
+                        enable_streaming: c.enable_streaming,
+                        enable_movement: c.enable_movement
+                      }})
+                    }
+                  }}).concat (
+                  {
+                    key: 'Add',
+                    text: 'Add',
+                    iconProps: { iconName: 'Add' },
+                    onClick: () => setPanel({...panel, open: true, key: 'new', values: {
+                      secWithoutMovement: 10,
+                      mSPollFrequency: 1000,
+                      segments_prior_to_movement: 10, // 20 seconds (2second segments)
+                      segments_post_movement: 10, // 20 seconds (2second segments)
+                      ignore_tags: ['car'],
+                      enable_streaming: true,
+                      enable_movement: true
+                    }}),
+                  }
+                )
               }
             }]}
             ariaLabel="Inbox actions"
@@ -465,12 +470,16 @@ function App() {
             //listProps={state}
             columns={[
               {
-                name: "Reviewed Movement (seconds)", key: "start", minWidth: 200, ...(showPlayer && { maxWidth: 200 }), onRender: (m, idx) =>
-                  <div>
-                    <Text key={idx + 1} variant="mediumPlus">{m.startDateGb} ({m.movement.seconds}s {m.movement.cameraName})</Text>
-                    {!showPlayer && <div key={idx + 2}><img src={`/image/${m.key}`} style={{ maxWidth: "100%" }} /></div>}
-                  </div>
-
+                name: "Reviewed Movement (seconds)", key: "start", minWidth: 200, ...(showPlayer && { maxWidth: 200 }), onRender: (m, idx) => {
+                  const {movement, startDateGb} = m,
+                        c = data.cameras.find(c => c.key === movement.cameraKey)
+                  return (
+                    <div>
+                      <Text key={idx + 1} variant="mediumPlus">{startDateGb} ({movement.seconds}s)    {c ? <Text>{c.name}</Text>: <Text>Missing</Text>}</Text>
+                      {!showPlayer && <div key={idx + 2}><img src={`/image/${m.key}`} style={{ maxWidth: "100%" }} /></div>}
+                    </div>
+                  )
+                }
 
               }
             ].concat(showPlayer ? {
