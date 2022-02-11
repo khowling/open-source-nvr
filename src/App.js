@@ -7,6 +7,50 @@ import { initializeIcons } from '@fluentui/react/lib/Icons';
 
 initializeIcons(/* optional base url */);
 
+function VideoJS (props)  {
+
+  const videoRef = React.useRef(null);
+  const playerRef = React.useRef(null);
+  const { options, onReady } = props;
+
+  React.useEffect(() => {
+    // make sure Video.js player is only initialized once
+    if (!playerRef.current) {
+      const videoElement = videoRef.current;
+      if (!videoElement) return;
+
+      const player = playerRef.current = videojs(videoElement, options, () => {
+        console.log("player is ready");
+        onReady && onReady(player);
+      });
+    } else {
+      // you can update player here [update player through props]
+      // const player = playerRef.current;
+      // player.autoplay(options.autoplay);
+      // player.src(options.sources);
+    }
+  }, [options, videoRef]);
+
+  // Dispose the Video.js player when the functional component unmounts
+  React.useEffect(() => {
+    const player = playerRef.current;
+
+    return () => {
+      if (player) {
+        player.dispose();
+        playerRef.current = null;
+      }
+    };
+  }, [playerRef]);
+
+  return (
+    <div data-vjs-player>
+      <video ref={videoRef} className="video-js vjs-big-play-centered" />
+    </div>
+  );
+}
+
+
 function App() {
 
   const [panel, setPanel] = React.useState({open: false});
@@ -21,33 +65,22 @@ function App() {
   const [showPlayer, setShowPlayer] = React.useState(true)
   const [playerReady, setPlayerReady] = React.useState(false)
 
-  let video_ref = useRef(null)
-  useEffect(() => {
-    if (showPlayer) {
-      console.log(`useEffect: initialising videojs on ${video_ref.current}`)
-      let mPlayer = videojs(video_ref.current, {
-        autoplay: true,
-        controls: true,
-        aspectRatio: '4:3',
-        liveui: true
-      }, () => {
-        console.log('player ready')
-        setPlayerReady(true)
-      })
 
-      return () => {
-        console.log(`useEffect: dispose return`)
-        setPlayerReady(false)
-        if (mPlayer) mPlayer.dispose()
-      }
-    } else {
-      console.log(`useEffect: disposing videojs on ${video_ref.current}`)
-      setPlayerReady(false)
-      if (video_ref.current) {
-        videojs(video_ref.current).dispose()
-      }
-    }
-  }, [video_ref, showPlayer])
+  
+  const playerRef = React.useRef(null);
+  
+  const handlePlayerReady = (player) => {
+    playerRef.current = player;
+
+    // you can handle player events here
+    player.on('waiting', () => {
+      console.log('handlePlayerReady: player is waiting');
+    });
+
+    player.on('dispose', () => {
+      console.log('handlePlayerReady: player will dispose');
+    });
+  };
 
   function getServerData() {
     setCurrentCamera(null)
@@ -57,8 +90,8 @@ function App() {
       .then(
         (result) => {
           setData({...result, status: 'success'})
-          const {key} = result.cameras.filter(c => c.enable_streaming).shift() || {key:null}
-          key && playLive(key)
+          console.log (`got refresh, find first streaming enabled camera & play`)
+          playVideo (result.cameras.filter(c => c.enable_streaming).shift())
         },
         // Note: it's important to handle errors here
         // instead of a catch() block so that we don't swallow
@@ -78,28 +111,29 @@ function App() {
   }
 
   function _itemChanged(m, idx) {
-    // (_section.isAllSelected ${_selection.isAllSelected()})
     console.log(`_itemChanged ${idx} (old ${inputState.current_idx})  (allSelected ${inputState.allSelected})`)
     if (idx !== inputState.current_idx) {
       setInputState({ current_idx: idx, current_movement: m, allSelected: inputState.allSelected, inputs: { ...inputState.inputs, [m.key]: { reviewed: true } } })
     }
-    if (playerReady) {
-      playVideo(data.cameras.find(c => c.key === m.movement.cameraKey), m.key)
-    }
+    playVideo(data.cameras.find(c => c.key === m.movement.cameraKey), m.key)
   }
 
-  function playVideo(camera, movementKey) {
-    if (video_ref.current) {
-      let mPlayer = videojs(video_ref.current)
+  function playVideo(c, movementKey) {
+    const mPlayer = playerRef.current
+    if (mPlayer && c) {
 
+      setCurrentCamera(c.key)
       mPlayer.src({
-        src: `/video/${movementKey || `live/${camera.key}`}/stream.m3u8${movementKey ? `?preseq=${camera.segments_prior_to_movement}&postseq=${camera.segments_post_movement}` : ''}`,
+        src: `/video/${movementKey || `live/${c.key}`}/stream.m3u8${movementKey ? `?preseq=${c.segments_prior_to_movement}&postseq=${c.segments_post_movement}` : ''}`,
         type: 'application/x-mpegURL'
       })
+
       if (movementKey) {
-        mPlayer.currentTime(camera.segments_prior_to_movement * 2) // 20 seconds into stream (coresponds with 'segments_prior_to_movement')
+        mPlayer.currentTime(c.segments_prior_to_movement * 2) // 20 seconds into stream (coresponds with 'segments_prior_to_movement')
       }
       mPlayer.play()
+    } else {
+      console.warn(`playVideo : player not ready or no camera`)
     }
   }
 
@@ -121,8 +155,8 @@ function App() {
 
   function recordReview() {
     console.log(inputState.current_movement)
-    if (playerReady && inputState.current_movement) {
-      let mPlayer = videojs(video_ref.current)
+    if (/*playerReady && */ inputState.current_movement) {
+      let mPlayer = videojs.getPlayer()
       console.log(mPlayer.currentTime())
       const c = data.cameras.find(c => c.key === inputState.current_movement.movement.cameraKey)
       window.open(`/mp4/${inputState.current_movement.key}${c ? `?preseq=${c.segments_prior_to_movement}&postseq=${c.segments_post_movement}` : ''}`, '_blank').focus()
@@ -167,16 +201,6 @@ function App() {
       }
     } else {
       return <Text variant="mediumPlus">please wait..</Text>
-    }
-  }
-
-  function playLive(cKey) {
-    setCurrentCamera(cKey)
-    if (playerReady) {
-      console.log(`playing ${cKey}`)
-      playVideo(data.cameras.find(c => c.key === cKey))
-    } else {
-      alert("Player not ready")
     }
   }
 
@@ -341,6 +365,8 @@ function App() {
     })
   }
 
+
+
   return (
     <main id="mainContent" data-grid="container">
 
@@ -422,7 +448,15 @@ function App() {
       <Stack horizontal wrap >
         {showPlayer &&
           <Stack.Item styles={{ root: { width: "700px" } }} grow={1}>
-            <video ref={video_ref} className="video-js vjs-default-skin" width="640" height="268" />
+            <VideoJS width="640" height="268" options={{
+                autoplay: true,
+                muted:"muted",
+                controls: true,
+                aspectRatio: '4:3',
+                liveui: true
+              }} onReady={handlePlayerReady}/>
+
+
           </Stack.Item>
         }
 
@@ -436,16 +470,14 @@ function App() {
                 split: true,
                 cacheKey: 'myCacheKey', // changing this key will invalidate this item's cache
                 iconProps: { iconName: 'Webcam2' },
-                onClick: () => {
-                  currentCamera && playLive(currentCamera)
-                },
+                onClick: () => playVideo(data.cameras.find(c => c.key === currentCamera)),
                 subMenuProps: {
                   items: data.cameras.filter(c => c.enable_streaming).map(c => { return {
                       key: c.key,
                       text: c.name,
                       iconProps: { iconName: 'FrontCamera' },
                       ['data-automation-id']: 'newEmailButton', // optional
-                      onClick: () => playLive(c.key)
+                      onClick: () => playVideo(c)
                     }})
                 }
               },
