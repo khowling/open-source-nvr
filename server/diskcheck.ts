@@ -97,7 +97,7 @@ async function diskCheck(rootFolder: string, cameraFolders: Array<string>, clean
             }
 
 
-            while (MB < needtoReomveKB) {
+            while (MB < needtoReomveKB || Object.keys(fages).length) {
                 // get next oldest
                 const { folder, idx, age } = Object.keys(fages).reduce((acc, folder) => acc.age ? (fages[folder].age < acc.age ? {folder,...fages[folder]} : acc ): {folder, ...fages[folder]} , {folder: '', idx: -1, age: 0 })
                 if (idx >= 0) {
