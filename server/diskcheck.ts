@@ -92,7 +92,7 @@ async function diskCheck(rootFolder: string, cameraFolders: Array<string>, clean
 
                 flist[folder] = (await lsOrderTime(folder)).filter(([s,f]) => f.match(/(\.ts|\.jpg)$/))
                 if (flist[folder].length) {
-                    fages[folder] = {idx: 0, age: (await fs.stat(flist[folder][0][1])).ctimeMs}
+                    fages[folder] = {idx: 0, age: (await fs.stat(`${folder}/${flist[folder][0][1]}`)).ctimeMs}
                 }
             }
 
@@ -110,7 +110,7 @@ async function diskCheck(rootFolder: string, cameraFolders: Array<string>, clean
                     
                     // set next oldest in the folder "fages"
                     if (flist[folder].length > idx + 1) {
-                        fages[folder] = {idx: idx + 1, age: (await fs.stat(flist[folder][idx + 1][1])).ctimeMs}
+                        fages[folder] = {idx: idx + 1, age: (await fs.stat(`${folder}/${flist[folder][idx + 1][1]}`)).ctimeMs}
                     } else {
                         delete fages[folder]
                     }
