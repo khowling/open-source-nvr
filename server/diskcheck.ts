@@ -34,7 +34,7 @@ async function lsOrderTime(folder: string): Promise<Array<[size: number, filenam
         const mv_task = spawn('ls', ['-trks', '--ignore=\'*[^.jpg|^.ts]\'' , folder], { timeout: 5000 })
 
         // only take the first page of the results, otherwise TOO LONG!
-        mv_task.stdout.on('data', (data: string) => { if (!mv_stdout)  mv_stdout += data })
+        mv_task.stdout.on('data', (data: string) => { /*if (!mv_stdout) */ mv_stdout += data })
         mv_task.stderr.on('data', (data: string) => { mv_stderr += data })
         mv_task.on('error', async (error: Error) => { mv_error = `${error.name}: ${error.message}` })
 
