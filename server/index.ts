@@ -12,11 +12,12 @@ import Router from '@koa/router'
 import bodyParser from 'koa-bodyparser'
 import level from 'level'
 import sub from 'subleveldown'
+import { diskCheck } from './diskcheck'
 
 import { JobManager, JobStatus, JobReturn, JobData, JobTask } from './jobmanager'
 
 interface MovementEntry {
-    cameraKey: number;
+    cameraKey: string;
     startDate: number;
     startSegment: number;
     lhs_seg_duration_seq: number;
@@ -56,6 +57,8 @@ interface CameraEntry {
     passwd?: string;
     enable_streaming: boolean;
     enable_movement: boolean;
+    disk_mount_dir: string;
+    enable_cleanup: boolean;
     secWithoutMovement: number;
     mSPollFrequency: number;
     segments_prior_to_movement: number;
@@ -80,7 +83,7 @@ interface Movement {
 }
 
 interface CameraEntryClient extends CameraEntry {
-    key: number
+    key: string
     ffmpeg_process?: ProcessInfo;
     movement?: Movement;
 }
@@ -92,7 +95,7 @@ interface CameraCacheEntry {
 }
 
 interface CameraCache { 
-    [key: number]: CameraCacheEntry;
+    [key: string]: CameraCacheEntry;
 }
 var cameraCache: CameraCache = {}
 
@@ -203,12 +206,12 @@ async function jobWorker(seq: number, d: JobData): Promise<JobReturn> {
 const re = new RegExp(`stream([\\d]+).ts`, 'g');
 
  
-async function processMovement(cid: number, jobManager: JobManager) {
+async function processMovement(cameraKey: string, jobManager: JobManager) {
 
-    const move = cameraCache[cid].movement
+    const move = cameraCache[cameraKey].movement
     if (move && move.error) return
 
-    const ce = cameraCache[cid].ce
+    const ce = cameraCache[cameraKey].ce
     try {
         
         const current_movement = move && move.current_movement
@@ -217,7 +220,7 @@ async function processMovement(cid: number, jobManager: JobManager) {
         const body = JSON.parse(body_json)
         //console.log(body[0].value)
         if (body[0].error) {
-            cameraCache[cid].movement = {...(move), running: false, error: true, status: `fetch movement error: ${JSON.stringify(body[0])}`}
+            cameraCache[cameraKey].movement = {...(move), running: false, error: true, status: `fetch movement error: ${JSON.stringify(body[0])}`}
         } else if (body[0].value.state === 1) {
 
             if (!current_movement) {
@@ -232,10 +235,10 @@ async function processMovement(cid: number, jobManager: JobManager) {
                 const hls_segments = [...hls.matchAll(re)].map(m => m[1])
                 const targetduration = hls.match(/#EXT-X-TARGETDURATION:([\d])/)
                 const lhs_seg_duration_seq = parseInt(targetduration && targetduration.length>1? targetduration[1]: "2")
-                cameraCache[cid].movement = {
+                cameraCache[cameraKey].movement = {
                     running: true, error: false,
                     current_movement: {
-                        cameraKey: cid,
+                        cameraKey,
                         startDate: Date.now(),
                         startSegment: parseInt(hls_segments[hls_segments.length - 1]) + 1,
                         lhs_seg_duration_seq,
@@ -256,7 +259,7 @@ async function processMovement(cid: number, jobManager: JobManager) {
                     await movementdb.put(movement_key, current_movement)
 
                     await jobManager.submit({ task: JobTask.Snapshot, movement_key })
-                    cameraCache[cid].movement = {
+                    cameraCache[cameraKey].movement = {
                         running: true, error: false,
                         current_movement: null
                     }
@@ -273,11 +276,11 @@ async function processMovement(cid: number, jobManager: JobManager) {
 }
 
 
-async function StreamingController(cid: number): Promise<ProcessInfo | undefined> {
-    //console.log (`StreamingController for ${cid}`)
-    const ce = cameraCache[cid].ce,
+async function StreamingController(cameraKey: string): Promise<ProcessInfo | undefined> {
+    //console.log (`StreamingController for ${cameraKey}`)
+    const ce = cameraCache[cameraKey].ce,
           streamfile = `${ce.folder}/stream.m3u8`,
-          proc = cameraCache[cid].ffmpeg_process
+          proc = cameraCache[cameraKey].ffmpeg_process
 
     // chkecFFMpeg still running from last interval, skip this check.
     if (proc?.in_progress) {
@@ -309,7 +312,7 @@ async function StreamingController(cid: number): Promise<ProcessInfo | undefined
                     } else {
                         // its running fine, recheck in 30secs
                         console.log (`Checking ffmpeg for [${ce.name}], all good, last_updated_ago=${last_updated_ago}mS, check again in 1minute`)
-                        cameraCache[cid].ffmpeg_process = {...cameraCache[cid].ffmpeg_process as ProcessInfo, check_after: Date.now() + 60000}
+                        cameraCache[cameraKey].ffmpeg_process = {...cameraCache[cameraKey].ffmpeg_process as ProcessInfo, check_after: Date.now() + 60000}
                     }
                 } catch (e) {
                     console.warn (`cannot access ffmpeg output for ${ce.name} - file ${streamfile}, kill process`)
@@ -317,7 +320,7 @@ async function StreamingController(cid: number): Promise<ProcessInfo | undefined
                     proc.taskid?.kill();
                 }
 
-                return cameraCache[cid].ffmpeg_process as ProcessInfo
+                return cameraCache[cameraKey].ffmpeg_process as ProcessInfo
 
             } else {
                 console.warn (`Try to restart failed or stopped ffmpeg for [${ce.name}] running=${proc.running} error=${proc.error}`)
@@ -331,45 +334,45 @@ async function StreamingController(cid: number): Promise<ProcessInfo | undefined
     // start ffmpeg
     try {
         console.log ((new Date()).toTimeString().substring(0,8) + ` Getting token for [${ce.name}]...`)
-        cameraCache[cid].ffmpeg_process = {taskid: null, running: false, error: false, in_progress: true, status: 'Getting token'}
+        cameraCache[cameraKey].ffmpeg_process = {taskid: null, running: false, error: false, in_progress: true, status: 'Getting token'}
         
         const body_json = await server_fetch(`http://${ce.ip}/cgi-bin/api.cgi?cmd=Login&token=null`, {timeout: 500}, [{"cmd":"Login","action":0,"param":{"User":{"userName":"admin","password": ce.passwd}}}])
         const body = JSON.parse(body_json)
         if (body[0].error) {
-            cameraCache[cid].ffmpeg_process = {taskid: null, running: false, error: true, in_progress: false, status: `Unable to retrive token: ${JSON.stringify(body[0])}`, check_after: Date.now() + 60000};
+            cameraCache[cameraKey].ffmpeg_process = {taskid: null, running: false, error: true, in_progress: false, status: `Unable to retrive token: ${JSON.stringify(body[0])}`, check_after: Date.now() + 60000};
         } else {
             const token = body[0].value.Token.name
             console.log ((new Date()).toTimeString().substring(0,8) + ` starting ffmpeg for [${ce.name}] : ${streamfile}...`)
             var ffmpeg : ChildProcessWithoutNullStreams = spawn('/usr/bin/ffmpeg', ['-r', '25', '-i', `rtmp://admin:${ce.passwd}@${ce.ip}/bcs/channel0_main.bcs?token=${token}&channel=0&stream=0`, '-hide_banner', '-loglevel', 'error', '-vcodec', 'copy', '-start_number', ((Date.now() / 1000 | 0) - 1600000000).toString(), streamfile ])
-            cameraCache[cid].ffmpeg_process = {taskid: ffmpeg, running: true, error: false, in_progress: false, status: 'Starting...\n', check_after: Date.now() + 60000 /* check it hasn't hung every 30seconds */};
+            cameraCache[cameraKey].ffmpeg_process = {taskid: ffmpeg, running: true, error: false, in_progress: false, status: 'Starting...\n', check_after: Date.now() + 60000 /* check it hasn't hung every 30seconds */};
 
 
             ffmpeg.stdout.on('data', (data: string) => {
                 console.log (`ffmpeg stdout [${ce.name}]: ${data}`)
-                cameraCache[cid].ffmpeg_process = {...cameraCache[cid].ffmpeg_process, status: cameraCache[cid].ffmpeg_process?.status + data.toString()} as ProcessInfo
+                cameraCache[cameraKey].ffmpeg_process = {...cameraCache[cameraKey].ffmpeg_process, status: cameraCache[cameraKey].ffmpeg_process?.status + data.toString()} as ProcessInfo
             })
             ffmpeg.stderr.on('data', (data: string) => {
                 console.warn (`ffmpeg stderr [${ce.name}]: ${data}`)
-                cameraCache[cid].ffmpeg_process = {...cameraCache[cid].ffmpeg_process, status: cameraCache[cid].ffmpeg_process?.status + `StdErr: ${data}`} as ProcessInfo
+                cameraCache[cameraKey].ffmpeg_process = {...cameraCache[cameraKey].ffmpeg_process, status: cameraCache[cameraKey].ffmpeg_process?.status + `StdErr: ${data}`} as ProcessInfo
             })
             ffmpeg.on('error', async (error: Error) => { 
                 console.warn (`ffmpeg on-error [${ce.name}]: ${error.name}: ${error.message}`)
-                cameraCache[cid].ffmpeg_process = {...cameraCache[cid].ffmpeg_process, status: cameraCache[cid].ffmpeg_process?.status + `Error: ${error.name}: ${error.message}`} as ProcessInfo
+                cameraCache[cameraKey].ffmpeg_process = {...cameraCache[cameraKey].ffmpeg_process, status: cameraCache[cameraKey].ffmpeg_process?.status + `Error: ${error.name}: ${error.message}`} as ProcessInfo
             })
 
             ffmpeg.on('close', async (code: number) => {
                 console.warn ((new Date()).toTimeString().substring(0,8) + ` ffmpeg on-close [${ce.name}]: code=${code}`)
-                cameraCache[cid].ffmpeg_process = {...cameraCache[cid].ffmpeg_process as ProcessInfo, taskid: null, running: false, error: code !== 0, check_after: Date.now()};
+                cameraCache[cameraKey].ffmpeg_process = {...cameraCache[cameraKey].ffmpeg_process as ProcessInfo, taskid: null, running: false, error: code !== 0, check_after: Date.now()};
             });
         }
 
         
     } catch (e) {
         console.warn ((new Date()).toTimeString().substring(0,8) + ` FFMpeg catch error [${ce.name}]: ${e}, try again in 1minute`)
-        cameraCache[cid].ffmpeg_process = {...cameraCache[cid].ffmpeg_process as ProcessInfo, running: false, error: true, in_progress: false, status: e as string, check_after: Date.now() + 60000};
+        cameraCache[cameraKey].ffmpeg_process = {...cameraCache[cameraKey].ffmpeg_process as ProcessInfo, running: false, error: true, in_progress: false, status: e as string, check_after: Date.now() + 60000};
     }
 
-    return  cameraCache[cid].ffmpeg_process as ProcessInfo
+    return  cameraCache[cameraKey].ffmpeg_process as ProcessInfo
 }
 
 
@@ -393,22 +396,20 @@ async function init_web() {
             }
 
         })
-        .get('/video/live/:cid/:file', async (ctx, next) => {
-            const cid = ctx.params.cid,
+        .get('/video/live/:cameraKey/:file', async (ctx, next) => {
+            const cameraKey = ctx.params.cameraKey,
                   file = ctx.params.file
-            if (isNaN(cid as any)) {
-                ctx.status = 404
-            } else {
-                try {
-                    const c = await cameradb.get(parseInt(cid))            
-                    const serve = `${c.folder}/${file}`
-                    const { size } = await stat(serve)
-                    //console.log(`serving : ${serve}`)
-                    ctx.body = createReadStream(serve, { encoding: undefined }).on('error', ctx.onerror)
-                } catch (e) {
-                    ctx.throw(`error e=${JSON.stringify(e)}`)
-                }
+
+            try {
+                const c = await cameradb.get(cameraKey)            
+                const serve = `${c.folder}/${file}`
+                const { size } = await stat(serve)
+                //console.log(`serving : ${serve}`)
+                ctx.body = createReadStream(serve, { encoding: undefined }).on('error', ctx.onerror)
+            } catch (e) {
+                ctx.throw(`error e=${JSON.stringify(e)}`)
             }
+
         })
         .get('/video/:mid/:file', async (ctx, next) => {
             const movement = ctx.params.mid,
@@ -518,52 +519,48 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
     const api = new Router({ prefix: '/api' })
         .post('/camera/:id', async (ctx, next) => {
             
-            const cid = ctx.params.id
-            console.log (`camera save ${cid} -  ${JSON.stringify(ctx.request.body)}`)
+            const cameraKey = ctx.params.id
+            console.log (`camera save ${cameraKey} -  ${JSON.stringify(ctx.request.body)}`)
             if (ctx.request.body) {
                 const new_ce: CameraEntry = ctx.request.body
 
-                if (cid === 'new') {
+                if (cameraKey === 'new') {
                     // creating new entry
                     try {
                         await mkdir (new_ce.folder)
                     } catch (e) {
                         console.warn (`failed to create dir : ${new_ce.folder}`)
                     }
-                    const new_key = (Date.now() / 1000 | 0) - 1600000000
+                    const new_key = "C" + ((Date.now() / 1000 | 0) - 1600000000)
                     await cameradb.put(new_key, new_ce)
                     cameraCache[new_key] = {ce: new_ce }
  
  
                     ctx.status = 201
                 } else {
-                    if (isNaN(cid as any)) { 
-                        console.warn (`isNaN : ${cid}`)
-                        ctx.status = 404
-                    } else {
-                        // updating existing camera
-                        try {
-                            const key = parseInt(cid)
-                            const old_ce: CameraEntry = await cameradb.get(key)
-                            if (old_ce.folder != new_ce.folder) {
-                                console.log ('creating directory')
-                                try {
-                                 await mkdir (new_ce.folder)
-                                } catch (e) {
-                                    console.warn (`failed to create dir : ${new_ce.folder}`)
-                                }
-                            }
-                            
-                            const new_vals: CameraEntry = {...old_ce, ...new_ce}
-                            await cameradb.put(key, new_vals) 
-                            cameraCache[key].ce = new_vals
 
-                            ctx.status = 201
-                        } catch (e) {
-                            console.warn (`try error : ${e}`)
-                            ctx.status = 404
+                    // updating existing camera
+                    try {
+                        const old_ce: CameraEntry = await cameradb.get(cameraKey)
+                        if (old_ce.folder != new_ce.folder) {
+                            console.log ('creating directory')
+                            try {
+                                await mkdir (new_ce.folder)
+                            } catch (e) {
+                                console.warn (`failed to create dir : ${new_ce.folder}`)
+                            }
                         }
+                        
+                        const new_vals: CameraEntry = {...old_ce, ...new_ce}
+                        await cameradb.put(cameraKey, new_vals) 
+                        cameraCache[cameraKey].ce = new_vals
+
+                        ctx.status = 201
+                    } catch (e) {
+                        console.warn (`try error : ${e}`)
+                        ctx.status = 404
                     }
+
                 }
                 
             } else {
@@ -579,8 +576,8 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
             }
         }).get('/movements', async (ctx, next) => {
 
-            const cameras: CameraEntryClient[] = Object.keys(cameraCache).map((k) => {
-                const key = parseInt(k)
+            const cameras: CameraEntryClient[] = Object.keys(cameraCache).map((key) => {
+
                 const c = cameraCache[key]
                 // filer out data not for the client
                 const {ip, passwd, ...cameraEntry} = c.ce
@@ -684,12 +681,28 @@ async function main() {
             })
     })
 
+    let interval_until_next_delete = 0
     async function controll_loop() {
         for (let cid of Object.keys(cameraCache)) {
-            const cid_int = parseInt(cid)
-            const pi = await StreamingController(cid_int)
+ 
+            const pi = await StreamingController(cid)
             if (pi?.running) {
-                await processMovement(cid_int, jobman)
+                await processMovement(cid, jobman)
+
+                if (interval_until_next_delete <= 0) {
+
+                    const cameraFolders = Object.keys(cameraCache).filter(c => cameraCache[c].ce.enable_cleanup && cameraCache[c].ce.disk_mount_dir).reduce((acc, c) => {
+                        const { folder, disk_mount_dir} = cameraCache[c].ce
+                        return {...acc, [disk_mount_dir]: [...(acc[disk_mount_dir] ? acc[disk_mount_dir] : []), folder]}
+                    }, {} as {[key: string]: string[]}) 
+
+                    for (let disk_mount_dir of Object.keys(cameraFolders)) {
+                        diskCheck(disk_mount_dir, cameraFolders[disk_mount_dir], 99).then(console.log)
+                    }
+                    interval_until_next_delete = 120
+                } else {
+                    interval_until_next_delete--
+                }
             }
         }
     }

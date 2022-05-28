@@ -430,6 +430,11 @@ function App() {
               <Slider disabled={!panel.values.enable_movement} label="Seconds without movement" min={0} max={50} step={1} defaultValue={panel.values.secWithoutMovement} showValue onChange={(val) => updatePanelValues('secWithoutMovement', val)} />
             </Stack>
 
+            <Separator styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}><b>Disk Cleanup (check every 120seconds)</b></Separator>
+            
+            <Checkbox disabled={!panel.values.enable_streaming} label="Enable Disk Cleanup" checked={panel.values.enable_cleanup} onChange={(ev, val) => updatePanelValues('enable_cleanup', val)} />
+            <TextField disabled={!panel.values.enable_cleanup} label="Disk Mount Folder" iconProps={{ iconName: 'Folder' }}  required value={panel.values.disk_mount_dir} onChange={(ev, val) => updatePanelValues('disk_mount_dir', val)} />
+
 
             <PrimaryButton styles={{ root: { marginTop: "15px !important"}}} disabled={invalidArray.length >0} text="Save" onClick={savePanel}/>
 
@@ -534,7 +539,9 @@ function App() {
                         segments_post_movement: c.segments_post_movement,
                         ignore_tags: c.ignore_tags,
                         enable_streaming: c.enable_streaming,
-                        enable_movement: c.enable_movement
+                        enable_movement: c.enable_movement,
+                        enable_cleanup: c.enable_cleanup,
+                        disk_mount_dir: c.disk_mount_dir
                       }})
                     }
                   }}).concat (
@@ -549,7 +556,8 @@ function App() {
                       segments_post_movement: 10, // 20 seconds (2second segments)
                       ignore_tags: ['car'],
                       enable_streaming: true,
-                      enable_movement: true
+                      enable_movement: true,
+                      enable_cleanup: false
                     }}),
                   }
                 )
