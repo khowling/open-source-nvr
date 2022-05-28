@@ -15,9 +15,6 @@ import sub from 'subleveldown'
 
 import { JobManager, JobStatus, JobReturn, JobData, JobTask } from './jobmanager'
 
-
-const VIDEO_PATH = process.env.FILEPATH || './test_video'
-
 interface MovementEntry {
     cameraKey: number;
     startDate: number;
@@ -490,7 +487,7 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
 
         }).get('/mp4old/:movement', async (ctx, next) => {
             console.log(`serving video: ${ctx.params[0]}`)
-            const filepath = `${VIDEO_PATH}/${ctx.params[0]}`
+            const filepath = `./test_video/${ctx.params[0]}`
             let streamoptions: any = { encoding: null }
             if (ctx.headers.range) {
 
