@@ -68,7 +68,7 @@ async function needtoRemoveKB(folder: string, cleanIfOver: number): Promise<numb
 
 }
 
-async function diskCheck(rootFolder: string, cameraFolders: Array<string>, cleanIfOver: number): Promise<number> {
+async function diskCheck(rootFolder: string, cameraFolders: Array<string>, cleanIfOver: number): Promise<{files: number, MB: number}> {
     
         const stats = await stat(rootFolder)
         if (!stats.isDirectory()) {
@@ -78,11 +78,11 @@ async function diskCheck(rootFolder: string, cameraFolders: Array<string>, clean
         const needtoReomveKB = await needtoRemoveKB(rootFolder, cleanIfOver)
         console.log(`diskCheck: needtoReomveKB=${needtoReomveKB}`)
         if (needtoReomveKB > 0) {
-            let removed = 0
-            let files : {[folder: string]: Array<[size: number, filename: string]>} = {}, 
+            let MB = 0, files = 0
+            let flist : {[folder: string]: Array<[size: number, filename: string]>} = {}, 
                 fages : {[folder: string]: {idx: number, age: number}} = {}
 
-            // find folder with oldest camera files, then remove needtoReomveKB from that folder!
+            // find folder with oldest camera flist, then remove needtoReomveKB from that folder!
             for (let folder of cameraFolders) {
 
                 const stats = await stat(folder)
@@ -90,35 +90,36 @@ async function diskCheck(rootFolder: string, cameraFolders: Array<string>, clean
                     throw new Error(`${folder} is not a directory`)
                 }
 
-                files[folder] = (await lsOrderTime(folder)).filter(([s,f]) => f.match(/(\.ts|\.jpg)$/))
-                if (files[folder].length) {
-                    fages[folder] = {idx: 0, age: (await fs.stat(files[folder][0][1])).ctimeMs}
+                flist[folder] = (await lsOrderTime(folder)).filter(([s,f]) => f.match(/(\.ts|\.jpg)$/))
+                if (flist[folder].length) {
+                    fages[folder] = {idx: 0, age: (await fs.stat(flist[folder][0][1])).ctimeMs}
                 }
             }
 
 
-            while (removed < needtoReomveKB) {
+            while (MB < needtoReomveKB) {
                 // get next oldest
                 const { folder, idx, age } = Object.keys(fages).reduce((acc, folder) => acc.age ? (fages[folder].age < acc.age ? {folder,...fages[folder]} : acc ): {folder, ...fages[folder]} , {folder: '', idx: -1, age: 0 })
                 if (idx >= 0) {
-                    const [size, filename] = files[folder][idx]
+                    const [size, filename] = flist[folder][idx]
 
-                    console.log(`diskCheck: removing ${folder}/${filename}, needtoReomveKB=${needtoReomveKB}, removed=${removed}`)
+                    console.log(`diskCheck: removing ${folder}/${filename}, needtoReomveKB=${needtoReomveKB}, MB=${MB}`)
                     //await fs.rm(`${folder}/${f[1]}`)
-                    removed += size
+                    MB += size
+                    files++
                     
                     // set next oldest in the folder "fages"
-                    if (files[folder].length > idx + 1) {
-                        fages[folder] = {idx: idx + 1, age: (await fs.stat(files[folder][idx + 1][1])).ctimeMs}
+                    if (flist[folder].length > idx + 1) {
+                        fages[folder] = {idx: idx + 1, age: (await fs.stat(flist[folder][idx + 1][1])).ctimeMs}
                     } else {
                         delete fages[folder]
                     }
                 }
             }
 
-            return removed
+            return {files, MB}
         } else {
-            return 0
+            return { files: 0, MB: 0 }
         }
     
 }
@@ -127,4 +128,4 @@ async function diskCheck(rootFolder: string, cameraFolders: Array<string>, clean
 
 console.log ('diskcheck.ts')
 //needtoRemoveKB('.', 95).then(console.log)
-diskCheck(process.argv[2] || '/video', ['/video/front', '/video/back'] , process.argv[3] ? parseInt(process.argv[3]) :  90).then(r => console.log(`removed=${r}`))
+diskCheck(process.argv[2] || '/video', ['/video/front', '/video/back'] , process.argv[3] ? parseInt(process.argv[3]) :  90).then(console.log)
