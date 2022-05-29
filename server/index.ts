@@ -394,7 +394,8 @@ async function init_web() {
                 ctx.set('content-type', 'image/jpeg')
                 ctx.body = createReadStream(serve, { encoding: undefined }).on('error', ctx.onerror)
             } catch (e) {
-                ctx.throw(`error e=${JSON.stringify(e)}`)
+                const err : Error = e as Error
+                ctx.throw(400, err.message)
             }
 
         })
@@ -409,7 +410,8 @@ async function init_web() {
                 //console.log(`serving : ${serve}`)
                 ctx.body = createReadStream(serve, { encoding: undefined }).on('error', ctx.onerror)
             } catch (e) {
-                ctx.throw(`error e=${JSON.stringify(e)}`)
+                const err : Error = e as Error
+                ctx.throw(400, err.message)
             }
 
         })
@@ -437,7 +439,8 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
 
                     ctx.body = body
                 } catch (e) {
-                    ctx.throw(`unknown movement name=${movement}`)
+                    const err : Error = e as Error
+                    ctx.throw(400, `unknown movement name=${movement} message=${err.message}`)
                 }
             } else if (file.endsWith('.ts')) {
                 const [camera, index, suffix] = file.split('.')
@@ -447,10 +450,11 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
                     const { size } = await stat(serve)
                     ctx.body = createReadStream(serve, { encoding: undefined }).on('error', ctx.onerror)
                 } catch (e) {
-                    ctx.throw(`error e=${JSON.stringify(e)}`)
+                    const err : Error = e as Error
+                    ctx.throw(400, `message=${err.message}`)
                 }
             } else {
-                ctx.throw(`unknown file=${file}`)
+                ctx.throw(400, `unknown file=${file}`)
             }
 
         }).get('/mp4/:movement', async (ctx, next) => {
