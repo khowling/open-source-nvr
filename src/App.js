@@ -246,9 +246,14 @@ function App() {
     } else {
       invalidFn('name', !panel.values.name || panel.values.name.match(/^[a-z0-9][_\-a-z0-9]+[a-z0-9]$/i) === null || panel.values.name.length > 19,
         <Text>Enter valid camera name</Text>)
+
       invalidFn('disk', !panel.values.disk ,
         <Text>Require a Disk to store the files on, goto General Settings to create</Text>)
-      if (panel.key === "new") {
+
+      invalidFn('folder', !panel.values.folder || panel.values.folder.startsWith('/') || panel.values.folder.endsWith('/'),
+        <Text>Require a folder to store the files for this camera (relitive to disk, don't start with '/')</Text>)
+
+        if (panel.key === "new") {
         invalidFn('ip', !panel.values.ip || panel.values.ip.match(/^([0-9]{1,3}\.){3}[0-9]{1,3}$/i) === null,
           <Text>Enter valid camera IPv4 address</Text>)
       } else {
@@ -376,7 +381,7 @@ function App() {
     })
   }
 
-
+  const camerabeingEdited = panel.key === 'edit' && data.cameras && panel.values.key && data.cameras.find(c => c.key = panel.values.key)
 
   return (
     <main id="mainContent" data-grid="container">
@@ -430,7 +435,7 @@ function App() {
                 
                 <Stack horizontal tokens={{ childrenGap: 10 }}>
                   <Dropdown label="Disk" selectedKey={panel.values.disk} options={data.config && [ { key: data.config.settings.disk_base_dir, text: data.config.settings.disk_base_dir}]} required onChange={(ev, {key}) => updatePanelValues('disk', key)} errorMessage={getError('disk')} />
-                  <TextField label="Steaming Folder" iconProps={{ iconName: 'Folder' }}  required value={panel.values.folder} onChange={(ev, val) => updatePanelValues('folder', val)} />
+                  <TextField label="Steaming Folder" iconProps={{ iconName: 'Folder' }}  required value={panel.values.folder} onChange={(ev, val) => updatePanelValues('folder', val)} errorMessage={getError('folder')} />
                 </Stack>
 
                 <Label>Filter Tags (Requires Object Detection)</Label>
@@ -470,8 +475,8 @@ function App() {
                   {panel.key}
                 </Stack>
 
-                { panel.key === 'edit' && data.cameras && panel.values.key &&
-                  <MessageBar>{JSON.stringify(data.cameras.find(c => c.key = panel.values.key).ffmpeg_process, null, 2)}</MessageBar>
+                { camerabeingEdited &&
+                  <MessageBar>{JSON.stringify(camerabeingEdited.ffmpeg_process, null, 2)}</MessageBar>
                 }
 
               </>
