@@ -730,6 +730,7 @@ async function main() {
                     interval_until_next_delete = settingsCache.settings.cleanup_interval
                 } else {
                     interval_until_next_delete--
+                    settingsCache = {...settingsCache, status: {...settingsCache.status, nextCheckInSeconds: interval_until_next_delete}}
                 }
             }
         }
