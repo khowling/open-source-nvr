@@ -358,15 +358,16 @@ function App() {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(panel.values)
-    }).then(succ => {
-      if (succ.ok) {
-        console.log(`created success : ${JSON.stringify(succ)}`)
+    }).then(res => {
+      if (res.ok) {
+        console.log(`created success : ${JSON.stringify(res)}`)
         getServerData()
         setPanel({open: false, invalidArray: []})
       } else {
-        const ferr = `created failed : ${succ.status} ${succ.statusText}`
-        console.error(ferr)
-        setError(ferr)
+        return res.text().then(text => {throw new Error(text)})
+        //const ferr = `created failed : ${succ.status} ${succ.statusText}`
+        //console.error(ferr)
+        //setError(ferr)
       }
       
     }).catch(error => {
@@ -413,7 +414,7 @@ function App() {
                 <Separator styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}><b>Object Detection (using <a target="_other" href="https://pjreddie.com/darknet/yolo/">yolo</a>)</b></Separator>
                 
                 <Checkbox label="Enable Image Detection" checked={panel.values.enable_ml} onChange={(ev, val) => updatePanelValues('enable_ml', val)} styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}/>
-                <TextField disabled={!panel.values.enable_ml} label="DarkNet/ Yolo install folder " iconProps={{ iconName: 'Folder' }}  required value={panel.values.darknetDir} onChange={(ev, val) => updatePanelValues('darknetDir', val)} errorMessage={getError('darknetDir')} />
+                <TextField disabled={!panel.values.enable_ml} label="DarkNet and Yolo install folder " iconProps={{ iconName: 'Folder' }}  required value={panel.values.darknetDir} onChange={(ev, val) => updatePanelValues('darknetDir', val)} errorMessage={getError('darknetDir')} />
                 
                 { data.config && data.config.status &&
                   <MessageBar>{JSON.stringify(data.config.status, null, 2)}</MessageBar>

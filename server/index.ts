@@ -524,14 +524,17 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
             if (ctx.request.body) {
                 const new_settings: Settings = ctx.request.body
                 try {
+                    const dirchk = await stat(new_settings.disk_base_dir)
+                    if (!dirchk.isDirectory())  throw new Error(`${new_settings.disk_base_dir} is not a directory`)
                     await db.put('settings', new_settings)
                     settingsCache = {...settingsCache, settings: new_settings}
                     ctx.status = 201
-                } catch (e) {
-                    console.warn (e)
+                } catch (err) {
+                    ctx.body = err
                     ctx.status = 500
                 }
             } else {
+                ctx.body = 'no body'
                 ctx.status = 500
             }
         })
@@ -576,7 +579,7 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
                         ctx.status = 201
                     } catch (e) {
                         console.warn (`try error : ${e}`)
-                        ctx.status = 404
+                        ctx.status = 400
                     }
 
                 }
