@@ -20,6 +20,7 @@ interface Settings {
     disk_base_dir: string;
     enable_cleanup: boolean;
     cleanup_interval: number;
+    cleanup_capacity: number;
     enable_ml: boolean;
     darknetDir: string;
 }
@@ -697,7 +698,7 @@ async function main() {
             })
     })
 
-    settingsCache = {settings: { disk_base_dir: '',  enable_cleanup: false, darknetDir:'', enable_ml: false, cleanup_interval: 120}, status: {}}
+    settingsCache = {settings: { disk_base_dir: '',  enable_cleanup: false, darknetDir:'', enable_ml: false, cleanup_interval: 120, cleanup_capacity: 99}, status: {}}
     try {
         settingsCache = {...settingsCache, settings : await db.get('settings') as Settings}
     } catch (e) {
@@ -717,7 +718,7 @@ async function main() {
                     let settings : Settings = settingsCache.settings
 
                     if (settings.enable_cleanup && settings.disk_base_dir) {
-                        diskCheck(settings.disk_base_dir, Object.keys(cameraCache).filter(c => cameraCache[c].ce.enable_streaming).map(c => cameraCache[c].ce.folder), 99).then(status => settingsCache = {...settingsCache, status})
+                        diskCheck(settings.disk_base_dir, Object.keys(cameraCache).filter(c => cameraCache[c].ce.enable_streaming).map(c => cameraCache[c].ce.folder), settings.cleanup_capacity).then(status => settingsCache = {...settingsCache, status: {...status, checked: new Date()}})
                     }
                     interval_until_next_delete = settingsCache.settings.cleanup_interval
                 } else {

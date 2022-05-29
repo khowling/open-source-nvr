@@ -191,11 +191,11 @@ function App() {
           return <a key={idx} target="_blank" href={img}><Text variant="mediumPlus" >ML Image</Text></a>
         }
       } else {
-        return <Text variant="mediumPlus">ML error: {movement.ml.stderr}</Text>
+        return <Text styles={{ root: {color: 'red'}}} variant="mediumPlus">{movement.ml.code}: {movement.ml.stderr} {movement.ml.error}</Text>
       }
     } else if (movement.ffmpeg) {
       if (movement.ffmpeg.success) {
-        return <a key={idx} target="_blank" href={img}><Text variant="mediumPlus">Image (wait for ML)</Text></a>
+        return <a key={idx} target="_blank" href={img}><Text variant="mediumPlus">Image</Text></a>
       } else {
         return <Text variant="mediumPlus">Error: {movement.ffmpeg.stderr}</Text>
       }
@@ -406,6 +406,9 @@ function App() {
                 <TextField label="Disk Mount Folder" iconProps={{ iconName: 'Folder' }}  required value={panel.values.disk_base_dir} onChange={(ev, val) => updatePanelValues('disk_base_dir', val)} errorMessage={getError('disk_base_dir')} />
                 
                 <Checkbox label="Enable Disk Cleanup" checked={panel.values.enable_cleanup} onChange={(ev, val) => updatePanelValues('enable_cleanup', val)} styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}/>
+                <Slider disabled={!panel.values.enable_cleanup} label="Keep under Capacity %" min={1} max={99} step={1} defaultValue={panel.values.cleanup_capacity} showValue onChange={(val) => updatePanelValues('cleanup_capacity', val)} />
+                <Slider disabled={!panel.values.enable_cleanup} label="Check Capacity Interval (seconds)" min={30} max={1800} step={10} defaultValue={panel.values.cleanup_interval} showValue onChange={(val) => updatePanelValues('cleanup_interval', val)} />
+
 
                 <Separator styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}><b>Object Detection (using <a target="_other" href="https://pjreddie.com/darknet/yolo/">yolo</a>)</b></Separator>
                 
@@ -567,8 +570,12 @@ function App() {
                     iconProps: { iconName: 'DataManagementSettings' },
                     onClick: () => {
                       setPanel({...panel, open: true, key: 'settings', invalidArray:[], heading: 'General and Disk Settings', values: {
-                        enable_cleanup: data.config.settings.enable_cleanup,
                         disk_base_dir: data.config.settings.disk_base_dir,
+                        enable_cleanup: data.config.settings.enable_cleanup,
+                        cleanup_interval: data.config.settings.cleanup_interval,
+                        cleanup_capacity: data.config.settings.cleanup_capacity,
+                        enable_ml: data.config.settings.enable_ml,
+                        darknetDir: data.config.settings.darknetDir
                       }})
                     }
                 }].concat(data.cameras.map(c => { return {
