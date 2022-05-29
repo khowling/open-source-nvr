@@ -2,7 +2,7 @@
 import './App.css';
 import React, { /* useCallback , */ useRef, useEffect } from 'react';
 import videojs from 'video.js'
-import { CommandBar, Text, Toggle, DefaultButton, DetailsList, SelectionMode, Stack, TextField, Slider, TagPicker, Separator, Label, MessageBar, MessageBarType, Checkbox, Selection, PrimaryButton, Panel, VerticalDivider } from '@fluentui/react'
+import { CommandBar, Text, Dropdown, Toggle, DefaultButton, DetailsList, SelectionMode, Stack, TextField, Slider, TagPicker, Separator, Label, MessageBar, MessageBarType, Checkbox, Selection, PrimaryButton, Panel, VerticalDivider } from '@fluentui/react'
 import { initializeIcons } from '@fluentui/react/lib/Icons';
 
 initializeIcons(/* optional base url */);
@@ -53,9 +53,9 @@ function VideoJS (props)  {
 
 function App() {
 
-  const [panel, setPanel] = React.useState({open: false});
+  const [panel, setPanel] = React.useState({open: false, invalidArray: []});
   const [error, setError] = React.useState(null)
-  const [invalidArray, setInvalidArray] = React.useState([])
+  //const [invalidArray, setInvalidArray] = React.useState([])
 
   const init_data = { cameras: [], movements: [] }
   const [data, setData] = React.useState(init_data)
@@ -63,7 +63,7 @@ function App() {
   const [inputState, setInputState] = React.useState({ current_idx: 'none', allSelected: false, inputs: {} })
   const [taggedOnly, setTaggedOnly] = React.useState(true)
   const [showPlayer, setShowPlayer] = React.useState(true)
-  const [playerReady, setPlayerReady] = React.useState(false)
+  //const [playerReady, setPlayerReady] = React.useState(false)
 
 
   
@@ -208,7 +208,7 @@ function App() {
     var calcFolder = panel.values.folder || ''
     if (field === "name") {
       if (!calcFolder) {
-        calcFolder = `./test_video/${value}`
+        calcFolder = value
       } else if (calcFolder.includes(panel.values.name)) {
         calcFolder = calcFolder.replace(panel.values.name, value)
       }
@@ -218,27 +218,36 @@ function App() {
     setPanel({...panel, values: {...panel.values, 
       [field]: value, 
       ...(field === "enable_streaming" && value === false && {enable_movement: false}),
-      ...(field !== 'folder' && {folder: calcFolder})
+      ...(field !== 'folder' && panel.key !== 'settings' && {folder: calcFolder})
     }})
   }
 
   function getError(field) {
-    const idx = invalidArray.findIndex(e => e.field === field)
-    return idx >= 0 ? invalidArray[idx].message : ''
+    const idx = panel.invalidArray.findIndex(e => e.field === field)
+    return idx >= 0 ? panel.invalidArray[idx].message : ''
   }
 
   function invalidFn(field, invalid, message) {
-    const e = invalidArray.find(e => e.field === field)
+    const e = panel.invalidArray.find(e => e.field === field)
     if (!invalid && e) {
-      setInvalidArray((prev) => prev.filter((e) => e.field !== field))
+      setPanel((prev) => {return {...prev, invalidArray: prev.invalidArray.filter((e) => e.field !== field)}})
     } else if (invalid && !e) {
-      setInvalidArray((prev) => prev.concat({ field, message }))
+      setPanel((prev) => {return {...prev, invalidArray: prev.invalidArray.concat({ field, message })}})
     }
   }
 
   if (panel.open) {
-    invalidFn('name', !panel.values.name || panel.values.name.match(/^[a-z0-9][_\-a-z0-9]+[a-z0-9]$/i) === null || panel.values.name>19,
-      <Text>Enter valid camera name</Text>)
+
+    if (panel.key === 'settings') {
+      invalidFn('disk_base_dir', !panel.values.disk_base_dir || panel.values.disk_base_dir.endsWith('/') || !panel.values.disk_base_dir.startsWith('/'),
+        <Text>Must be abosolute path (cannot end with '/')</Text>)
+      invalidFn('darknetDir', panel.values.enable_ml && (!panel.values.darknetDir || panel.values.darknetDir.endsWith('/') || !panel.values.darknetDir.startsWith('/')),
+        <Text>Must be abosolute path (cannot end with '/')</Text>)
+    } else {
+      invalidFn('name', !panel.values.name || panel.values.name.match(/^[a-z0-9][_\-a-z0-9]+[a-z0-9]$/i) === null || panel.values.name.length > 19,
+        <Text>Enter valid camera name</Text>)
+      invalidFn('disk', !panel.values.disk ,
+        <Text>Require a Disk to store the files on, goto General Settings to create</Text>)
       if (panel.key === "new") {
         invalidFn('ip', !panel.values.ip || panel.values.ip.match(/^([0-9]{1,3}\.){3}[0-9]{1,3}$/i) === null,
           <Text>Enter valid camera IPv4 address</Text>)
@@ -246,6 +255,7 @@ function App() {
         invalidFn('ip', panel.values.ip && panel.values.ip.match(/^([0-9]{1,3}\.){3}[0-9]{1,3}$/i) === null,
           <Text>Enter valid camera IPv4 address</Text>)
       }
+    }
   }
 
   const cocoNames= [
@@ -340,7 +350,7 @@ function App() {
 
   function savePanel() {
     setError(null)
-    fetch(`/api/camera/${panel.key}`, {
+    fetch(`/api/${panel.key === 'settings' ? 'settings' : `camera/${panel.values.key || 'new'}`}`, {
       method: 'POST',
       credentials: 'same-origin',
       mode: 'cors',
@@ -352,7 +362,7 @@ function App() {
       if (succ.ok) {
         console.log(`created success : ${JSON.stringify(succ)}`)
         getServerData()
-        setPanel({open: false})
+        setPanel({open: false, invalidArray: []})
       } else {
         const ferr = `created failed : ${succ.status} ${succ.statusText}`
         console.error(ferr)
@@ -381,69 +391,96 @@ function App() {
       </nav>
 
       <Panel
-        headerText="Camera Details"
+        headerText={panel.heading}
         isOpen={panel.open}
-        onDismiss={() => setPanel({...panel, open: false})}
+        onDismiss={() => setPanel({...panel, open: false, invalidArray: []})}
         // You MUST provide this prop! Otherwise screen readers will just say "button" with no label.
-        closeButtonAriaLabel="Close"
-      >
+        closeButtonAriaLabel="Close">
+
           { panel.open && 
-          <>
-            <TextField label="Camera Name" onChange={(ev, val) => updatePanelValues('name', val)} required errorMessage={getError('name')} value={panel.values.name} />
-            <TextField label="IP Address" prefix="IP" onChange={(ev, val) => updatePanelValues('ip', val)} required errorMessage={getError('ip')} value={panel.values.ip} />
-            <TextField label="admin Password" type="password"  value={panel.values.passwd} onChange={(ev, val) => updatePanelValues('passwd', val)} />
-            
-            <TextField label="Media Folder" iconProps={{ iconName: 'Folder' }}  required value={panel.values.folder} onChange={(ev, val) => updatePanelValues('folder', val)} />
+          <Stack>
+            { panel.key === 'settings' ? 
+              <>
 
-            <Label>Filter Tags</Label>
-            <TagPicker
-              onChange={(i) => panel.values.ignore_tags = i.map(i => i.key)}
-              defaultSelectedItems={panel.values.ignore_tags ? panel.values.ignore_tags.map(i => {return {key:i,name:i}} ) : []}
-              removeButtonAriaLabel="Remove"
-              selectionAriaLabel="Selected colors"
-              onResolveSuggestions={(filterText, tagList) => {
-                return filterText
-                  ? cocoNames.filter(
-                      tag => tag.name.toLowerCase().indexOf(filterText.toLowerCase()) === 0 && !listContainsTagList(tag, tagList),
-                    )
-                  : [];
-              }}
-              getTextFromItem={(i) => i.name}
-              pickerSuggestionsProps={{
-                suggestionsHeaderText: 'Suggested tags',
-                noResultsFoundText: 'No tags found',
-              }}
-            />
+                <Separator styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}><b>Storage Settings</b></Separator>
+                <TextField label="Disk Mount Folder" iconProps={{ iconName: 'Folder' }}  required value={panel.values.disk_base_dir} onChange={(ev, val) => updatePanelValues('disk_base_dir', val)} errorMessage={getError('disk_base_dir')} />
+                
+                <Checkbox label="Enable Disk Cleanup" checked={panel.values.enable_cleanup} onChange={(ev, val) => updatePanelValues('enable_cleanup', val)} styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}/>
 
-            <Separator styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}><b>Playback</b></Separator>
-            <Checkbox label="Enable Streaming" checked={panel.values.enable_streaming} onChange={(ev, val) => { updatePanelValues('enable_streaming', val)} } />
-            <Stack styles={{ root: { marginTop: "15px !important"} }}>
-              <Slider disabled={!panel.values.enable_streaming} label="Segments(2s) prior to movement" min={0} max={60} step={1} defaultValue={panel.values.segments_prior_to_movement} showValue onChange={(val) => updatePanelValues('segments_prior_to_movement', val)} />
-              <Slider disabled={!panel.values.enable_streaming} label="Segments(2s) post movement" min={0} max={60} step={1} defaultValue={panel.values.segments_post_movement} showValue onChange={(val) => updatePanelValues('segments_post_movement', val)} />
-            </Stack>
+                <Separator styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}><b>Object Detection (using <a target="_other" href="https://pjreddie.com/darknet/yolo/">yolo</a>)</b></Separator>
+                
+                <Checkbox label="Enable Image Detection" checked={panel.values.enable_ml} onChange={(ev, val) => updatePanelValues('enable_ml', val)} styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}/>
+                <TextField disabled={!panel.values.enable_ml} label="DarkNet/ Yolo install folder " iconProps={{ iconName: 'Folder' }}  required value={panel.values.darknetDir} onChange={(ev, val) => updatePanelValues('darknetDir', val)} errorMessage={getError('darknetDir')} />
+                
+                { data.config && data.config.status &&
+                  <MessageBar>{JSON.stringify(data.config.status, null, 2)}</MessageBar>
+                }
 
-            <Separator styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}><b>Movement processing</b></Separator>
-            
-            <Checkbox disabled={!panel.values.enable_streaming} label="Enable Movement" checked={panel.values.enable_movement} onChange={(ev, val) => updatePanelValues('enable_movement', val)} />
-            <Stack styles={{ root: { marginTop: "15px !important"} }}>
-              <Slider disabled={!panel.values.enable_movement} label="Poll Frequency (mS)" min={1000} max={10000} step={500} defaultValue={panel.values.mSPollFrequency} showValue onChange={(val) => updatePanelValues('mSPollFrequency', val)} />
-              <Slider disabled={!panel.values.enable_movement} label="Seconds without movement" min={0} max={50} step={1} defaultValue={panel.values.secWithoutMovement} showValue onChange={(val) => updatePanelValues('secWithoutMovement', val)} />
-            </Stack>
+              </>
+              :
+              <>
+                <Label>Camera ID: {panel.values.key}</Label>
+                <TextField label="Camera Name" onChange={(ev, val) => updatePanelValues('name', val)} required errorMessage={getError('name')} value={panel.values.name} />
+                <TextField label="IP Address" prefix="IP" onChange={(ev, val) => updatePanelValues('ip', val)} required errorMessage={getError('ip')} value={panel.values.ip} />
+                <TextField label="admin Password" type="password"  value={panel.values.passwd} onChange={(ev, val) => updatePanelValues('passwd', val)} />
+                
+                <Stack horizontal tokens={{ childrenGap: 10 }}>
+                  <Dropdown label="Disk" selectedKey={panel.values.disk} options={data.config && [ { key: data.config.settings.disk_base_dir, text: data.config.settings.disk_base_dir}]} required onChange={(ev, {key}) => updatePanelValues('disk', key)} errorMessage={getError('disk')} />
+                  <TextField label="Steaming Folder" iconProps={{ iconName: 'Folder' }}  required value={panel.values.folder} onChange={(ev, val) => updatePanelValues('folder', val)} />
+                </Stack>
 
-            <Separator styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}><b>Disk Cleanup (check every 120seconds)</b></Separator>
-            
-            <Checkbox disabled={!panel.values.enable_streaming} label="Enable Disk Cleanup" checked={panel.values.enable_cleanup} onChange={(ev, val) => updatePanelValues('enable_cleanup', val)} />
-            <TextField disabled={!panel.values.enable_cleanup} label="Disk Mount Folder" iconProps={{ iconName: 'Folder' }}  required value={panel.values.disk_mount_dir} onChange={(ev, val) => updatePanelValues('disk_mount_dir', val)} />
+                <Label>Filter Tags (Requires Object Detection)</Label>
+                <TagPicker
+                  disabled={!panel.values.enable_ml}
+                  onChange={(i) => panel.values.ignore_tags = i.map(i => i.key)}
+                  defaultSelectedItems={panel.values.ignore_tags ? panel.values.ignore_tags.map(i => {return {key:i,name:i}} ) : []}
+                  removeButtonAriaLabel="Remove"
+                  selectionAriaLabel="Selected colors"
+                  onResolveSuggestions={(filterText, tagList) => {
+                    return filterText
+                      ? cocoNames.filter(
+                          tag => tag.name.toLowerCase().indexOf(filterText.toLowerCase()) === 0 && !listContainsTagList(tag, tagList),
+                        )
+                      : [];
+                  }}
+                  getTextFromItem={(i) => i.name}
+                  pickerSuggestionsProps={{
+                    suggestionsHeaderText: 'Suggested tags',
+                    noResultsFoundText: 'No tags found',
+                  }}
+                />
 
+                <Separator styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}><b>Playback</b></Separator>
+                <Checkbox label="Enable Streaming" checked={panel.values.enable_streaming} onChange={(ev, val) => { updatePanelValues('enable_streaming', val)} } />
+                <Stack styles={{ root: { marginTop: "15px !important"} }}>
+                  <Slider disabled={!panel.values.enable_streaming} label="Segments(2s) prior to movement" min={0} max={60} step={1} defaultValue={panel.values.segments_prior_to_movement} showValue onChange={(val) => updatePanelValues('segments_prior_to_movement', val)} />
+                  <Slider disabled={!panel.values.enable_streaming} label="Segments(2s) post movement" min={0} max={60} step={1} defaultValue={panel.values.segments_post_movement} showValue onChange={(val) => updatePanelValues('segments_post_movement', val)} />
+                </Stack>
 
-            <PrimaryButton styles={{ root: { marginTop: "15px !important"}}} disabled={invalidArray.length >0} text="Save" onClick={savePanel}/>
+                <Separator styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}><b>Movement processing</b></Separator>
+                
+                <Checkbox disabled={!panel.values.enable_streaming} label="Enable Movement" checked={panel.values.enable_movement} onChange={(ev, val) => updatePanelValues('enable_movement', val)} />
+                <Stack styles={{ root: { marginTop: "15px !important"} }}>
+                  <Slider disabled={!panel.values.enable_movement} label="Poll Frequency (mS)" min={1000} max={10000} step={500} defaultValue={panel.values.mSPollFrequency} showValue onChange={(val) => updatePanelValues('mSPollFrequency', val)} />
+                  <Slider disabled={!panel.values.enable_movement} label="Seconds without movement" min={0} max={50} step={1} defaultValue={panel.values.secWithoutMovement} showValue onChange={(val) => updatePanelValues('secWithoutMovement', val)} />
+                  {panel.key}
+                </Stack>
+
+                { panel.key === 'edit' && data.cameras && panel.values.key &&
+                  <MessageBar>{JSON.stringify(data.cameras.find(c => c.key = panel.values.key).ffmpeg_process, null, 2)}</MessageBar>
+                }
+
+              </>
+          }
+
+            <PrimaryButton styles={{ root: { marginTop: "15px !important"}}} disabled={panel.invalidArray.length >0} text="Save" onClick={savePanel}/>
 
             {error &&
             <MessageBar messageBarType={MessageBarType.error} isMultiline={false} truncated={true}>
               {error}
             </MessageBar>
           }
-        </>
+        </Stack>
       }
 
       </Panel>
@@ -524,15 +561,27 @@ function App() {
               iconOnly: true,
               iconProps: { iconName: 'Settings' },
               subMenuProps: {
-                items: data.cameras.map(c => { return {
+                items: [{
+                    key: 'settings',
+                    text: 'Settings',
+                    iconProps: { iconName: 'DataManagementSettings' },
+                    onClick: () => {
+                      setPanel({...panel, open: true, key: 'settings', invalidArray:[], heading: 'General and Disk Settings', values: {
+                        enable_cleanup: data.config.settings.enable_cleanup,
+                        disk_base_dir: data.config.settings.disk_base_dir,
+                      }})
+                    }
+                }].concat(data.cameras.map(c => { return {
                     key: c.key,
                     text: `Settings "${c.name}"`,
                     iconProps: { iconName: 'FrontCamera' },
                     ['data-automation-id']: 'newEmailButton', // optional
                     onClick: () => {
-                      setPanel({...panel, open: true, key: c.key, values: {
+                      setPanel({...panel, open: true, key: 'edit', invalidArray: [],  heading: 'Edit Camera Details', values: {
+                        key: c.key,
                         name: c.name,
                         folder: c.folder,
+                        disk: c.disk,
                         secWithoutMovement: c.secWithoutMovement,
                         mSPollFrequency: c.mSPollFrequency,
                         segments_prior_to_movement: c.segments_prior_to_movement,
@@ -540,27 +589,25 @@ function App() {
                         ignore_tags: c.ignore_tags,
                         enable_streaming: c.enable_streaming,
                         enable_movement: c.enable_movement,
-                        enable_cleanup: c.enable_cleanup,
-                        disk_mount_dir: c.disk_mount_dir
                       }})
                     }
                   }}).concat (
                   {
                     key: 'Add',
-                    text: 'Add',
+                    text: 'Add Camera',
                     iconProps: { iconName: 'Add' },
-                    onClick: () => setPanel({...panel, open: true, key: 'new', values: {
+                    onClick: () => setPanel({...panel, open: true, key: 'new', invalidArray: [], heading: 'Add New Camera', values: {
                       secWithoutMovement: 10,
                       mSPollFrequency: 1000,
+                      disk: data.config.settings.disk_base_dir,
                       segments_prior_to_movement: 10, // 20 seconds (2second segments)
                       segments_post_movement: 10, // 20 seconds (2second segments)
                       ignore_tags: ['car'],
                       enable_streaming: true,
                       enable_movement: true,
-                      enable_cleanup: false
                     }}),
                   }
-                )
+                ))
               }
             }]}
             ariaLabel="Inbox actions"

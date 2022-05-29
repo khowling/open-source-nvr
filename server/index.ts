@@ -16,6 +16,13 @@ import { diskCheck } from './diskcheck'
 
 import { JobManager, JobStatus, JobReturn, JobData, JobTask } from './jobmanager'
 
+interface Settings {
+    disk_base_dir: string;
+    enable_cleanup: boolean;
+    cleanup_interval: number;
+    enable_ml: boolean;
+    darknetDir: string;
+}
 interface MovementEntry {
     cameraKey: string;
     startDate: number;
@@ -53,12 +60,11 @@ interface MLData extends SpawnData {
 interface CameraEntry {
     name: string;
     folder: string;
+    disk: string;
     ip?: string;
     passwd?: string;
     enable_streaming: boolean;
     enable_movement: boolean;
-    disk_mount_dir: string;
-    enable_cleanup: boolean;
     secWithoutMovement: number;
     mSPollFrequency: number;
     segments_prior_to_movement: number;
@@ -99,21 +105,16 @@ interface CameraCache {
 }
 var cameraCache: CameraCache = {}
 
+var settingsCache: {
+    settings: Settings;
+    status: any;
+}
+
 
 import {ChildProcess, ChildProcessWithoutNullStreams, spawn} from 'child_process'
 
-const db = level(process.env.DBPATH || './mydb')
-
-const cameradb = sub(db, 'cameras', {
-    valueEncoding : 'json',
-    keyEncoding: {
-        type: 'lexicographic-integer',
-        encode: (n) => lexint.pack(n, 'hex'),
-        decode: lexint.unpack,
-        buffer: false
-    }
-})
-
+const db = level(process.env.DBPATH || './mydb',  { valueEncoding : 'json' })
+const cameradb = sub(db, 'cameras', { valueEncoding : 'json' })
 const movementdb = sub(db, 'movements', {
     valueEncoding : 'json',
     keyEncoding: {
@@ -131,10 +132,10 @@ async function jobWorker(seq: number, d: JobData): Promise<JobReturn> {
 
         const m: MovementEntry = await movementdb.get(d.movement_key)
         const c: CameraEntry = await cameradb.get(m.cameraKey)
-        const input = `${c.folder}/image${d.movement_key}.jpg`
+        const input = `${c.disk}/${c.folder}/image${d.movement_key}.jpg`
         const code = await new Promise((acc, rej) => {
             let ml_stdout = '', ml_stderr = '', ml_error = ''
-            const ml_task = spawn('./darknet', ['detect', 'cfg/yolov3.cfg', 'cfg/yolov3.weights', input], { cwd: '/home/kehowli/darknet', timeout: 120000 });
+            const ml_task = spawn('./darknet', ['detect', 'cfg/yolov3.cfg', 'cfg/yolov3.weights', input], { cwd: settingsCache.settings.darknetDir, timeout: 120000 });
 
             ml_task.stdout.on('data', (data: string) => { ml_stdout += data })
             ml_task.stderr.on('data', (data: string) => { ml_stderr += data })
@@ -151,7 +152,7 @@ async function jobWorker(seq: number, d: JobData): Promise<JobReturn> {
                         await movementdb.put(d.movement_key, { ...m, ml } as MovementEntry)
 
                         let mv_stdout = '', mv_stderr = '', mv_error = ''
-                        const mv_task = spawn('/usr/bin/mv', ['/home/kehowli/darknet/predictions.jpg', `${c.folder}/mlimage${d.movement_key}.jpg`], { timeout: 5000 })
+                        const mv_task = spawn('/usr/bin/mv', [`${settingsCache.settings.darknetDir}/predictions.jpg`, `${c.disk}/${c.folder}/mlimage${d.movement_key}.jpg`], { timeout: 5000 })
 
                         mv_task.stdout.on('data', (data: string) => { mv_stdout += data })
                         mv_task.stderr.on('data', (data: string) => { mv_stderr += data })
@@ -183,7 +184,7 @@ async function jobWorker(seq: number, d: JobData): Promise<JobReturn> {
         const c: CameraEntry = await cameradb.get(m.cameraKey)
         const code = await new Promise((acc, rej) => {
 
-            var ffmpeg = spawn('/usr/bin/ffmpeg', ['-y', '-ss', '0', '-i', `${c.folder}/stream${(m.startSegment + 1)}.ts`, '-frames:v', '1', '-q:v', '2', `${c.folder}/image${d.movement_key}.jpg`], { timeout: 120000 });
+            var ffmpeg = spawn('/usr/bin/ffmpeg', ['-y', '-ss', '0', '-i', `${c.disk}/${c.folder}/stream${(m.startSegment + 1)}.ts`, '-frames:v', '1', '-q:v', '2', `${c.disk}/${c.folder}/image${d.movement_key}.jpg`], { timeout: 120000 });
             let ff_stdout = '', ff_stderr = '', ff_error = ''
 
             ffmpeg.stdout.on('data', (data: string) => { ff_stdout += data })
@@ -192,7 +193,7 @@ async function jobWorker(seq: number, d: JobData): Promise<JobReturn> {
 
             ffmpeg.on('close', async (code: number) => {
                 await movementdb.put(d.movement_key, { ...m, ffmpeg: { success: code === 0, stderr: ff_stderr, stdout: ff_stdout, error: ff_error } as SpawnData })
-                if (code === 0) {
+                if (code === 0 && settingsCache.settings.enable_ml) {
                     newJob = { task: JobTask.ML, movement_key: d.movement_key }
                 }
                 acc(code)
@@ -230,7 +231,7 @@ async function processMovement(cameraKey: string, jobManager: JobManager) {
                 // Need to determine the segment that corrisponds to the movement
                 // Read the curren live stream.m3u8, and get a array of all the stream23059991.ts files
                 // set startSegment to the LAST segment file index in the array (most recent) + 1 (+1 due to ffmpeg lag!)
-                const filepath = `${ce.folder}/stream.m3u8`
+                const filepath = `${ce.disk}/${ce.folder}/stream.m3u8`
                 const hls = (await readFile(filepath)).toString()
                 const hls_segments = [...hls.matchAll(re)].map(m => m[1])
                 const targetduration = hls.match(/#EXT-X-TARGETDURATION:([\d])/)
@@ -279,7 +280,7 @@ async function processMovement(cameraKey: string, jobManager: JobManager) {
 async function StreamingController(cameraKey: string): Promise<ProcessInfo | undefined> {
     //console.log (`StreamingController for ${cameraKey}`)
     const ce = cameraCache[cameraKey].ce,
-          streamfile = `${ce.folder}/stream.m3u8`,
+          streamfile = `${ce.disk}/${ce.folder}/stream.m3u8`,
           proc = cameraCache[cameraKey].ffmpeg_process
 
     // chkecFFMpeg still running from last interval, skip this check.
@@ -387,7 +388,7 @@ async function init_web() {
             try {
                 const m: MovementEntry = await movementdb.get(parseInt(moment))
                 const c: CameraEntry = await cameradb.get(m.cameraKey)
-                const serve = `${c.folder}/${m.ml && m.ml.success ? 'mlimage' : 'image'}${moment}.jpg`
+                const serve = `${c.disk}/${c.folder}/${m.ml && m.ml.success ? 'mlimage' : 'image'}${moment}.jpg`
                 const { size } = await stat(serve)
                 ctx.set('content-type', 'image/jpeg')
                 ctx.body = createReadStream(serve, { encoding: undefined }).on('error', ctx.onerror)
@@ -402,7 +403,7 @@ async function init_web() {
 
             try {
                 const c = await cameradb.get(cameraKey)            
-                const serve = `${c.folder}/${file}`
+                const serve = `${c.disk}/${c.folder}/${file}`
                 const { size } = await stat(serve)
                 //console.log(`serving : ${serve}`)
                 ctx.body = createReadStream(serve, { encoding: undefined }).on('error', ctx.onerror)
@@ -439,7 +440,7 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
                 }
             } else if (file.endsWith('.ts')) {
                 const [camera, index, suffix] = file.split('.')
-                const serve = `${ce.folder}/stream${index}.${suffix}`
+                const serve = `${ce.disk}/${ce.folder}/stream${index}.${suffix}`
                 //console.log(`serving : ${serve}`)
                 try {
                     const { size } = await stat(serve)
@@ -461,7 +462,7 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
                 const m: MovementEntry = await movementdb.get(parseInt(movement))
                 const ce: CameraEntry = await cameraCache[m.cameraKey].ce
 
-                const serve = `${ce.folder}/save${movement}.mp4`
+                const serve = `${ce.disk}/${ce.folder}/save${movement}.mp4`
 
                 await new Promise(async (res, rej) => {
                     const mv_task = spawn('/usr/bin/ffmpeg', ['-y', '-i', `http://localhost:${PORT}/video/${movement}/stream.m3u8${preseq > 0 && postseq > 0 ? `?preseq=${preseq}&postseq=${postseq}` : ''}`, '-c', 'copy', serve], { timeout: 5000 })
@@ -517,6 +518,22 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
         })
 
     const api = new Router({ prefix: '/api' })
+        .post('/settings', async (ctx, next) => {
+            console.log (`settings save -  ${JSON.stringify(ctx.request.body)}`)
+            if (ctx.request.body) {
+                const new_settings: Settings = ctx.request.body
+                try {
+                    await db.put('settings', new_settings)
+                    settingsCache = {...settingsCache, settings: new_settings}
+                    ctx.status = 201
+                } catch (e) {
+                    console.warn (e)
+                    ctx.status = 500
+                }
+            } else {
+                ctx.status = 500
+            }
+        })
         .post('/camera/:id', async (ctx, next) => {
             
             const cameraKey = ctx.params.id
@@ -527,9 +544,9 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
                 if (cameraKey === 'new') {
                     // creating new entry
                     try {
-                        await mkdir (new_ce.folder)
+                        await mkdir (`${new_ce.disk}/${new_ce.folder}`)
                     } catch (e) {
-                        console.warn (`failed to create dir : ${new_ce.folder}`)
+                        console.warn (`failed to create dir : ${new_ce.disk}/${new_ce.folder}`)
                     }
                     const new_key = "C" + ((Date.now() / 1000 | 0) - 1600000000)
                     await cameradb.put(new_key, new_ce)
@@ -545,9 +562,9 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
                         if (old_ce.folder != new_ce.folder) {
                             console.log ('creating directory')
                             try {
-                                await mkdir (new_ce.folder)
+                                await mkdir (`${new_ce.disk}/${new_ce.folder}`)
                             } catch (e) {
-                                console.warn (`failed to create dir : ${new_ce.folder}`)
+                                console.warn (`failed to create dir : ${new_ce.disk}/${new_ce.folder}`)
                             }
                         }
                         
@@ -589,7 +606,7 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
             // find first segment on disk
             async function findFirstSegmentOnDisk(c: CameraEntry): Promise<{sequence: number, ctimeMs: number}> {
                 let first_seq_on_disk: number = 0
-                const local_video = await readdir(c.folder)
+                const local_video = await readdir(`${c.disk}/${c.folder}`)
                 const local_video_re = new RegExp(`^stream(\\d+).ts`)
                 // For each file in the directory
                 for (let dir_entry of local_video) {
@@ -605,7 +622,7 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
                         }
                     }
                 }
-                const {ctimeMs} = await stat (`${c.folder}/stream${first_seq_on_disk}.ts`)
+                const {ctimeMs} = await stat (`${c.disk}/${c.folder}/stream${first_seq_on_disk}.ts`)
                 return {sequence: first_seq_on_disk, ctimeMs}
             }
 
@@ -618,7 +635,6 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
                     console.error (`findFirstSegmentOnDisk error`, e)
                 }
             }
-
             ctx.response.set("content-type", "application/json");
             ctx.body = await new Promise(async (res, rej) => {
                 let movements: MovementToClient[] = []
@@ -633,7 +649,7 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
                             })
                         //}
                     }).on('end', () => {
-                        res(JSON.stringify({ cameras, movements }))
+                        res(JSON.stringify({ config: settingsCache, cameras, movements }))
                     })
             })
 
@@ -681,6 +697,13 @@ async function main() {
             })
     })
 
+    settingsCache = {settings: { disk_base_dir: '',  enable_cleanup: false, darknetDir:'', enable_ml: false, cleanup_interval: 120}, status: {}}
+    try {
+        settingsCache = {...settingsCache, settings : await db.get('settings') as Settings}
+    } catch (e) {
+        console.warn ('no settings defined yet')
+    }
+
     let interval_until_next_delete = 0
     async function controll_loop() {
         for (let cid of Object.keys(cameraCache)) {
@@ -691,15 +714,12 @@ async function main() {
 
                 if (interval_until_next_delete <= 0) {
 
-                    const cameraFolders = Object.keys(cameraCache).filter(c => cameraCache[c].ce.enable_cleanup && cameraCache[c].ce.disk_mount_dir).reduce((acc, c) => {
-                        const { folder, disk_mount_dir} = cameraCache[c].ce
-                        return {...acc, [disk_mount_dir]: [...(acc[disk_mount_dir] ? acc[disk_mount_dir] : []), folder]}
-                    }, {} as {[key: string]: string[]}) 
+                    let settings : Settings = settingsCache.settings
 
-                    for (let disk_mount_dir of Object.keys(cameraFolders)) {
-                        diskCheck(disk_mount_dir, cameraFolders[disk_mount_dir], 99).then(console.log)
+                    if (settings.enable_cleanup && settings.disk_base_dir) {
+                        diskCheck(settings.disk_base_dir, Object.keys(cameraCache).filter(c => cameraCache[c].ce.enable_streaming).map(c => cameraCache[c].ce.folder), 99).then(status => settingsCache = {...settingsCache, status})
                     }
-                    interval_until_next_delete = 120
+                    interval_until_next_delete = settingsCache.settings.cleanup_interval
                 } else {
                     interval_until_next_delete--
                 }
