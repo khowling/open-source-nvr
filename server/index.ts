@@ -721,7 +721,7 @@ async function main() {
                     let settings : Settings = settingsCache.settings
 
                     if (settings.enable_cleanup && settings.disk_base_dir) {
-                        diskCheck(settings.disk_base_dir, Object.keys(cameraCache).filter(c => cameraCache[c].ce.enable_streaming).map(c => cameraCache[c].ce.folder), settings.cleanup_capacity).then(status => settingsCache = {...settingsCache, status: {...status, checked: new Date()}})
+                        diskCheck(settings.disk_base_dir, Object.keys(cameraCache).filter(c => cameraCache[c].ce.enable_streaming).map(c => `${settings.disk_base_dir}/${cameraCache[c].ce.folder}`), settings.cleanup_capacity).then(status => settingsCache = {...settingsCache, status: {...status, checked: new Date()}})
                     }
                     interval_until_next_delete = settingsCache.settings.cleanup_interval
                 } else {
