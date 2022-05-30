@@ -38,7 +38,7 @@ Clone this repo onto a Linux machine, then build the app by running these comman
 npm i
 
 # build typescript server
-npm run-script buildserver
+npx tsc
 
 # build fromend
 npm run-script build
@@ -63,6 +63,7 @@ To enable the Object Detection feature, you will  need to install the following 
 Create a executable `web.sh` file containing the following (the paths need to be absolute):
 
 ```
+#!/bin/bash
 WEBPATH="/home/<user>/open-source-nvr/build" DBPATH="/home/<user>/open-source-nvr/mydb" node /home/<user>/open-source-nvr/lib/index.js
 ```
 
