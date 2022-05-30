@@ -5,11 +5,11 @@
 
 Web application to monitor your IP Security Camera network, continously record camera feeds to your computers harddrive, and monitor motion events through a web app. Features include:
 
-  :heavy_check_mark:  No expensive specialised hardware required, use your old computers & harddrives
-  :heavy_check_mark:  No cloud account required, self-contained
-  :heavy_check_mark:  Enhance your Cameras motion detection with Object Detection tagging, reducing false positives
-  :heavy_check_mark:  Supports mutliple camreas
-  :heavy_check_mark:  Ensure you hardisk never runs out of space, automatically deleting the oldest video segements when needed 
+  :heavy_check_mark:  No expensive specialised hardware required, use your old computers & harddrives \
+  :heavy_check_mark:  Supports one or multiple camreas, with unified, filtered, motion even list \
+  :heavy_check_mark:  No cloud account required, self-contained \
+  :heavy_check_mark:  Enhance your Cameras motion detection with Object Detection tagging/filtering, reducing false motion events \
+  :heavy_check_mark:  Checks your harddrives never runs out of space, automatically deleting the oldest video segements \
 
 ![image](./assets/wenui.png)
 
