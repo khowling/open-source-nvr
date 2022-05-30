@@ -3,17 +3,17 @@
 
 #  Open-Source Network Video Recorder (NVR), with Object Detection
 
-Web application to monitor your IP Security Camera network, continously record camera feeds to your computers harddrive, and monitor motion events through a web app. Features include:
+Web application to monitor your IP Security Camera network, continuously record camera feeds to your computers harddrive, and monitor motion events through a web app. Features include:
 
-  :heavy_check_mark:  No expensive specialised hardware required, use your old computers & harddrives \
-  :heavy_check_mark:  Supports one or multiple camreas, with unified, filtered, motion even list \
+  :heavy_check_mark:  No expensive hardware required, use your old computers & harddrives \
+  :heavy_check_mark:  Supports one or multiple cameras, with single, filtered, motion list \
   :heavy_check_mark:  No cloud account required, self-contained \
-  :heavy_check_mark:  Enhance your Cameras motion detection with Object Detection tagging/filtering, reducing false motion events \
-  :heavy_check_mark:  Checks your harddrives never runs out of space, automatically deleting the oldest video segements \
+  :heavy_check_mark:  Enhance your Cameras motion detection with Object Detection tagging/filtering \
+  :heavy_check_mark:  Continuously monitors hardrives, deleting the oldest video segments when almost full \
 
 ![image](./assets/wenui.png)
 
-In addition, if your cameras motion senssor triggers a detection, the app will take a still of the detection, and run a Object Detection process, to tag the still with the objects in the picture.  You can then use these tags to filter and review your motion events.  This is very useful to avoid false positives, like the sun going behind a cloud, or a rain shower.
+In addition, if your cameras motion sensor triggers a detection, the app will take a still of the detection, and run a Object Detection process, to tag the still with the objects in the picture.  You can then use these tags to filter and review your motion events.  This is very useful to avoid false positives, like the sun going behind a cloud, or a rain shower.
 
 ![image](./assets/objectdetection.png)
 
