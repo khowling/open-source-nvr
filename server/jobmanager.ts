@@ -1,60 +1,10 @@
 
 var lexint = require('lexicographic-integer');
 
-import { assembleProtocol } from 'avsc/types';
-import { Atomic } from './atomic'
-import level, { LevelUp } from 'levelup'
+import { Atomic } from './atomic.js'
+//import { LevelUp } from 'levelup'
 import sub from 'subleveldown'
 
-/*
-const { Transform } = require('stream');
-
-class MissingSequence extends Transform {
-
-    private expected = 0
-    private nextToRun
-
-    constructor(nextToRun: number, options?) {
-        super(options);
-        this.nextToRun = nextToRun
-    }
-
-    _transform(chunk, encoding, cb) {
-        const seq = parseInt(chunk)
-        if (isNaN(seq)) {
-            cb(new Error(`chunk ${chunk} is not a number`));
-        } else if (seq < this.expected) {
-            cb(new Error(`chunk ${seq} is not in sequence (expected ${this.expected})`));
-        } else {
-            //console.log(`_transform: seq=${seq} this.expected=${this.expected} this.nextToRun=${this.nextToRun}`)
-            if (seq < this.nextToRun) {
-
-                if (seq === this.expected) {
-                    this.expected = seq + 1
-                } else if (seq > this.expected) {
-                    for (let i = this.expected; i < seq; i++) {
-                        this.push(i.toString())
-                    }
-                    this.expected = seq + 1
-                }
-            }
-
-            cb();
-        }
-    }
-
-    _flush(cb) {
-        //console.log(`_flush: this.expected=${this.expected} this.nextToRun=${this.nextToRun}`)
-        if (this.expected < this.nextToRun) {
-            for (let i = this.expected; i < this.nextToRun; i++) {
-                //console.log(`_flush: pushing ${i}`)
-                this.push(i.toString())
-            }
-        }
-        cb();
-    }
-}
-*/
 
 export interface ControlData {
     nextSequence: number;
@@ -92,16 +42,16 @@ const assert = require('assert').strict;
 
 export class JobManager {
 
-    private _db: LevelUp
+    private _db//: LevelUp
 
     // sub leveldbs
     // main job queue
-    private _queue: LevelUp
+    private _queue//: LevelUp
     // Allow the workerfn to track progess before returning complete (for restarts to ensure not duplicating).
     //private _running
 
     // control state
-    private _control: LevelUp
+    private _control//: LevelUp
 
 
     private _limit
@@ -111,7 +61,7 @@ export class JobManager {
     private _nomore: boolean
 
 
-    constructor(db: LevelUp, concurrency: number, workerfn: (seq: number, d: JobData) => Promise<JobReturn>) {
+    constructor(db/*: LevelUp*/, concurrency: number, workerfn: (seq: number, d: JobData) => Promise<JobReturn>) {
 
         this._db = db
         this._limit = concurrency
@@ -170,7 +120,7 @@ export class JobManager {
             await this._control.put(0, controlInit)
         } else {
 
-            const { nextSequence, numberCompleted, numberRunning, nextToRun } = await new Promise((res, rej) => {
+            const { nextSequence, numberCompleted, numberRunning, nextToRun } = await new Promise((res, _rej) => {
                 this._control.get(0, async (err: any, value) => {
                     if (err) {
                         if (err.notFound) {
@@ -189,7 +139,7 @@ export class JobManager {
             // Check there have been running processes
             if (nextToRun > 0) {
 
-                const rkeys: number[] = await new Promise((res, rej) => {
+                const rkeys: number[] = await new Promise((res, _rej) => {
                     let runningKeys: number[] = []
                     // Everything in the _queue with a sequence# < nextToRun should be running (all completed will have been deleted)
                     const feed = this._queue.createKeyStream({ lt: nextToRun }).on('data', d => {
@@ -216,11 +166,11 @@ export class JobManager {
             const interval = setInterval(async () => {
                 const { nextSequence, nextToRun, numberCompleted, numberRunning } = await this._control.get(0)
                 const log = `JobManager queued=${nextSequence} running=${numberRunning} completed=${numberCompleted}`
-                if (!process.env.BACKGROUND) {
-                    process.stdout.cursorTo(0); process.stdout.write(log)
-                } else {
+                //if (!process.env['BACKGROUND']) {
+                //    process.stdout.cursorTo(0); process.stdout.write(log)
+                //} else {
                     console.log(log)
-                }
+                //}
                 if (nextSequence === numberCompleted && this._nomore) {
                     console.log()
                     clearInterval(interval)

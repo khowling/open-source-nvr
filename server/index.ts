@@ -1,20 +1,18 @@
 const
-    assert = require('assert'),
     Koa = require('koa'),
     send = require('koa-send'),
-    path = require('path'),
     lexint = require('lexicographic-integer')
 
 import { readFile, stat, readdir, mkdir } from 'fs/promises'
 import { createReadStream } from 'fs'
-import server_fetch from './server_fetch'
+import server_fetch from './server_fetch.js'
 import Router from '@koa/router'
 import bodyParser from 'koa-bodyparser'
 import level from 'level'
 import sub from 'subleveldown'
-import { diskCheck } from './diskcheck'
+import { diskCheck } from './diskcheck.js'
 
-import { JobManager, JobStatus, JobReturn, JobData, JobTask } from './jobmanager'
+import { JobManager, JobStatus, JobReturn, JobData, JobTask } from './jobmanager.js'
 
 interface Settings {
     disk_base_dir: string;
@@ -112,9 +110,9 @@ var settingsCache: {
 }
 
 
-import {ChildProcess, ChildProcessWithoutNullStreams, spawn} from 'child_process'
+import { ChildProcessWithoutNullStreams, spawn} from 'child_process'
 
-const db = level(process.env.DBPATH || './mydb',  { valueEncoding : 'json' })
+const db = level(process.env['DBPATH'] || './mydb',  { valueEncoding : 'json' })
 const cameradb = sub(db, 'cameras', { valueEncoding : 'json' })
 const movementdb = sub(db, 'movements', {
     valueEncoding : 'json',
@@ -134,7 +132,7 @@ async function jobWorker(seq: number, d: JobData): Promise<JobReturn> {
         const m: MovementEntry = await movementdb.get(d.movement_key)
         const c: CameraEntry = await cameradb.get(m.cameraKey)
         const input = `${c.disk}/${c.folder}/image${d.movement_key}.jpg`
-        const code = await new Promise((acc, rej) => {
+        await new Promise((acc, _rej) => {
             let ml_stdout = '', ml_stderr = '', ml_error = ''
             const ml_task = spawn('./darknet', ['detect', 'cfg/yolov3.cfg', 'cfg/yolov3.weights', input], { cwd: settingsCache.settings.darknetDir, timeout: 120000 });
 
@@ -183,7 +181,7 @@ async function jobWorker(seq: number, d: JobData): Promise<JobReturn> {
 
         const m: MovementEntry = await movementdb.get(d.movement_key)
         const c: CameraEntry = await cameradb.get(m.cameraKey)
-        const code = await new Promise((acc, rej) => {
+        const code = await new Promise((acc, _rej) => {
 
             var ffmpeg = spawn('/usr/bin/ffmpeg', ['-y', '-ss', '0', '-i', `${c.disk}/${c.folder}/stream${(m.startSegment + 1)}.ts`, '-frames:v', '1', '-q:v', '2', `${c.disk}/${c.folder}/image${d.movement_key}.jpg`], { timeout: 120000 });
             let ff_stdout = '', ff_stderr = '', ff_error = ''
@@ -378,13 +376,13 @@ async function StreamingController(cameraKey: string): Promise<ProcessInfo | und
 }
 
 
-const PORT = process.env.PORT || 8080
+const PORT = process.env['PORT'] || 8080
 
 async function init_web() {
 
     var assets = new Router()
-        .get('/image/:moment', async (ctx, next) => {
-            const moment = ctx.params.moment
+        .get('/image/:moment', async (ctx, _next) => {
+            const moment = ctx.params['moment']
 
             try {
                 const m: MovementEntry = await movementdb.get(parseInt(moment))
@@ -399,9 +397,9 @@ async function init_web() {
             }
 
         })
-        .get('/video/live/:cameraKey/:file', async (ctx, next) => {
-            const cameraKey = ctx.params.cameraKey,
-                  file = ctx.params.file
+        .get('/video/live/:cameraKey/:file', async (ctx, _next) => {
+            const cameraKey = ctx.params['cameraKey'],
+                  file = ctx.params['file']
 
             try {
                 const c = await cameradb.get(cameraKey)            
@@ -415,9 +413,9 @@ async function init_web() {
             }
 
         })
-        .get('/video/:mid/:file', async (ctx, next) => {
-            const movement = ctx.params.mid,
-                  file = ctx.params.file
+        .get('/video/:mid/:file', async (ctx, _next) => {
+            const movement = ctx.params['mid'],
+                  file = ctx.params['file']
 
             //need to cache this in memory!!
             const m: MovementEntry = await movementdb.get(parseInt(movement))
@@ -425,8 +423,8 @@ async function init_web() {
 
             if (file.endsWith('.m3u8')) {
 
-                const preseq: number = ctx.query.preseq ? parseInt(ctx.query.preseq as any) : 1
-                const postseq: number = ctx.query.postseq ? parseInt(ctx.query.postseq as any) : 1
+                const preseq: number = ctx.query['preseq'] ? parseInt(ctx.query['preseq'] as any) : 1
+                const postseq: number = ctx.query['postseq'] ? parseInt(ctx.query['postseq'] as any) : 1
                 // need to return a segement file for the movement
                 try {
                     
@@ -457,11 +455,11 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
                 ctx.throw(400, `unknown file=${file}`)
             }
 
-        }).get('/mp4/:movement', async (ctx, next) => {
-            const movement = ctx.params.movement
+        }).get('/mp4/:movement', async (ctx, _next) => {
+            const movement = ctx.params['movement']
 
-            const preseq: number = ctx.query.preseq ? parseInt(ctx.query.preseq as any) : -1
-            const postseq: number = ctx.query.postseq ? parseInt(ctx.query.postseq as any) : -1
+            const preseq: number = ctx.query['preseq'] ? parseInt(ctx.query['preseq'] as any) : -1
+            const postseq: number = ctx.query['postseq'] ? parseInt(ctx.query['postseq'] as any) : -1
 
             try {
                 const m: MovementEntry = await movementdb.get(parseInt(movement))
@@ -492,7 +490,7 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
                 ctx.throw(`error mp4 gen error=${e}`)
             }
 
-        }).get('/mp4old/:movement', async (ctx, next) => {
+        }).get('/mp4old/:movement', async (ctx, _next) => {
             console.log(`serving video: ${ctx.params[0]}`)
             const filepath = `./test_video/${ctx.params[0]}`
             let streamoptions: any = { encoding: null }
@@ -516,14 +514,14 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
             }
             ctx.body = createReadStream(filepath, streamoptions).on('error', ctx.onerror)
 
-        }).get(['/(.*)'], async (ctx, next) => {
+        }).get(['/(.*)'], async (ctx, _next) => {
             const path = ctx.params[0]
             console.log(`serving static: ${path}`)
-            await send(ctx, !path || path === "video_only" ? '/index.html' : path, { root: process.env.WEBPATH || './build' })
+            await send(ctx, !path || path === "video_only" ? '/index.html' : path, { root: process.env['WEBPATH'] || './build' })
         })
 
     const api = new Router({ prefix: '/api' })
-        .post('/settings', async (ctx, next) => {
+        .post('/settings', async (ctx, _next) => {
             console.log (`settings save -  ${JSON.stringify(ctx.request.body)}`)
             if (ctx.request.body) {
                 const new_settings: Settings = ctx.request.body
@@ -542,9 +540,9 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
                 ctx.status = 500
             }
         })
-        .post('/camera/:id', async (ctx, next) => {
+        .post('/camera/:id', async (ctx, _next) => {
             
-            const cameraKey = ctx.params.id
+            const cameraKey = ctx.params['id']
             console.log (`camera save ${cameraKey} -  ${JSON.stringify(ctx.request.body)}`)
             if (ctx.request.body) {
                 const new_ce: CameraEntry = ctx.request.body
@@ -591,15 +589,15 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
             } else {
                 ctx.status = 500
             }
-        }).post('/movements/:id', async (ctx, next) => {
-            const cid = ctx.params.camera
+        }).post('/movements/:id', async (ctx, _next) => {
+            const cid = ctx.params['camera']
             if (ctx.request.body && ctx.request.body.length > 0) {
                 const confirmed: any = ctx.request.body
                 const cmd = confirmed.map((m: any) => { return { type: 'del', key: m.movement_key } })
                 const succ = await movementdb.batch(cmd as any)
                 ctx.status = 201
             }
-        }).get('/movements', async (ctx, next) => {
+        }).get('/movements', async (ctx, _next) => {
 
             const cameras: CameraEntryClient[] = Object.keys(cameraCache).map((key) => {
 
@@ -644,7 +642,7 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
                 }
             }
             ctx.response.set("content-type", "application/json");
-            ctx.body = await new Promise(async (res, rej) => {
+            ctx.body = await new Promise(async (res, _rej) => {
                 let movements: MovementToClient[] = []
 
                 // Everything in movementdb, with key time (movement start date) greater than the creation date of the oldest sequence file on disk
@@ -664,13 +662,13 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
         })
 
     const nav = new Router()
-        .get('/live', async (ctx, next) => {
-            ctx.redirect(`http://${process.env.CAMERA_IP}`)
+        .get('/live', async (ctx, _next) => {
+            ctx.redirect(`http://${process.env['CAMERA_IP']}`)
         })
-        .get('/network', async (ctx, next) => {
+        .get('/network', async (ctx, _next) => {
             ctx.redirect(`http://${ctx.headers.host? ctx.headers.host.split(":")[0] : 'localhost'}:3998`)
         })
-        .get('/metrics', async (ctx, next) => {
+        .get('/metrics', async (ctx, _next) => {
             ctx.redirect(`http://${ctx.headers.host? ctx.headers.host.split(":")[0] : 'localhost'}:3000/d/T3OrKihMk/our-house?orgId=1`)
         })
 
@@ -694,7 +692,7 @@ async function main() {
     jobman.start(false)
 
     // populate camera cache, and clear all
-    await new Promise((res, rej) => {
+    await new Promise((res, _rej) => {
         cameradb.createReadStream()
             .on('data', (data) => {
                 const { key, value } = data as {key: number, value: CameraEntry}

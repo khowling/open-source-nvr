@@ -1,8 +1,8 @@
 //import logo from './logo.svg';
 import './App.css';
-import React, { /* useCallback , */ useRef, useEffect } from 'react';
+import React  from 'react';
 import videojs from 'video.js'
-import { CommandBar, Text, Dropdown, Toggle, DefaultButton, DetailsList, SelectionMode, Stack, TextField, Slider, TagPicker, Separator, Label, MessageBar, MessageBarType, Checkbox, Selection, PrimaryButton, Panel, VerticalDivider } from '@fluentui/react'
+import { CommandBar, Text, Dropdown, DetailsList, SelectionMode, Stack, TextField, Slider, TagPicker, Separator, Label, MessageBar, MessageBarType, Checkbox, Selection, PrimaryButton, Panel } from '@fluentui/react'
 import { initializeIcons } from '@fluentui/react/lib/Icons';
 
 initializeIcons(/* optional base url */);
@@ -102,7 +102,7 @@ function App() {
         }
       )
   }
-  useEffect(getServerData, [])
+  React.useEffect(getServerData, [])
 
 
 
@@ -418,11 +418,15 @@ function App() {
 
                 <Separator styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}><b>Object Detection (using <a target="_other" href="https://pjreddie.com/darknet/yolo/">yolo</a>)</b></Separator>
                 
-                <Checkbox label="Enable Image Detection" checked={panel.values.enable_ml} onChange={(ev, val) => updatePanelValues('enable_ml', val)} styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}/>
+                <Checkbox label="Enable Object Detection" checked={panel.values.enable_ml} onChange={(ev, val) => updatePanelValues('enable_ml', val)} styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}/>
+                
                 <TextField disabled={!panel.values.enable_ml} label="DarkNet and Yolo install folder " iconProps={{ iconName: 'Folder' }}  required value={panel.values.darknetDir} onChange={(ev, val) => updatePanelValues('darknetDir', val)} errorMessage={getError('darknetDir')} />
                 
-                { data.config && data.config.status &&
-                  <MessageBar>{JSON.stringify(data.config.status, null, 2)}</MessageBar>
+                { data.config && data.config.status  &&  Object.keys(data.config.status).length > 0 && 
+                  <Stack.Item>
+                    <Separator/>
+                    <MessageBar>{JSON.stringify(data.config.status, null, 2)}</MessageBar>
+                  </Stack.Item>
                 }
 
               </>
@@ -440,7 +444,7 @@ function App() {
 
                 <Label>Filter Tags (Requires Object Detection)</Label>
                 <TagPicker
-                  disabled={!panel.values.enable_ml}
+                  disabled={data.config && !data.config.settings.enable_ml}
                   onChange={(i) => panel.values.ignore_tags = i.map(i => i.key)}
                   defaultSelectedItems={panel.values.ignore_tags ? panel.values.ignore_tags.map(i => {return {key:i,name:i}} ) : []}
                   removeButtonAriaLabel="Remove"
@@ -476,7 +480,10 @@ function App() {
                 </Stack>
 
                 { camerabeingEdited &&
-                  <MessageBar>{JSON.stringify(camerabeingEdited.ffmpeg_process, null, 2)}</MessageBar>
+                  <Stack.Item>
+                    <Separator/>
+                    <MessageBar>{JSON.stringify(camerabeingEdited.ffmpeg_process, null, 2)}</MessageBar>
+                  </Stack.Item>
                 }
 
               </>

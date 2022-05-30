@@ -3,7 +3,13 @@
 
 #  Open-Source Network Video Recorder (NVR), with Object Detection
 
-This repo contains an web application to monitor your network Security Camera network, constantly record to your computers harddrive, and monitor motion events through a web app.  
+Web application to monitor your IP Security Camera network, continously record camera feeds to your computers harddrive, and monitor motion events through a web app. Features include:
+
+:heavy_check_mark:  No expensive specialised hardware required, use your old computers & harddrives
+:heavy_check_mark:  No cloud account required, self-contained
+:heavy_check_mark:  Enhance your Cameras motion detection with Object Detection tagging, reducing false positives
+:heavy_check_mark:  Supports mutliple camreas
+:heavy_check_mark:  Ensure you hardisk never runs out of space, automatically deleting the oldest video segements when needed 
 
 ![image](./assets/wenui.png)
 
@@ -11,13 +17,13 @@ In addition, if your cameras motion senssor triggers a detection, the app will t
 
 ![image](./assets/objectdetection.png)
 
-This repo was developed with Reolink POE cameras, that provided a RTMP endpoint, and a API for motion detection. But should be easily adapted for any IP camera
+This repo was developed with Reolink POE cameras, that provided a RTMP endpoint, and a API for motion detection. But can be develoed/extended for other IP cameras
 
 ![image](./assets/settings2a.png)  ![image](./assets/settings1a.png)
 
 ## Install / Setup / Run
 
-The benifit of this app, its, its open-source, and it can be installed on any comodity x86 h/w running linux (a free o/s operating system), techincal savvy users should be able to get this working.
+The benifit of this app, its, its open-source, and it can be installed on any comodity h/w running linux (a free o/s operating system), techincal savvy users should be able to get this working.
 
 
 ### Build & Run Web App
@@ -41,11 +47,15 @@ npm run-script build
 ### To manually run the server
 
 ```
-node ./server/lib/index.js
+node ./lib/index.js
 ```
 
 Then open a browser and navigate to http://<hostname>:8080
 
+
+## Darknet Real-time object detection
+
+To enable the Object Detection feature, you will  need to install the following darknet/yolo project, information here: https://pjreddie.com/darknet/yolo/.  Then, go into the settings panel, enable object detection, and set the installation folder
 
 
 ## To run the server each time the machine starts
@@ -53,7 +63,7 @@ Then open a browser and navigate to http://<hostname>:8080
 Create a executable `web.sh` file containing the following (the paths need to be absolute):
 
 ```
-BACKGROUND="true" WEBPATH="/home/<user>/ip-camera-manager/build" DBPATH="/home/<user>/ip-camera-manager/mydb" node /home/<user>/ip-camera-manager/server/lib/index.js
+WEBPATH="/home/<user>/open-source-nvr/build" DBPATH="/home/<user>/open-source-nvr/mydb" node /home/<user>/open-source-nvr/lib/index.js
 ```
 
 Now, create a `camera_web.service` file for Linux Systemd service managers, to ensure your website starts when the machine starts & will be kept running
@@ -68,7 +78,7 @@ After=network-online.target
 User=<user>
 Group=<user>
 Type=simple
-ExecStart=/home/<user>/ip-camera-manager/web.sh
+ExecStart=/home/<user>/open-source-nvr/web.sh
 
 [Install]
 WantedBy=multi-user.target
@@ -139,6 +149,4 @@ https://videojs.com/
 
 HTTP Live Streaming (HLS) is a widely used protocol developed by Apple that will serve your stream better to a multitude of devices. HLS will take your stream, break it into chunks, and serve it via a specialized playlist
 
-## Darknet Real-time object detection
 
-https://pjreddie.com/darknet/yolo/

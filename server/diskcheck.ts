@@ -1,7 +1,6 @@
 import fs from 'fs/promises'
-import { readFile, stat, readdir, mkdir } from 'fs/promises'
-import {ChildProcess, ChildProcessWithoutNullStreams, spawn} from 'child_process'
-import { timeStamp } from 'console'
+import { stat } from 'fs/promises'
+import { spawn } from 'child_process'
 
 
 async function runDF(folder: string): Promise<{device: string, sizeKB: number, usedKB: number, avaiableKB: number, pecentUsed: number}> {
@@ -95,7 +94,7 @@ export async function diskCheck(rootFolder: string, cameraFolders: Array<string>
                     throw new Error(`${folder} is not a directory`)
                 }
 
-                flist[folder] = (await lsOrderTime(folder)).filter(([s,f]) => f.match(/(\.ts|\.jpg)$/))
+                flist[folder] = (await lsOrderTime(folder)).filter(([,f]) => f.match(/(\.ts|\.jpg)$/))
                 if (flist[folder].length) {
                     fages[folder] = {idx: 0, age: (await fs.stat(`${folder}/${flist[folder][0][1]}`)).ctimeMs}
                 }
