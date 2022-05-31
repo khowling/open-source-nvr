@@ -9,17 +9,33 @@ Web application to monitor your IP Security Camera network, continuously record 
   :heavy_check_mark:  Supports one or multiple cameras, with single, filtered, motion list \
   :heavy_check_mark:  No cloud account required, self-contained \
   :heavy_check_mark:  Enhance your Cameras motion detection with Object Detection tagging/filtering \
-  :heavy_check_mark:  Continuously monitors hardrives, deleting the oldest video segments when almost full \
+  :heavy_check_mark:  Continuously monitors hardrives, deleting the oldest video segments when almost full 
 
-![image](./assets/wenui.png)
+
+
+<p align="center">
+  <img width="700"  src="./assets/wenui.png">
+</p>
+
+> **_NOTE:_** This repo was developed with Reolink POE cameras, that provided a RTMP endpoint, and a API for motion detection. But can be develoed/extended for other IP cameras
+
+### Object Detection
 
 In addition, if your cameras motion sensor triggers a detection, the app will take a still of the detection, and run a Object Detection process, to tag the still with the objects in the picture.  You can then use these tags to filter and review your motion events.  This is very useful to avoid false positives, like the sun going behind a cloud, or a rain shower.
 
-![image](./assets/objectdetection.png)
+<p align="center">
+  <img width="450"  src="./assets/objectdetection.png">
+</p>
 
-This repo was developed with Reolink POE cameras, that provided a RTMP endpoint, and a API for motion detection. But can be develoed/extended for other IP cameras
+### Settings
 
-![image](./assets/settings2a.png)  ![image](./assets/settings1a.png)
+Using the settings menu, you first select the disk you will be using to stream real-time video from the cameras, and if you want to use the auto-deletion featre to prevent the disk from filling up, then if you want to use the object detection feature. Then you can add your cameras
+
+<p align="center">
+  <img width="250"  src="./assets/settings1a.png"> <img width="250"   src="./assets/settings2a.png"> 
+</p>
+
+<br clear="both"/>
 
 ## Install / Setup / Run
 
@@ -38,7 +54,7 @@ Clone this repo onto a Linux machine, then build the app by running these comman
 npm i
 
 # build typescript server
-npm run-script buildserver
+npx tsc
 
 # build fromend
 npm run-script build
@@ -50,19 +66,31 @@ npm run-script build
 node ./lib/index.js
 ```
 
-Then open a browser and navigate to http://<hostname>:8080
+Then open a browser and navigate to `http://<hostname>:8080`.  You are free to use a proxy like nginx and add TLS/DNS, authenitcation, then expose your app to the internet so you can monitor your home when away
 
 
 ## Darknet Real-time object detection
 
-To enable the Object Detection feature, you will  need to install the following darknet/yolo project, information here: https://pjreddie.com/darknet/yolo/.  Then, go into the settings panel, enable object detection, and set the installation folder
+To enable the Object Detection feature, you will  need to install the following darknet/yolo project, information here: https://pjreddie.com/darknet/yolo/.  Then, go into the settings panel, enable object detection, and set the installation folder.
+  
+The install folder must include the following files
 
+<pre>
+.    
+├── darknet (the executable)  
+└── cfg (directory)  
+     ├── yolov3.cfg  
+     └── yolov3.weights  
+</pre>
+  
 
+  
 ## To run the server each time the machine starts
 
 Create a executable `web.sh` file containing the following (the paths need to be absolute):
 
 ```
+#!/bin/bash
 WEBPATH="/home/<user>/open-source-nvr/build" DBPATH="/home/<user>/open-source-nvr/mydb" node /home/<user>/open-source-nvr/lib/index.js
 ```
 
