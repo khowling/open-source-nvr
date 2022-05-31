@@ -3,7 +3,7 @@ const
     send = require('koa-send'),
     lexint = require('lexicographic-integer')
 
-import { readFile, stat, readdir, mkdir } from 'fs/promises'
+import fs from 'fs/promises'
 import { createReadStream } from 'fs'
 import server_fetch from './server_fetch.js'
 import Router from '@koa/router'
@@ -231,7 +231,7 @@ async function processMovement(cameraKey: string, jobManager: JobManager) {
                 // Read the curren live stream.m3u8, and get a array of all the stream23059991.ts files
                 // set startSegment to the LAST segment file index in the array (most recent) + 1 (+1 due to ffmpeg lag!)
                 const filepath = `${ce.disk}/${ce.folder}/stream.m3u8`
-                const hls = (await readFile(filepath)).toString()
+                const hls = (await fs.readFile(filepath)).toString()
                 const hls_segments = [...hls.matchAll(re)].map(m => m[1])
                 const targetduration = hls.match(/#EXT-X-TARGETDURATION:([\d])/)
                 const lhs_seg_duration_seq = parseInt(targetduration && targetduration.length>1? targetduration[1]: "2")
@@ -303,7 +303,7 @@ async function StreamingController(cameraKey: string): Promise<ProcessInfo | und
             if (proc.running) {
                 console.log (`Checking ffmpeg for [${ce.name}] running=${proc.running} error=${proc.error}...`)
                 try {
-                    const {mtimeMs} = await stat(streamfile),
+                    const {mtimeMs} = await fs.stat(streamfile),
                            last_updated_ago = Date.now() - mtimeMs
                     if (last_updated_ago > 10000 /* 10 seconds */) {
                         console.warn (`ffmpeg no output for 10secs for ${ce.name} - file ${streamfile}, kill process`)
@@ -378,6 +378,28 @@ async function StreamingController(cameraKey: string): Promise<ProcessInfo | und
 
 const PORT = process.env['PORT'] || 8080
 
+
+async function ensureDir(folder: string): Promise<boolean> {
+    try {
+        const stat = await fs.stat(folder)
+        if (!stat.isDirectory()) {
+            throw new Error(`${folder} is not a directory`)
+        }
+        return true
+    } catch (e) {
+        if (e.code === 'ENOENT') {
+            try {
+                await fs.mkdir(folder)
+                return true
+            } catch (e) {
+                throw new Error(`Cannot create ${folder}: ${e}`)
+            }
+        } else {
+            throw new Error(`Cannot stat ${folder}: ${e}`)
+        }
+    }
+}
+
 async function init_web() {
 
     var assets = new Router()
@@ -388,7 +410,7 @@ async function init_web() {
                 const m: MovementEntry = await movementdb.get(parseInt(moment))
                 const c: CameraEntry = await cameradb.get(m.cameraKey)
                 const serve = `${c.disk}/${c.folder}/${m.ml && m.ml.success ? 'mlimage' : 'image'}${moment}.jpg`
-                const { size } = await stat(serve)
+                const { size } = await fs.stat(serve)
                 ctx.set('content-type', 'image/jpeg')
                 ctx.body = createReadStream(serve, { encoding: undefined }).on('error', ctx.onerror)
             } catch (e) {
@@ -404,7 +426,7 @@ async function init_web() {
             try {
                 const c = await cameradb.get(cameraKey)            
                 const serve = `${c.disk}/${c.folder}/${file}`
-                const { size } = await stat(serve)
+                const { size } = await fs.stat(serve)
                 //console.log(`serving : ${serve}`)
                 ctx.body = createReadStream(serve, { encoding: undefined }).on('error', ctx.onerror)
             } catch (e) {
@@ -445,7 +467,7 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
                 const serve = `${ce.disk}/${ce.folder}/stream${index}.${suffix}`
                 //console.log(`serving : ${serve}`)
                 try {
-                    const { size } = await stat(serve)
+                    const { size } = await fs.stat(serve)
                     ctx.body = createReadStream(serve, { encoding: undefined }).on('error', ctx.onerror)
                 } catch (e) {
                     const err : Error = e as Error
@@ -496,7 +518,7 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
             let streamoptions: any = { encoding: null }
             if (ctx.headers.range) {
 
-                const { size } = await stat(filepath)
+                const { size } = await fs.stat(filepath)
 
                 const [range_start, range_end] = ctx.headers.range.replace(/bytes=/, "").split("-"),
                     start = parseInt(range_start, 10),
@@ -526,7 +548,7 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
             if (ctx.request.body) {
                 const new_settings: Settings = ctx.request.body
                 try {
-                    const dirchk = await stat(new_settings.disk_base_dir)
+                    const dirchk = await fs.stat(new_settings.disk_base_dir)
                     if (!dirchk.isDirectory())  throw new Error(`${new_settings.disk_base_dir} is not a directory`)
                     await db.put('settings', new_settings)
                     settingsCache = {...settingsCache, settings: new_settings}
@@ -546,46 +568,38 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
             console.log (`camera save ${cameraKey} -  ${JSON.stringify(ctx.request.body)}`)
             if (ctx.request.body) {
                 const new_ce: CameraEntry = ctx.request.body
-
+                const folder = `${new_ce.disk}/${new_ce.folder}`
                 if (cameraKey === 'new') {
                     // creating new entry
                     try {
-                        await mkdir (`${new_ce.disk}/${new_ce.folder}`)
+                        await ensureDir(folder)
+                        const new_key = "C" + ((Date.now() / 1000 | 0) - 1600000000)
+                        await cameradb.put(new_key, new_ce)
+                        cameraCache[new_key] = {ce: new_ce }
+                        ctx.status = 201
                     } catch (e) {
-                        console.warn (`failed to create dir : ${new_ce.disk}/${new_ce.folder}`)
+                        ctx.throw(400, e)
                     }
-                    const new_key = "C" + ((Date.now() / 1000 | 0) - 1600000000)
-                    await cameradb.put(new_key, new_ce)
-                    cameraCache[new_key] = {ce: new_ce }
- 
- 
-                    ctx.status = 201
+                    
                 } else {
 
                     // updating existing camera
                     try {
                         const old_ce: CameraEntry = await cameradb.get(cameraKey)
-                        if (old_ce.folder != new_ce.folder) {
-                            console.log ('creating directory')
-                            try {
-                                await mkdir (`${new_ce.disk}/${new_ce.folder}`)
-                            } catch (e) {
-                                console.warn (`failed to create dir : ${new_ce.disk}/${new_ce.folder}`)
-                            }
-                        }
-                        
+                        if (!old_ce) throw new Error(`camera ${cameraKey} not found`)
+
+                        await ensureDir(folder)
                         const new_vals: CameraEntry = {...old_ce, ...new_ce}
                         await cameradb.put(cameraKey, new_vals) 
                         cameraCache[cameraKey].ce = new_vals
-
                         ctx.status = 201
+   
                     } catch (e) {
-                        console.warn (`try error : ${e}`)
-                        ctx.status = 400
+                        console.warn (e)
+                        ctx.throw(400, e)
                     }
 
                 }
-                
             } else {
                 ctx.status = 500
             }
@@ -612,7 +626,7 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
             // find first segment on disk
             async function findFirstSegmentOnDisk(c: CameraEntry): Promise<{sequence: number, ctimeMs: number}> {
                 let first_seq_on_disk: number = 0
-                const local_video = await readdir(`${c.disk}/${c.folder}`)
+                const local_video = await fs.readdir(`${c.disk}/${c.folder}`)
                 const local_video_re = new RegExp(`^stream(\\d+).ts`)
                 // For each file in the directory
                 for (let dir_entry of local_video) {
@@ -628,7 +642,7 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
                         }
                     }
                 }
-                const {ctimeMs} = await stat (`${c.disk}/${c.folder}/stream${first_seq_on_disk}.ts`)
+                const {ctimeMs} = await fs.stat (`${c.disk}/${c.folder}/stream${first_seq_on_disk}.ts`)
                 return {sequence: first_seq_on_disk, ctimeMs}
             }
 

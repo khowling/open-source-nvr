@@ -90,8 +90,12 @@ function App() {
       .then(
         (result) => {
           setData({...result, status: 'success'})
+          if (!result?.config?.settings?.enable_ml) setTaggedOnly(false)
           console.log (`got refresh, find first streaming enabled camera & play`)
-          playVideo (result.cameras.filter(c => c.enable_streaming).shift())
+          const streamingCameras = result?.cameras.filter(c => c.enable_streaming)   
+          if (streamingCameras && streamingCameras.length > 0) {
+            playVideo (streamingCameras[0])
+          }
         },
         // Note: it's important to handle errors here
         // instead of a catch() block so that we don't swallow
@@ -381,7 +385,7 @@ function App() {
     })
   }
 
-  const camerabeingEdited = panel.key === 'edit' && data.cameras && panel.values.key && data.cameras.find(c => c.key = panel.values.key)
+  const camerabeingEdited = panel.key === 'edit' && data.cameras && panel.values.key && data.cameras.find(c => c.key === panel.values.key)
 
   return (
     <main id="mainContent" data-grid="container">
