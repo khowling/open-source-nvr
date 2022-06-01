@@ -67,23 +67,40 @@ async function needtoRemoveKB(folder: string, cleanIfOver: number): Promise<numb
 
 }
 
+interface DiskDeleteStats {
+    removedMB: number;
+    removedFiles: number;
+    lastRemovedctimeMs?: number;
+    lastRemovedIdx?: number;
+}
+
+export interface DiskCheckReturn {
+    revmovedMBTotal: number;
+    folderStats: {
+        [folder: string]: DiskDeleteStats;
+    }
+}
+
 // Clear down OLDEST removedFiles on each camera streaming directory, until it is under the cleanIfOver percentage
-export async function diskCheck(rootFolder: string, cameraFolders: Array<string>, cleanIfOver: number): Promise<{removedFiles: number, removedMB: number}> {
+export async function diskCheck(rootFolder: string, cameraFolders: Array<string>, cleanIfOver: number): Promise<DiskCheckReturn> {
     
         const stats = await stat(rootFolder)
         if (!stats.isDirectory()) {
             throw new Error(`${rootFolder} is not a directory`)
         }
     
-        const needtoReomveKB = await needtoRemoveKB(rootFolder, cleanIfOver)
+        const needtoReomveKB = cleanIfOver ? await needtoRemoveKB(rootFolder, cleanIfOver) : -1
         console.log(`diskCheck: running on rootFolder=${rootFolder}, with cameraFolders=${cameraFolders},  needtoReomveKB=${needtoReomveKB}`)
-        if (needtoReomveKB > 0) {
+        if (needtoReomveKB === -1 || needtoReomveKB > 0) {
 
-            let removedMB = 0, removedFiles = 0
+            let ret = {
+                revmovedMBTotal: 0,
+                folderStats: {}
+            } as DiskCheckReturn
 
-            // need to keep track of the oldest current file across all camera firectories, so we can delete them in oldest order
+            // need to keep track of the oldest current file across all camera directories, so we can delete them in oldest order
             let flist : {[folder: string]: Array<[size: number, filename: string]>} = {}, 
-                fages : {[folder: string]: {idx: number, age: number}} = {}
+                flist_pointer : {[folder: string]: {idx: number, age: number}} = {}
 
             // find folder with oldest camera flist, then remove needtoReomveKB from that folder!
             // first, for each folder, get the oldest file index=0, & set the age of the file
@@ -94,49 +111,57 @@ export async function diskCheck(rootFolder: string, cameraFolders: Array<string>
                     throw new Error(`${folder} is not a directory`)
                 }
 
+                ret.folderStats[folder] = {removedMB: 0, removedFiles: 0} as DiskDeleteStats
+
                 flist[folder] = (await lsOrderTime(folder)).filter(([,f]) => f.match(/(\.ts|\.jpg)$/))
                 if (flist[folder].length) {
-                    fages[folder] = {idx: 0, age: (await fs.stat(`${folder}/${flist[folder][0][1]}`)).ctimeMs}
+                    flist_pointer[folder] = {idx: 0, age: (await fs.stat(`${folder}/${flist[folder][0][1]}`)).ctimeMs}
                 }
             }
 
             // Next, find the next oldest file across all folders, do this by finding the creationTime (ctime), of the oldest remaining file in each directory, 
             // then, the reduce will tell us which folder has the oldest file, and we can remove that file from that folder
             // and delete it, until either we have deleted enough, or there are no more files to delete
-            while (removedMB < needtoReomveKB && Object.keys(fages).length > 0) {
+            while ((ret.revmovedMBTotal < needtoReomveKB || needtoReomveKB === -1  ) && Object.keys(flist_pointer).length > 0) {
                 // get next oldest across all folders (of there is only one folder, we dont need to reduce, it must be the one folder)
-                const { folder, idx, age } = Object.keys(fages).length === 1 ? {folder: Object.keys(fages)[0], ...fages[Object.keys(fages)[0]]} : Object.keys(fages).reduce((acc, folder) => acc.age ? (fages[folder].age < acc.age ? {folder,...fages[folder]} : acc ): {folder, ...fages[folder]} , {folder: '', idx: -1, age: 0 })
-
+                let { folder, idx, age } = Object.keys(flist_pointer).length === 1 ? {folder: Object.keys(flist_pointer)[0], ...flist_pointer[Object.keys(flist_pointer)[0]]} : Object.keys(flist_pointer).reduce((acc, folder) => acc.age ? (flist_pointer[folder].age < acc.age ? {folder,...flist_pointer[folder]} : acc ): {folder, ...flist_pointer[folder]} , {folder: '', idx: -1, age: 0 })
                 const [size, filename] = flist[folder][idx]
+                const isLastFileTobeDeleted = ret.revmovedMBTotal + size >= needtoReomveKB
+
+                // last file that needed to be deleted, and we are not deleting everything, so we need to ensure we have a file date to retrun
+                if (isLastFileTobeDeleted && needtoReomveKB > 0 && age === 0) {
+                    age = (await fs.stat(`${folder}/${filename}`)).ctimeMs
+                }
 
                 //console.log(`diskCheck: removing ${folder}/${filename}, needtoReomveKB=${needtoReomveKB}, removedMB=${removedMB}`)
-                await fs.rm(`${folder}/${filename}`)
-                removedMB += size
-                removedFiles++
+                //try {
+                    await fs.rm(`${folder}/${filename}`)
+                    ret = {
+                        revmovedMBTotal: ret.revmovedMBTotal + size, 
+                        folderStats: {...ret.folderStats, [folder]: {removedMB: ret.folderStats[folder].removedMB + size, removedFiles: ret.folderStats[folder].removedFiles + 1, lastRemovedctimeMs: age, lastRemovedIdx: idx}}
+                    }
+                //} catch (e) {
+                //    console.warn (`diskCheck: error removing ${folder}/${filename}`, e)
+                //}
+
                 
-                // set next oldest index in the folder "fages" (dont need to calculed age if there is only one folder left)
+                // set next oldest index in the folder "flist_pointer" (dont need to calculed age if there is only one folder left)
                 if (flist[folder].length > idx + 1) {
-                    if (Object.keys(fages).length > 1) {
-                        fages[folder] = {idx: idx + 1, age: (await fs.stat(`${folder}/${flist[folder][idx + 1][1]}`)).ctimeMs}
+                    if (Object.keys(flist_pointer).length > 1) {
+                        flist_pointer[folder] = {idx: idx + 1, age: (await fs.stat(`${folder}/${flist[folder][idx + 1][1]}`)).ctimeMs}
                     } else {
-                        fages[folder] = {idx: idx + 1, age: 0 }
+                        flist_pointer[folder] = {idx: idx + 1, age: 0 }
                     }
                 } else {
                     // no more files in the folder to delete, so just delete the folder key
-                    delete fages[folder]
+                    delete flist_pointer[folder]
                 }
 
             }
 
-            return {removedFiles, removedMB}
+            return ret
         } else {
-            return { removedFiles: 0, removedMB: 0 }
+            return { revmovedMBTotal: 0, folderStats:{} }
         }
     
 }
-
-
-
-//console.log ('diskcheck.ts')
-//needtoRemoveKB('.', 95).then(console.log)
-//diskCheck(process.argv[2] || '/video', ['/video/front', '/video/back'] , process.argv[3] ? parseInt(process.argv[3]) :  90).then(console.log)

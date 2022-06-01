@@ -2,7 +2,7 @@
 import './App.css';
 import React  from 'react';
 import videojs from 'video.js'
-import { CommandBar, Text, Dropdown, DetailsList, SelectionMode, Stack, TextField, Slider, TagPicker, Separator, Label, MessageBar, MessageBarType, Checkbox, Selection, PrimaryButton, Panel } from '@fluentui/react'
+import { CommandBar, Text, DefaultButton, Dropdown, DetailsList, SelectionMode, Stack, TextField, Slider, TagPicker, Separator, Label, MessageBar, MessageBarType, Checkbox, Selection, PrimaryButton, Panel } from '@fluentui/react'
 import { initializeIcons } from '@fluentui/react/lib/Icons';
 
 initializeIcons(/* optional base url */);
@@ -357,9 +357,11 @@ function App() {
       return tagList.some(compareTag => compareTag.key === tag.key);
   }
 
-  function savePanel() {
+  function savePanel(event, ctx) {
+    const {key} =  ctx && typeof ctx === 'object' ? ctx : {}
+
     setError(null)
-    fetch(`/api/${panel.key === 'settings' ? 'settings' : `camera/${panel.values.key || 'new'}`}`, {
+    fetch(`/api/${panel.key === 'settings' ? 'settings' : `camera/${panel.values.key || 'new'}`}${key && panel.values.key ? `?delopt=${key}` : ''}`, {
       method: 'POST',
       credentials: 'same-origin',
       mode: 'cors',
@@ -385,7 +387,7 @@ function App() {
     })
   }
 
-  const camerabeingEdited = panel.key === 'edit' && data.cameras && panel.values.key && data.cameras.find(c => c.key === panel.values.key)
+  const currCamera = panel.key === 'edit' && data.cameras && panel.values.key && data.cameras.find(c => c.key === panel.values.key)
 
   return (
     <main id="mainContent" data-grid="container">
@@ -417,7 +419,7 @@ function App() {
                 
                 <Checkbox label="Enable Disk Cleanup" checked={panel.values.enable_cleanup} onChange={(ev, val) => updatePanelValues('enable_cleanup', val)} styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}/>
                 <Slider disabled={!panel.values.enable_cleanup} label="Keep under Capacity %" min={1} max={99} step={1} defaultValue={panel.values.cleanup_capacity} showValue onChange={(val) => updatePanelValues('cleanup_capacity', val)} />
-                <Slider disabled={!panel.values.enable_cleanup} label="Check Capacity Interval (seconds)" min={30} max={1800} step={10} defaultValue={panel.values.cleanup_interval} showValue onChange={(val) => updatePanelValues('cleanup_interval', val)} />
+                <Slider disabled={!panel.values.enable_cleanup} label="Check Capacity Interval (minutes)" min={1} max={60} step={1} defaultValue={panel.values.cleanup_interval} showValue onChange={(val) => updatePanelValues('cleanup_interval', val)} />
 
 
                 <Separator styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}><b>Object Detection (using <a target="_other" href="https://pjreddie.com/darknet/yolo/">yolo</a>)</b></Separator>
@@ -469,6 +471,14 @@ function App() {
 
                 <Separator styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}><b>Playback</b></Separator>
                 <Checkbox label="Enable Streaming" checked={panel.values.enable_streaming} onChange={(ev, val) => { updatePanelValues('enable_streaming', val)} } />
+
+                { currCamera && currCamera.ffmpeg_process &&
+                  <Stack.Item>
+                    <Separator/>
+                    <MessageBar messageBarType={currCamera.ffmpeg_process.error ? MessageBarType.error : (currCamera.ffmpeg_process.running ?  MessageBarType.success : MessageBarType.warning)}>{JSON.stringify(currCamera.ffmpeg_process, null, 2)}</MessageBar>
+                  </Stack.Item>
+                }
+
                 <Stack styles={{ root: { marginTop: "15px !important"} }}>
                   <Slider disabled={!panel.values.enable_streaming} label="Segments(2s) prior to movement" min={0} max={60} step={1} defaultValue={panel.values.segments_prior_to_movement} showValue onChange={(val) => updatePanelValues('segments_prior_to_movement', val)} />
                   <Slider disabled={!panel.values.enable_streaming} label="Segments(2s) post movement" min={0} max={60} step={1} defaultValue={panel.values.segments_post_movement} showValue onChange={(val) => updatePanelValues('segments_post_movement', val)} />
@@ -477,17 +487,37 @@ function App() {
                 <Separator styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}><b>Movement processing</b></Separator>
                 
                 <Checkbox disabled={!panel.values.enable_streaming} label="Enable Movement" checked={panel.values.enable_movement} onChange={(ev, val) => updatePanelValues('enable_movement', val)} />
+                
+                { currCamera && currCamera.movement &&
+                  <Stack.Item>
+                    <Separator/>
+                    <MessageBar messageBarType={currCamera.movement.fail ? MessageBarType.error : (currCamera.movement.current_movement ?  MessageBarType.success : MessageBarType.warning)}>{JSON.stringify(currCamera.movement, null, 2)}</MessageBar>
+                  </Stack.Item>
+                }
+
                 <Stack styles={{ root: { marginTop: "15px !important"} }}>
                   <Slider disabled={!panel.values.enable_movement} label="Poll Frequency (mS)" min={1000} max={10000} step={500} defaultValue={panel.values.mSPollFrequency} showValue onChange={(val) => updatePanelValues('mSPollFrequency', val)} />
                   <Slider disabled={!panel.values.enable_movement} label="Seconds without movement" min={0} max={50} step={1} defaultValue={panel.values.secWithoutMovement} showValue onChange={(val) => updatePanelValues('secWithoutMovement', val)} />
                   {panel.key}
                 </Stack>
 
-                { camerabeingEdited &&
-                  <Stack.Item>
-                    <Separator/>
-                    <MessageBar>{JSON.stringify(camerabeingEdited.ffmpeg_process, null, 2)}</MessageBar>
-                  </Stack.Item>
+
+                { panel.key === 'edit' &&
+                  <Stack styles={{ root: { marginTop: "15px !important"} }}>
+                    <DefaultButton  text="Delete" disabled={panel.invalidArray.length >0} split menuProps={{ items: [
+                      {
+                        key: 'del',
+                        text: 'Delete Camera',
+                        iconProps: { iconName: 'Delete' },
+                        onClick: savePanel
+                      },
+                      {
+                        key: 'delall',
+                        text: 'Delete Camera & Recordings',
+                        iconProps: { iconName: 'Delete' },
+                        onClick: savePanel
+                      }]}} />
+                    </Stack>
                 }
 
               </>

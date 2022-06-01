@@ -66,6 +66,9 @@ export default async function (url: string, opts = {} as http.RequestOptions, bo
         }).on('error', (e: any) => {
             //console.error(`server_fetch: ${e.message}`)
             reject(e)
+        }).on('timeout', () => {
+            reject(new Error(`network request timeout url=${url}`))
+            req.destroy()
         })
 
         if (options.method === 'POST' || options.method === 'PUT') {
