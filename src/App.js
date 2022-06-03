@@ -114,15 +114,17 @@ function App() {
     setInputState({ ...inputState, inputs: { ...inputState.inputs, [m.key]: { reviewed: false } } })
   }
 
-  function _itemChanged(m, idx) {
-    console.log(`_itemChanged ${idx} (old ${inputState.current_idx})  (allSelected ${inputState.allSelected})`)
+  function _onActiveItemChanged(m, idx, a) {
+    console.log(`_onActiveItemChanged idx=${idx} inputState.current_idx=${inputState.current_idx})  (m.key=${m && m.key}) a=${a}`)
     if (idx !== inputState.current_idx) {
       setInputState({ current_idx: idx, current_movement: m, allSelected: inputState.allSelected, inputs: { ...inputState.inputs, [m.key]: { reviewed: true } } })
+    
+      playVideo(data.cameras.find(c => c.key === m.movement.cameraKey), m.key)
     }
-    playVideo(data.cameras.find(c => c.key === m.movement.cameraKey), m.key)
   }
 
   function playVideo(c, movementKey) {
+    console.log (`playVideo c.key=${c.key} movementKey=${movementKey}`)
     const mPlayer = playerRef.current
     if (mPlayer && c) {
 
@@ -574,17 +576,17 @@ function App() {
                 }
               },
               {
-                key: 'download',
-                text: 'Download',
-                iconProps: { iconName: 'Download' },
-                onClick: recordReview,
-              },
-              {
                 key: 'refresh',
                 text: 'Refresh',
                 checked: data.status === "fetching",
                 iconProps: { iconName: 'Refresh' },
                 onClick: reloadlist,
+              },
+              {
+                key: 'download',
+                text: 'Download',
+                iconProps: { iconName: 'Download' },
+                onClick: recordReview,
               },
               {
                 key: 'filter',
@@ -693,7 +695,7 @@ function App() {
             } : [])
             }
             selectionMode={SelectionMode.single}
-            onActiveItemChanged={_itemChanged}
+            onActiveItemChanged={_onActiveItemChanged}
             onItemInvoked={_onItemInvoked}
           />
 
