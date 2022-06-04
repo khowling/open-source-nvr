@@ -34,15 +34,10 @@ interface MovementEntry {
     ffmpeg?: SpawnData;
 }
 
-interface MovementReadStream {
-    key: number;
-    value: MovementEntry;
-}
-
 interface MovementToClient {
     key: number;
     movement: MovementEntry;
-    startDateGb: string;
+    startDate_en_GB: string;
 }
 
 interface SpawnData {
@@ -57,6 +52,7 @@ interface MLData extends SpawnData {
 }
 
 interface CameraEntry {
+    delete: boolean;
     name: string;
     folder: string;
     disk: string;
@@ -80,8 +76,10 @@ interface ProcessInfo {
     status: string;
 }
 
-interface Movement {
+interface MovementStatus {
+    in_progress: boolean;
     fail: boolean;
+    check_after?: number;
     status?: string;
     current_movement?: MovementEntry | null;
 }
@@ -89,13 +87,13 @@ interface Movement {
 interface CameraEntryClient extends CameraEntry {
     key: string
     ffmpeg_process?: ProcessInfo;
-    movement?: Movement;
+    movementStatus?: MovementStatus;
 }
 
 interface CameraCacheEntry {
     ce: CameraEntry;
     ffmpeg_process?: ProcessInfo;
-    movement?: Movement;
+    movementStatus?: MovementStatus;
 }
 
 interface CameraCache { 
@@ -189,7 +187,8 @@ async function jobWorker(seq: number, d: JobData): Promise<JobReturn> {
         // -ss seek to the first frame in the segment file
 
         const m: MovementEntry = await movementdb.get(d.movement_key)
-        const c: CameraEntry = await cameradb.get(m.cameraKey)
+        const c = cameraCache[m.cameraKey].ce
+
         const code = await new Promise((acc, _rej) => {
 
             var ffmpeg = spawn('/usr/bin/ffmpeg', ['-y', '-ss', '0', '-i', `${c.disk}/${c.folder}/stream${(m.startSegment + 1)}.ts`, '-frames:v', '1', '-q:v', '2', `${c.disk}/${c.folder}/image${d.movement_key}.jpg`], { timeout: 120000 });
@@ -217,22 +216,27 @@ const re = new RegExp(`stream([\\d]+).ts`, 'g');
  // Called every seond for each camera, to process movement
 async function processMovement(cameraKey: string, jobManager: JobManager) : Promise<void> {
 
-    const { movement } = cameraCache[cameraKey]
-    // curcuit breaker, if movement error recorded from API, dont try again!
-    if (movement?.fail) return
+    const { movementStatus, ce } = cameraCache[cameraKey]
+    // curcuit breaker, if movement error recorded from API, dont try again, until after check_after!
+    if (movementStatus?.in_progress || (movementStatus?.fail && ( (!movementStatus.check_after) || movementStatus.check_after > Date.now())) ) {
+            return
+    }
 
-    const {ip, passwd, disk, folder, secWithoutMovement} = cameraCache[cameraKey].ce
+    // prevent multiple movement processes from running at the same time (needed with setInterval)
+    cameraCache[cameraKey] = {...cameraCache[cameraKey],  movementStatus: {...cameraCache[cameraKey].movementStatus, in_progress: true}}
+
+    const {ip, passwd, disk, folder, secWithoutMovement} = ce
     try {
-        
-        const current_movement = movement?.current_movement
 
-        const body_json = await server_fetch(`http://${ip}/api.cgi?cmd=GetMdState&user=admin&password=${passwd}`, {timeout: 5000})
+        const current_movement = movementStatus?.current_movement
+
+        const body_json = await server_fetch(`http://${ip}/api.cgi?cmd=GetMdState&user=admin&password=${passwd}`, {timeout: 2000})
 
         // camera content type response is "text/html" even though its json :)
         const body = JSON.parse(body_json)
         //console.log(body[0].value)
         if (body[0].error) {
-            cameraCache[cameraKey] = {...cameraCache[cameraKey],  movement: {fail: true, status: `fetch movement error: ${JSON.stringify(body)}`}}
+            cameraCache[cameraKey] = {...cameraCache[cameraKey],  movementStatus: {fail: true, in_progress: false, status: `fetch movement error: ${JSON.stringify(body)}`, check_after: Date.now() + (30 * 1000)}}
         } else if (body[0].value.state === 1) {
             // Got movement (state ===1)
             if (!current_movement) {
@@ -248,8 +252,8 @@ async function processMovement(cameraKey: string, jobManager: JobManager) : Prom
                 const targetduration = hls.match(/#EXT-X-TARGETDURATION:([\d])/)
                 const lhs_seg_duration_seq = parseInt(targetduration && targetduration.length>1? targetduration[1]: "2")
 
-                cameraCache[cameraKey] = {...cameraCache[cameraKey], movement: {
-                    fail: false, status: "new movement detected",
+                cameraCache[cameraKey] = {...cameraCache[cameraKey], movementStatus: {
+                    in_progress: false, fail: false, status: "new movement detected",
                     current_movement: {
                         cameraKey,
                         startDate: Date.now(),
@@ -261,10 +265,11 @@ async function processMovement(cameraKey: string, jobManager: JobManager) : Prom
                 }}
             } else {
                 // continuatation of same movment event
-                cameraCache[cameraKey] = {...cameraCache[cameraKey], movement: {
-                    ...movement,
+                cameraCache[cameraKey] = {...cameraCache[cameraKey], movementStatus: {
+                    ...movementStatus,
+                    in_progress: false, fail: false, status: "continuatation of same movment event",
                     current_movement: {
-                        ...movement.current_movement,
+                        ...movementStatus.current_movement,
                         seconds: current_movement.seconds + 1 + current_movement.consecutivesecondswithout,
                         consecutivesecondswithout: 0
                     }
@@ -281,28 +286,36 @@ async function processMovement(cameraKey: string, jobManager: JobManager) : Prom
 
                     await jobManager.submit({ task: JobTask.Snapshot, movement_key })
 
-                    cameraCache[cameraKey] = {...cameraCache[cameraKey],  movement: {
-                        fail: false, status: "movement ended",
+                    cameraCache[cameraKey] = {...cameraCache[cameraKey],  movementStatus: {
+                        in_progress: false, fail: false, status: "movement ended, recorded to database key=${movement_key}",
                     }}
 
                 } else {
                     // still same movement, incremenet consecutive seconds without movement
-                    cameraCache[cameraKey] = {...cameraCache[cameraKey],  movement: {
-                        ...movement,
+                    cameraCache[cameraKey] = {...cameraCache[cameraKey],  movementStatus: {
+                        ...movementStatus,
+                        in_progress: false, fail: false, status: "continuatation of same movment event (within consecutivesecondswithout)",
                         current_movement: {
-                            ...movement.current_movement,
+                            ...movementStatus.current_movement,
                             consecutivesecondswithout: current_movement.consecutivesecondswithout + 1
                     }}}
                 }
+            } else {
+                cameraCache[cameraKey] = {...cameraCache[cameraKey],  movementStatus: {
+                    ...movementStatus,
+                    in_progress: false, fail: false, status: "no current movement"
+                }}
             }
         }
     } catch (e) {
-        console.warn (`processMovement failed error: ${e.message}`)
-        cameraCache[cameraKey] = { ...cameraCache[cameraKey],  movement: {
-            ...movement, 
-            fail: true, 
-            status: e}}
-        console.error(e)
+        const filtersensitive = e?.message ? e.message.replaceAll(passwd, "****").replaceAll(ip, "****") : e
+        console.warn (`${new Date()}: processMovement failed error: cameraKey=${cameraKey}, name=${cameraCache[cameraKey]?.ce?.name}  message=${filtersensitive}`)
+        cameraCache[cameraKey] = { ...cameraCache[cameraKey],  movementStatus: {
+            ...movementStatus, 
+            fail: true, in_progress: false,
+            check_after: Date.now() + (30 * 1000),
+            status: filtersensitive}}
+        //console.error(e)
     }
 }
 
@@ -401,7 +414,7 @@ async function StreamingController(cameraKey: string): Promise<ProcessInfo | und
         
     } catch (e) {
         console.warn ((new Date()).toTimeString().substring(0,8) + ` FFMpeg catch error [${ce.name}]: ${e}, try again in 1minute`)
-        cameraCache[cameraKey] = {...cameraCache[cameraKey], ffmpeg_process: {...cameraCache[cameraKey].ffmpeg_process, running: false, error: true, in_progress: false, status: e.message, check_after: Date.now() + 60000}}
+        cameraCache[cameraKey] = {...cameraCache[cameraKey], ffmpeg_process: {...cameraCache[cameraKey].ffmpeg_process, running: false, error: true, in_progress: false, status: e?.message, check_after: Date.now() + 60000}}
     }
 
     return  cameraCache[cameraKey].ffmpeg_process as ProcessInfo
@@ -608,7 +621,7 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
                     try {
                         await ensureDir(folder)
                         const new_key = "C" + ((Date.now() / 1000 | 0) - 1600000000)
-                        await cameradb.put(new_key, new_ce)
+                        await cameradb.put(new_key, {delete: false, ...new_ce} as CameraEntry)
                         cameraCache[new_key] = {ce: new_ce }
                         ctx.status = 201
                     } catch (e) {
@@ -631,7 +644,7 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
                             cameraCache[cameraKey] = {
                                 ce: {...old_cc.ce, enable_streaming: false},
                                 ffmpeg_process: null,
-                                movement: null
+                                movementStatus: null
                             }
                             old_cc.ffmpeg_process.taskid?.kill();
                         }
@@ -648,8 +661,10 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
                             }
                             if (deleteOption === 'del' || deleteOption === 'delall') {
                                 //delete camera entry
-                                await cameradb.del(cameraKey)
-                                delete cameraCache[cameraKey]
+                                const new_vals: CameraEntry = {...old_cc.ce, delete: true}
+
+                                await cameradb.put(cameraKey, new_vals) 
+                                cameraCache[cameraKey] = { ce: new_vals }
                                 ctx.status = 200
                             }
                         }
@@ -673,14 +688,15 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
             }
         }).get('/movements', async (ctx, _next) => {
 
-            const cameras: CameraEntryClient[] = Object.keys(cameraCache).map((key) => {
+            const cameras: CameraEntryClient[] = Object.keys(cameraCache).filter(c => !cameraCache[c].ce.delete).map((key) => {
 
                 const c = cameraCache[key]
+                const {ce, ffmpeg_process, movementStatus} = c
                 // filer out data not for the client
-                const {ip, passwd, ...cameraEntry} = c.ce
-                const {current_movement, ...movement} = c.movement || {}
-                const {taskid, ...ffmpeg_process} = c.ffmpeg_process || {}
-                return {key, ...cameraEntry, ffmpeg_process, movement} as CameraEntryClient
+                const {ip, passwd, ...cameraEntry} = ce
+                //const {current_movement, ...movement} = c.movement || {}
+                const {taskid, ...ffmpeg_process_wo_task} = ffmpeg_process || {}
+                return {key, ...cameraEntry, ffmpeg_process: ffmpeg_process_wo_task, movementStatus} as CameraEntryClient
             })
 
             ctx.response.set("content-type", "application/json");
@@ -689,15 +705,16 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
 
                 // Everything in movementdb, with key time (movement start date) greater than the creation date of the oldest sequence file on disk
                 const feed = movementdb.createReadStream({ reverse: true /*, gt: oldestctimeMs > 0 ? (oldestctimeMs / 1000 | 0) - 1600000000 : 0 */})
-                    .on('data', (m: MovementReadStream) => {
+                    .on('data', (data) => {
+                        const { key, value } = data as {key: number, value: MovementEntry}
                             movements.push({
-                                key: m.key,
-                                startDateGb: new Intl.DateTimeFormat('en-GB', { /*dateStyle: 'full',*/ timeStyle: 'medium', hour12: true }).format(new Date(m.value.startDate)),
-                                movement: m.value
+                                key,
+                                startDate_en_GB: new Intl.DateTimeFormat('en-GB', { /*dateStyle: 'full',*/ timeStyle: 'medium', hour12: true }).format(new Date(value.startDate)),
+                                movement: value
                             })
                         //}
                     }).on('end', () => {
-                        res(JSON.stringify({ config: settingsCache, cameras, movements }))
+                        res({ config: settingsCache, cameras, movements })
                     })
             })
 
@@ -778,14 +795,16 @@ async function main() {
     }
 
     // Start the Camera controll loop (ensuring ffmpeg is running, and checking movement) ()
-    setInterval(async (cameraCache) => {
-        for (let cid of Object.keys(cameraCache)) {
-            const pi = await StreamingController(cid)
-            if (pi?.running) {
-                await processMovement(cid, jobman)
+    setInterval(async () => {
+        for (let cKey of Object.keys(cameraCache)) {
+            if (!cameraCache[cKey].ce.delete) {
+                const pi = await StreamingController(cKey)
+                if (pi?.running) {
+                    await processMovement(cKey, jobman)
+                }
             }
         }
-    }, 1000, cameraCache)
+    }, 1000)
 
     // Start the Disk controll loop, checking space and cleaning up disk and movements db
     setInterval(async () => {
@@ -795,12 +814,12 @@ async function main() {
             settingsCache = {...settingsCache, status: {...status, nextCheckInMinutes: settings.cleanup_interval}}
             if (settings.enable_cleanup && settings.disk_base_dir) {
                 try {
-                    const diskres = await clearDownDisk(settings.disk_base_dir, Object.keys(cameraCache).filter(c => cameraCache[c].ce.enable_streaming), settings.cleanup_capacity )
+                    const diskres = await clearDownDisk(settings.disk_base_dir, Object.keys(cameraCache).filter(c => (!cameraCache[c].ce.delete) && cameraCache[c].ce.enable_streaming), settings.cleanup_capacity )
                     settingsCache = {...settingsCache, status: {...status, fail:false, error: '',  ...diskres, lastChecked: new Date()}}
                 } catch(e) {
                     console.log(`disk cleanup error`, e)
                     console.warn(e)
-                    settingsCache = {...settingsCache, status: {...status, fail: true, error: e, lastChecked: new Date()}}
+                    settingsCache = {...settingsCache, status: {...status, fail: true, error: e?.message, lastChecked: new Date()}}
                 }
             }
         } else {

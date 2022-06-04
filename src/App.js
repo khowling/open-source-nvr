@@ -490,10 +490,10 @@ function App() {
                 
                 <Checkbox disabled={!panel.values.enable_streaming} label="Enable Movement" checked={panel.values.enable_movement} onChange={(ev, val) => updatePanelValues('enable_movement', val)} />
                 
-                { currCamera && currCamera.movement &&
+                { currCamera && currCamera.movementStatus &&
                   <Stack.Item>
                     <Separator/>
-                    <MessageBar messageBarType={currCamera.movement.fail ? MessageBarType.error : (currCamera.movement.current_movement ?  MessageBarType.success : MessageBarType.warning)}>{JSON.stringify(currCamera.movement, null, 2)}</MessageBar>
+                    <MessageBar messageBarType={currCamera.movementStatus.fail ? MessageBarType.error : (currCamera.movementStatus.current_movement ?  MessageBarType.success : MessageBarType.warning)}>{JSON.stringify(currCamera.movementStatus, null, 2)}</MessageBar>
                   </Stack.Item>
                 }
 
@@ -679,11 +679,11 @@ function App() {
             columns={[
               {
                 name: "Reviewed Movement (seconds)", key: "start", minWidth: 200, ...(showPlayer && { maxWidth: 200 }), onRender: (m, idx) => {
-                  const {movement, startDateGb} = m,
+                  const {movement, startDate_en_GB} = m,
                         c = data.cameras.find(c => c.key === movement.cameraKey)
                   return (
                     <div>
-                      <Text key={idx + 1} variant="mediumPlus">{startDateGb} ({movement.seconds}s)    {c ? <Text>{c.name}</Text>: <Text>Missing</Text>}</Text>
+                      <Text key={idx + 1} variant="mediumPlus">{startDate_en_GB} ({movement.seconds}s)    {c ? <Text>{c.name}</Text>: <Text>Missing</Text>}</Text>
                       {!showPlayer && <div key={idx + 2}><img src={`/image/${m.key}`} style={{ maxWidth: "100%" }} /></div>}
                     </div>
                   )
