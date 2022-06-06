@@ -214,6 +214,10 @@ function App() {
 
   function renderTags(selectedList, idx) {
 
+    if (false) {
+    return <a target="_blank" href="http://www.google.com"><Stack>{[{tag: "tag1", probability: 100},{tag: "tag1", probability: 100}].map((t, idx) => <Text key={idx} variant="mediumPlus" >{t.tag} ({t.probability})</Text>)}</Stack></a>
+    }
+
     const { key, cameraKey, ml, ffmpeg} = selectedList
     const img = `/image/${key}`
 
@@ -221,9 +225,9 @@ function App() {
       if (ml.success) {
         const filteredTags = filterIgnoreTags(cameraKey, ml)
         if (filteredTags.length > 0) {
-          return <div><a key={idx} target="_blank" href={img}>{filteredTags.map((t, idx) => <Text variant="mediumPlus" >{t.tag} ({t.probability}); </Text>)}</a></div>
+          return <a target="_blank" href={img}><Stack>{filteredTags.map((t, idx) => <Text key={idx} variant="mediumPlus" >{t.tag} ({t.probability})</Text>)}</Stack></a>
         } else {
-          return <a key={idx} target="_blank" href={img}><Text variant="mediumPlus" >ML Image</Text></a>
+          return <a target="_blank" href={img}><Text variant="mediumPlus" >ML Image</Text></a>
         }
       } else {
         return <Text styles={{ root: {color: 'red'}}} variant="mediumPlus">{ml.code}: {ml.stderr} {ml.error}</Text>
@@ -702,7 +706,7 @@ function App() {
           />
           <ThemeProvider theme={appTheme}>
             <DetailsList
-
+              styles={{root:{ paddingLeft: 0}}}
               isHeaderVisible={false}
               items={(taggedOnly ? data.movements.filter(({movement}) => movement && filterIgnoreTags(movement.cameraKey, movement.ml).length > 0) : data.movements).map(m => { 
                 const camera =  data.cameras.find(c => c.key === m.movement.cameraKey)
