@@ -87,7 +87,7 @@ function App() {
   //const [playerReady, setPlayerReady] = React.useState(false)
 
 
-  
+  console.log ("data: ", data)
   const playerRef = React.useRef(null);
   
   const handlePlayerReady = (player) => {
@@ -135,20 +135,21 @@ function App() {
   React.useEffect(getServerData, [])
 
 
-  function playVideo(cKey, mKey) {
+  function playVideo(cKey, mKey, segments_prior_to_movement, segments_post_movement) {
     console.log (`playVideo cameraKey=${cKey} mKey=${mKey}`)
     const mPlayer = playerRef.current
-    const camera = cKey && data.cameras.find(c => c.key === cKey)
+    //console.log ("playVideo data: ", data)
+    //const camera = cKey && data.cameras.find(c => c.key === cKey)
     if (cKey && mPlayer && (!currentPlaying || (currentPlaying.cKey !== cKey || currentPlaying.mKey !== mKey))) {
 
       setCurrentPlaying({ cKey, mKey})
       mPlayer.src({
-        src: `/video/${mKey || `live/${cKey}`}/stream.m3u8${mKey && camera ? `?preseq=${camera.segments_prior_to_movement}&postseq=${camera.segments_post_movement}` : ''}`,
+        src: `/video/${mKey || `live/${cKey}`}/stream.m3u8${mKey && segments_prior_to_movement ? `?preseq=${segments_prior_to_movement}&postseq=${segments_post_movement}` : ''}`,
         type: 'application/x-mpegURL'
       })
 
-      if (mKey && camera) {
-        mPlayer.currentTime(camera.segments_prior_to_movement * 2) // 20 seconds into stream (coresponds with 'segments_prior_to_movement')
+      if (mKey && segments_prior_to_movement) {
+        mPlayer.currentTime(segments_prior_to_movement * 2) // 20 seconds into stream (coresponds with 'segments_prior_to_movement')
       }
       mPlayer.play()
     } else {
@@ -163,8 +164,8 @@ function App() {
       //console.log (`onSelectionChanged: getSelectedIndices()=${JSON.stringify(_selection.getSelectedIndices())}, getSelection()=${JSON.stringify(_selection.getSelection())}`)
       const selectedItems = _selection.getSelection()
       if (selectedItems.length > 0) {
-        const {key, cameraKey} = selectedItems[0]
-        playVideo(cameraKey, key)
+        const {key, cameraKey, segments_prior_to_movement, segments_post_movement} = selectedItems[0]
+        playVideo(cameraKey, key, segments_prior_to_movement, segments_post_movement)
       }
     }
   })
@@ -694,8 +695,10 @@ function App() {
                 isHeaderVisible={false}
                 items={(taggedOnly ? data.movements.filter(({movement}) => movement && filterIgnoreTags(movement.cameraKey, movement.ml).length > 0) : data.movements).map(m => { 
                   const camera =  data.cameras.find(c => c.key === m.movement.cameraKey)
-                  return  {key: m.key, ...m.movement, startDate_en_GB: m.startDate_en_GB, cameraName: camera? camera.name: `${m.cacheKey} Not Found`}
-                })}
+                  return  {key: m.key, ...m.movement, 
+                    startDate_en_GB: m.startDate_en_GB, 
+                    ...(camera && { cameraName: camera.name, segments_prior_to_movement: camera.segments_prior_to_movement, segments_post_movement: camera.segments_post_movement})
+                }})}
                 compact={true}
                 setKey="key"
                 //listProps={state}
