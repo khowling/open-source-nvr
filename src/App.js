@@ -713,13 +713,13 @@ function App() {
                     minWidth: 38,
                     maxWidth: 38
                     //onRender: (item) => <Text variant='medium' styles={{root: {background: 'yellow'}}} >{item.cameraName}</Text>
-                  },
+                  }/*,
                   {
                     key: "seconds", 
                     fieldName: "seconds",
                     minWidth: 25,
                     maxWidth: 30
-                  }
+                  }*/
                 ].concat(showPlayer ? {
                   name: "Save", 
                   key: "stat",  
