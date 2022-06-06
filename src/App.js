@@ -704,7 +704,7 @@ function App() {
             <DetailsList
 
               isHeaderVisible={false}
-              items={(taggedOnly ? data.movements.filter(m => m.ml && filterIgnoreTags(m.movement.cameraKey, m.movement.ml).length > 0) : data.movements).map(m => { 
+              items={(taggedOnly ? data.movements.filter(({movement}) => movement && filterIgnoreTags(movement.cameraKey, movement.ml).length > 0) : data.movements).map(m => { 
                 const camera =  data.cameras.find(c => c.key === m.movement.cameraKey)
                 return  {key: m.key, ...m.movement, startDate_en_GB: m.startDate_en_GB, cameraName: camera? camera.name: `${m.cacheKey} Not Found`}
               })}
