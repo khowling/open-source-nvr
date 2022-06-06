@@ -547,7 +547,7 @@ function App() {
 
       </Panel>
 
-      <div style={{ "height": "43px", "width": "100%" }} />
+      <div style={{ "height": "34px", "width": "100%" }} />
 
       <Stack horizontal wrap >
 
