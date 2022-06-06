@@ -402,7 +402,7 @@ function App() {
   const currCamera = panel.key === 'edit' && data.cameras && panel.values.key && data.cameras.find(c => c.key === panel.values.key)
 
   return (
-    <main id="mainContent" data-grid="container">
+    <main >
 
       <nav className="header">
         <div className="logo">Home Surveillance</div>
@@ -551,7 +551,7 @@ function App() {
 
       <Stack horizontal wrap >
 
-        
+
         {showPlayer &&
           <Stack.Item styles={{ root: { width: "700px" } }} grow={1}>
             <VideoJS width="640" height="268" options={{
@@ -689,47 +689,48 @@ function App() {
             farItemsGroupAriaLabel="More actions"
           />
           <ThemeProvider theme={appTheme}>
-            <DetailsList
-              styles={{root:{ paddingLeft: 0}}}
-              isHeaderVisible={false}
-              items={(taggedOnly ? data.movements.filter(({movement}) => movement && filterIgnoreTags(movement.cameraKey, movement.ml).length > 0) : data.movements).map(m => { 
-                const camera =  data.cameras.find(c => c.key === m.movement.cameraKey)
-                return  {key: m.key, ...m.movement, startDate_en_GB: m.startDate_en_GB, cameraName: camera? camera.name: `${m.cacheKey} Not Found`}
-              })}
-              compact={true}
-              setKey="key"
-              //listProps={state}
-              columns={[
-                {
-                  key: "startDate_en_GB", 
-                  isRowHeader: true,
-                  fieldName: "startDate_en_GB",
-                  minWidth: 120,
-                  maxWidth: 120
-                },
-                {
-                  key: "cameraName", 
-                  fieldName: "cameraName",
-                  minWidth: 38,
-                  maxWidth: 38
-                  //onRender: (item) => <Text variant='medium' styles={{root: {background: 'yellow'}}} >{item.cameraName}</Text>
-                },
-                {
-                  key: "seconds", 
-                  fieldName: "seconds",
-                  minWidth: 25,
-                  maxWidth: 30
+              <DetailsList
+                styles={{root:{ overflow: "auto", height: "calc(100vh - 40px)"}}}
+                isHeaderVisible={false}
+                items={(taggedOnly ? data.movements.filter(({movement}) => movement && filterIgnoreTags(movement.cameraKey, movement.ml).length > 0) : data.movements).map(m => { 
+                  const camera =  data.cameras.find(c => c.key === m.movement.cameraKey)
+                  return  {key: m.key, ...m.movement, startDate_en_GB: m.startDate_en_GB, cameraName: camera? camera.name: `${m.cacheKey} Not Found`}
+                })}
+                compact={true}
+                setKey="key"
+                //listProps={state}
+                columns={[
+                  {
+                    key: "startDate_en_GB", 
+                    isRowHeader: true,
+                    fieldName: "startDate_en_GB",
+                    minWidth: 120,
+                    maxWidth: 120
+                  },
+                  {
+                    key: "cameraName", 
+                    fieldName: "cameraName",
+                    minWidth: 38,
+                    maxWidth: 38
+                    //onRender: (item) => <Text variant='medium' styles={{root: {background: 'yellow'}}} >{item.cameraName}</Text>
+                  },
+                  {
+                    key: "seconds", 
+                    fieldName: "seconds",
+                    minWidth: 25,
+                    maxWidth: 30
+                  }
+                ].concat(showPlayer ? {
+                  name: "Save", 
+                  key: "stat",  
+                  onRender: renderTags
+                } : [])
                 }
-              ].concat(showPlayer ? {
-                name: "Save", 
-                key: "stat",  
-                onRender: renderTags
-              } : [])
-              }
-              selection={_selection}
-              //selectionMode={SelectionMode.single}
-              //onActiveItemChanged={_onActiveItemChanged}
-            />
+                selection={_selection}
+                //selectionMode={SelectionMode.single}
+                //onActiveItemChanged={_onActiveItemChanged}
+              />
+           
           </ThemeProvider>
         </Stack.Item>
 
