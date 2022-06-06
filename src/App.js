@@ -550,6 +550,8 @@ function App() {
       <div style={{ "height": "43px", "width": "100%" }} />
 
       <Stack horizontal wrap >
+
+        
         {showPlayer &&
           <Stack.Item styles={{ root: { width: "700px" } }} grow={1}>
             <VideoJS width="640" height="268" options={{
@@ -564,7 +566,7 @@ function App() {
           </Stack.Item>
         }
 
-        <Stack.Item styles={showPlayer ? { root: { minWidth: "411px" } } : {}} grow={0}>
+        <Stack.Item styles={showPlayer ? { root: { maxWidth: "420px" } } : {}} grow={1}>
 
           <CommandBar
             items={[
