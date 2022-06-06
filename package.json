@@ -27,6 +27,7 @@
     ]
   },
   "devDependencies": {
+    "@fluentui/azure-themes": "^8.2.41",
     "@fluentui/react": "^8.52.3",
     "@tsconfig/node16": "^1.0.2",
     "@types/koa__router": "^8.0.11",

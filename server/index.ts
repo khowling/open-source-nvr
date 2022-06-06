@@ -191,7 +191,7 @@ async function jobWorker(seq: number, d: JobData): Promise<JobReturn> {
 
         const code = await new Promise((acc, _rej) => {
 
-            var ffmpeg = spawn('/usr/bin/ffmpeg', ['-y', '-ss', '0', '-i', `${c.disk}/${c.folder}/stream${(m.startSegment + 1)}.ts`, '-frames:v', '1', '-q:v', '2', `${c.disk}/${c.folder}/image${d.movement_key}.jpg`], { timeout: 120000 });
+            var ffmpeg = spawn('/usr/bin/ffmpeg', ['-y', '-ss', '0', '-i', `${c.disk}/${c.folder}/stream${(m.startSegment + 1)}.ts`, '-hide_banner', '-loglevel', 'error', '-frames:v', '1', '-q:v', '2', `${c.disk}/${c.folder}/image${d.movement_key}.jpg`], { timeout: 120000 });
             let ff_stdout = '', ff_stderr = '', ff_error = ''
 
             ffmpeg.stdout.on('data', (data: string) => { ff_stdout += data })
@@ -709,7 +709,7 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
                         const { key, value } = data as {key: number, value: MovementEntry}
                             movements.push({
                                 key,
-                                startDate_en_GB: new Intl.DateTimeFormat('en-GB', { /*dateStyle: 'full',*/ timeStyle: 'medium', hour12: true }).format(new Date(value.startDate)),
+                                startDate_en_GB: new Intl.DateTimeFormat('en-GB', { weekday: "short", minute: "2-digit", hour: "2-digit",  hour12: true }).format(new Date(value.startDate)),
                                 movement: value
                             })
                         //}

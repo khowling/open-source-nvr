@@ -2,8 +2,29 @@
 import './App.css';
 import React  from 'react';
 import videojs from 'video.js'
-import { CommandBar, Text, DefaultButton, Dropdown, DetailsList, SelectionMode, Stack, TextField, Slider, TagPicker, Separator, Label, MessageBar, MessageBarType, Checkbox, Selection, PrimaryButton, Panel } from '@fluentui/react'
+import { ThemeProvider, CommandBar, Text, DefaultButton, Dropdown, DetailsList, SelectionMode, Stack, TextField, Slider, TagPicker, Separator, Label, MessageBar, MessageBarType, Checkbox, Selection, PrimaryButton, Panel } from '@fluentui/react'
 import { initializeIcons } from '@fluentui/react/lib/Icons';
+import { createTheme } from '@fluentui/react';
+
+const appTheme = createTheme({
+  defaultFontStyle: { fontWeight: 'regular' },
+  fonts: {
+    small: {
+      fontSize: '14px',
+    },
+    medium: {
+      fontSize: '16px',
+    },
+    large: {
+      fontSize: '16px',
+      fontWeight: 'semibold',
+    },
+    xLarge: {
+      fontSize: '18px',
+      fontWeight: 'semibold',
+    },
+  },
+});
 
 initializeIcons(/* optional base url */);
 
@@ -59,8 +80,8 @@ function App() {
 
   const init_data = { cameras: [], movements: [] }
   const [data, setData] = React.useState(init_data)
-  const [currentCamera, setCurrentCamera] = React.useState(null)
-  const [inputState, setInputState] = React.useState({ current_idx: 'none', allSelected: false, inputs: {} })
+  const [currentPlaying, setCurrentPlaying] = React.useState(null)
+  //const [inputState, setInputState] = React.useState({ current_idx: 'none', allSelected: false, inputs: {} })
   const [taggedOnly, setTaggedOnly] = React.useState(true)
   const [showPlayer, setShowPlayer] = React.useState(true)
   //const [playerReady, setPlayerReady] = React.useState(false)
@@ -83,7 +104,7 @@ function App() {
   };
 
   function getServerData() {
-    setCurrentCamera(null)
+    //setCurrentPlaying(null)
     setData({...init_data, status: 'fetching'})
     fetch(`/api/movements`)
       .then(res => res.json())
@@ -92,9 +113,14 @@ function App() {
           setData({...result, status: 'success'})
           if (!result?.config?.settings?.enable_ml) setTaggedOnly(false)
           console.log (`got refresh, find first streaming enabled camera & play`)
-          const streamingCameras = result?.cameras.filter(c => c.enable_streaming)   
-          if (streamingCameras && streamingCameras.length > 0) {
-            playVideo (streamingCameras[0])
+          const streamingCameras = result?.cameras.filter(c => c.enable_streaming)
+
+          if (currentPlaying && streamingCameras.findIndex(c => c.key === currentPlaying.cKey) >= 0 && (!currentPlaying.mKey || result?.movements.findIndex(m => m.key === currentPlaying.mKey) >= 0)) {
+            console.log (`we can continue playing same before refresh, because camera and/or movement is still valid`)
+          } else {
+            if (streamingCameras && streamingCameras.length > 0) {
+              playVideo (streamingCameras[0].key)
+            }
           }
         },
         // Note: it's important to handle errors here
@@ -109,101 +135,104 @@ function App() {
   React.useEffect(getServerData, [])
 
 
-
-  function _onItemInvoked(m, idx) {
-    setInputState({ ...inputState, inputs: { ...inputState.inputs, [m.key]: { reviewed: false } } })
-  }
-
+  /*
   function _onActiveItemChanged(m, idx, a) {
-    console.log(`_onActiveItemChanged idx=${idx} inputState.current_idx=${inputState.current_idx})  (m.key=${m && m.key}) a=${a}`)
-    if (idx !== inputState.current_idx) {
-      setInputState({ current_idx: idx, current_movement: m, allSelected: inputState.allSelected, inputs: { ...inputState.inputs, [m.key]: { reviewed: true } } })
+    console.log(`_onActiveItemChanged idx=${idx}  (m.key=${m && m.key}) `)
+    console.log(a)
+    //if (idx !== inputState.current_idx) {
+      //setInputState({ current_idx: idx, current_movement: m, allSelected: inputState.allSelected, inputs: { ...inputState.inputs, [m.key]: { reviewed: true } } })
     
-      playVideo(data.cameras.find(c => c.key === m.movement.cameraKey), m.key)
-    }
+      playVideo(m.cameraKey, m.key)
+    //}
   }
-
-  function playVideo(c, movementKey) {
-    console.log (`playVideo c.key=${c.key} movementKey=${movementKey}`)
+*/
+  function playVideo(cKey, mKey) {
+    console.log (`playVideo cameraKey=${cKey} mKey=${mKey}`)
     const mPlayer = playerRef.current
-    if (mPlayer && c) {
+    const camera = cKey && data.cameras.find(c => c.key === cKey)
+    if (cKey && mPlayer && (!currentPlaying || (currentPlaying.cKey !== cKey || currentPlaying.mKey !== mKey))) {
 
-      setCurrentCamera(c.key)
+      setCurrentPlaying({ cKey, mKey})
       mPlayer.src({
-        src: `/video/${movementKey || `live/${c.key}`}/stream.m3u8${movementKey ? `?preseq=${c.segments_prior_to_movement}&postseq=${c.segments_post_movement}` : ''}`,
+        src: `/video/${mKey || `live/${cKey}`}/stream.m3u8${mKey && camera ? `?preseq=${camera.segments_prior_to_movement}&postseq=${camera.segments_post_movement}` : ''}`,
         type: 'application/x-mpegURL'
       })
 
-      if (movementKey) {
-        mPlayer.currentTime(c.segments_prior_to_movement * 2) // 20 seconds into stream (coresponds with 'segments_prior_to_movement')
+      if (mKey && camera) {
+        mPlayer.currentTime(camera.segments_prior_to_movement * 2) // 20 seconds into stream (coresponds with 'segments_prior_to_movement')
       }
       mPlayer.play()
     } else {
-      console.warn(`playVideo : player not ready or no camera`)
+      console.warn(`playVideo : player not ready or cannot find camera, or already playing selected camera/movement`)
     }
   }
 
   function reloadlist() {
-    setInputState({ current_idx: 'none', allSelected: inputState.allSelected, inputs: {} })
+    //setInputState({ current_idx: 'none', allSelected: inputState.allSelected, inputs: {} })
     getServerData()
   }
 
+  
   const _selection = new Selection({
-    //isAllSelected: (e) => {
+    getKey: function (m) { return  m.key },
     onSelectionChanged: function () {
-      console.log(`onSelectionChanged ${_selection.isAllSelected()}, current idx ${inputState.current_idx}`)
-      //setInputState({ ...inputState, allSelected: _selection.isAllSelected() })
-
+      //console.log (`onSelectionChanged: getSelectedIndices()=${JSON.stringify(_selection.getSelectedIndices())}, getSelection()=${JSON.stringify(_selection.getSelection())}`)
+      const selectedItems = _selection.getSelection()
+      if (selectedItems.length > 0) {
+        const {key, cameraKey} = selectedItems[0]
+        playVideo(cameraKey, key)
+      }
     }
   })
 
 
 
-  function recordReview() {
-    console.log(inputState.current_movement)
-    if (/*playerReady && */ inputState.current_movement) {
-      let mPlayer = videojs.getPlayer()
-      console.log(mPlayer.currentTime())
-      const c = data.cameras.find(c => c.key === inputState.current_movement.movement.cameraKey)
-      window.open(`/mp4/${inputState.current_movement.key}${c ? `?preseq=${c.segments_prior_to_movement}&postseq=${c.segments_post_movement}` : ''}`, '_blank').focus()
+  function downloadMovement() {
+    //console.log(inputState.current_movement)
+    //if (/*playerReady && */ inputState.current_movement) {
+      //let mPlayer = videojs.getPlayer()
+      //console.log(mPlayer.currentTime())
+      //const c = data.cameras.find(c => c.key === inputState.current_movement.movement.cameraKey)
+    if (currentPlaying && currentPlaying.cKey && currentPlaying.mKey) {
+      const c = data.cameras.find(c => c.key === currentPlaying.cKey)
+      window.open(`/mp4/${currentPlaying.mKey}${c ? `?preseq=${c.segments_prior_to_movement}&postseq=${c.segments_post_movement}` : ''}`, '_blank').focus()
     }
-
   }
 
-  function filterIgnoreTags(event) {
-    const { movement } = event
-    if (movement && movement.ml && movement.ml.success && Array.isArray(movement.ml.tags) && movement.ml.tags.length > 0) {
-      const { ignore_tags } = data.cameras.find(c => c.key === movement.cameraKey) || {}
+  function filterIgnoreTags(cameraKey, ml) {
+
+    if (ml && ml.success && Array.isArray(ml.tags) && ml.tags.length > 0) {
+      const { ignore_tags } = data.cameras.find(c => c.key === cameraKey) || {}
       if (ignore_tags && Array.isArray(ignore_tags) && ignore_tags.length > 0) {
-        return movement.ml.tags.reduce((a, c) => ignore_tags.includes(c.tag) ? a : a.concat(c), [])
+        return ml.tags.reduce((a, c) => ignore_tags.includes(c.tag) ? a : a.concat(c), [])
       } else {
-        return movement.ml.tags
+        return ml.tags
       }
     }
     return []
   }
 
-  function renderTags(event, idx) {
+  function renderTags(selectedList, idx) {
 
-    const { key, movement } = event
+    const { key, cameraKey, ml, ffmpeg} = selectedList
     const img = `/image/${key}`
 
-    if (movement.ml) {
-      if (movement.ml.success) {
-        const filteredTags = filterIgnoreTags(event)
+    if (ml) {
+      if (ml.success) {
+        const filteredTags = filterIgnoreTags(cameraKey, ml)
         if (filteredTags.length > 0) {
           return filteredTags.map((t, idx) => <div><a key={idx} target="_blank" href={img}><Text variant="mediumPlus" >{t.tag} ({t.probability}); </Text></a></div>)
         } else {
           return <a key={idx} target="_blank" href={img}><Text variant="mediumPlus" >ML Image</Text></a>
         }
       } else {
-        return <Text styles={{ root: {color: 'red'}}} variant="mediumPlus">{movement.ml.code}: {movement.ml.stderr} {movement.ml.error}</Text>
+        return <Text styles={{ root: {color: 'red'}}} variant="mediumPlus">{ml.code}: {ml.stderr} {ml.error}</Text>
       }
-    } else if (movement.ffmpeg) {
-      if (movement.ffmpeg.success) {
+    } else if (ffmpeg) {
+      if (ffmpeg.success) {
         return <a key={idx} target="_blank" href={img}><Text variant="mediumPlus">Image</Text></a>
       } else {
-        return <Text variant="mediumPlus">Error: {movement.ffmpeg.stderr}</Text>
+        return <Text variant="mediumPlus">Error: {ffmpeg.stderr}</Text>
       }
     } else {
       return <Text variant="mediumPlus">please wait..</Text>
@@ -560,18 +589,19 @@ function App() {
             items={[
               {
                 key: 'camera',
-                text: currentCamera ? data.cameras.find(c => c.key === currentCamera).name : 'Live',
+                text: currentPlaying ? data.cameras.find(c => c.key === currentPlaying.cKey)?.name : 'Live',
                 split: true,
                 cacheKey: 'myCacheKey', // changing this key will invalidate this item's cache
                 iconProps: { iconName: 'Webcam2' },
-                onClick: () => playVideo(data.cameras.find(c => c.key === currentCamera)),
+                onClick: () => {
+                  currentPlaying && playVideo(currentPlaying.cKey)
+                },
                 subMenuProps: {
                   items: data.cameras.filter(c => c.enable_streaming).map(c => { return {
                       key: c.key,
                       text: c.name,
                       iconProps: { iconName: 'FrontCamera' },
-                      ['data-automation-id']: 'newEmailButton', // optional
-                      onClick: () => playVideo(c)
+                      onClick: () => playVideo(c.key)
                     }})
                 }
               },
@@ -586,7 +616,7 @@ function App() {
                 key: 'download',
                 text: 'Download',
                 iconProps: { iconName: 'Download' },
-                onClick: recordReview,
+                onClick: downloadMovement,
               },
               {
                 key: 'filter',
@@ -670,41 +700,55 @@ function App() {
             primaryGroupAriaLabel="Email actions"
             farItemsGroupAriaLabel="More actions"
           />
+          <ThemeProvider theme={appTheme}>
+            <DetailsList
 
-          <DetailsList
-            isHeaderVisible={false}
-            items={taggedOnly ? data.movements.filter(m => filterIgnoreTags(m).length > 0) : data.movements}
-            compact={true}
-            //listProps={state}
-            columns={[
-              {
-                name: "Reviewed Movement (seconds)", key: "start", minWidth: 200, ...(showPlayer && { maxWidth: 200 }), onRender: (m, idx) => {
-                  const {movement, startDate_en_GB} = m,
-                        c = data.cameras.find(c => c.key === movement.cameraKey)
-                  return (
-                    <div>
-                      <Text key={idx + 1} variant="mediumPlus">{startDate_en_GB} ({movement.seconds}s)    {c ? <Text>{c.name}</Text>: <Text>Missing</Text>}</Text>
-                      {!showPlayer && <div key={idx + 2}><img src={`/image/${m.key}`} style={{ maxWidth: "100%" }} /></div>}
-                    </div>
-                  )
+              isHeaderVisible={false}
+              items={(taggedOnly ? data.movements.filter(m => m.ml && filterIgnoreTags(m.cameraKey, m.ml).length > 0) : data.movements).map(m => { 
+                const camera =  data.cameras.find(c => c.key === m.movement.cameraKey)
+                return  {key: m.key, ...m.movement, startDate_en_GB: m.startDate_en_GB, cameraName: camera? camera.name: `${m.cacheKey} Not Found`}
+              })}
+              compact={true}
+              setKey="key"
+              //listProps={state}
+              columns={[
+                {
+                  key: "startDate_en_GB", 
+                  isRowHeader: true,
+                  fieldName: "startDate_en_GB",
+                  minWidth: 65,
+                  maxWidth: 120
+                },
+                {
+                  key: "cameraName", 
+                  fieldName: "cameraName",
+                  minWidth: 38,
+                  maxWidth: 38
+                  //onRender: (item) => <Text variant='medium' styles={{root: {background: 'yellow'}}} >{item.cameraName}</Text>
+                },
+                {
+                  key: "seconds", 
+                  fieldName: "seconds",
+                  minWidth: 25,
+                  maxWidth: 30
                 }
-
+              ].concat(showPlayer ? {
+                name: "Save", 
+                key: "stat",  
+                onRender: renderTags
+              } : [])
               }
-            ].concat(showPlayer ? {
-              name: "Save", key: "stat", minWidth: 80, maxWidth: 80, onRender: renderTags
-            } : [])
-            }
-            selectionMode={SelectionMode.single}
-            onActiveItemChanged={_onActiveItemChanged}
-            onItemInvoked={_onItemInvoked}
-          />
-
+              selection={_selection}
+              //selectionMode={SelectionMode.single}
+              //onActiveItemChanged={_onActiveItemChanged}
+            />
+          </ThemeProvider>
         </Stack.Item>
 
 
       </Stack>
     </main >
-  );
+  )
 }
 
 export default App;
