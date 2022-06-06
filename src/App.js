@@ -690,7 +690,7 @@ function App() {
           />
           <ThemeProvider theme={appTheme}>
               <DetailsList
-                styles={{root:{ overflow: "auto", height: "calc(100vh - 40px)"}}}
+                styles={{root:{ overflow: "auto", width: "100%", height: "calc(100vh - 40px)"}}}
                 isHeaderVisible={false}
                 items={(taggedOnly ? data.movements.filter(({movement}) => movement && filterIgnoreTags(movement.cameraKey, movement.ml).length > 0) : data.movements).map(m => { 
                   const camera =  data.cameras.find(c => c.key === m.movement.cameraKey)
