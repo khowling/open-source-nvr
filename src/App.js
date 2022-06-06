@@ -221,7 +221,7 @@ function App() {
       if (ml.success) {
         const filteredTags = filterIgnoreTags(cameraKey, ml)
         if (filteredTags.length > 0) {
-          return filteredTags.map((t, idx) => <div><a key={idx} target="_blank" href={img}><Text variant="mediumPlus" >{t.tag} ({t.probability}); </Text></a></div>)
+          return <div><a key={idx} target="_blank" href={img}>{filteredTags.map((t, idx) => <Text variant="mediumPlus" >{t.tag} ({t.probability}); </Text>)}</a></div>
         } else {
           return <a key={idx} target="_blank" href={img}><Text variant="mediumPlus" >ML Image</Text></a>
         }
@@ -716,7 +716,7 @@ function App() {
                   key: "startDate_en_GB", 
                   isRowHeader: true,
                   fieldName: "startDate_en_GB",
-                  minWidth: 65,
+                  minWidth: 120,
                   maxWidth: 120
                 },
                 {
