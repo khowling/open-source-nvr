@@ -137,6 +137,7 @@ async function jobWorker(seq: number, d: JobData): Promise<JobReturn> {
     if (d.task === JobTask.ML) {
 
         const m: MovementEntry = await movementdb.get(d.movement_key)
+        let new_movement: MovementEntry = {...m}
         const c = cameraCache[m.cameraKey].ce
         const input = `${c.disk}/${c.folder}/image${d.movement_key}.jpg`
         await new Promise((acc, _rej) => {
@@ -148,34 +149,33 @@ async function jobWorker(seq: number, d: JobData): Promise<JobReturn> {
             ml_task.on('error', async (error: Error) => { ml_error = `${error.name}: ${error.message}` })
 
             // The 'close' event will always emit after 'exit' was already emitted, or 'error' if the child failed to spawn.
-            ml_task.on('close', async (code: number) => {
-                const ml: MLData = { success: code === 0, code, stderr: ml_stderr, stdout: ml_stdout, error: ml_error, tags: [] }
-                if (code === 0) {
+            ml_task.on('close', async (ml_code: number) => {
+                const ml_succcess = ml_code === 0
+                const ml: MLData = { success: ml_succcess, code: ml_code, ...(!ml_succcess && {stderr: ml_stderr}), stdout: ml_stdout, error: ml_error, tags: [] }
+                new_movement = {...new_movement, ml}
+
+                if (ml_succcess) {
                     let mltags = ml_stdout.match(/([\w]+): ([\d]+)%/g)
-                    if (mltags) {
+                    const tags = mltags? mltags.map(d => { const i = d.indexOf(': '); return { tag: d.substr(0, i), probability: parseInt(d.substr(i + 2, d.length - i - 3)) } }) : []
+                    new_movement = {...new_movement, ml: {...ml, tags}}
+                    await movementdb.put(d.movement_key, new_movement)
 
-                        ml.tags = mltags.map(d => { const i = d.indexOf(': '); return { tag: d.substr(0, i), probability: parseInt(d.substr(i + 2, d.length - i - 3)) } })
-                        await movementdb.put(d.movement_key, { ...m, ml } as MovementEntry)
+                    let mv_stdout = '', mv_stderr = '', mv_error = ''
+                    const mv_task = spawn('/usr/bin/mv', [`${settingsCache.settings.darknetDir}/predictions.jpg`, `${c.disk}/${c.folder}/mlimage${d.movement_key}.jpg`], { timeout: 5000 })
 
-                        let mv_stdout = '', mv_stderr = '', mv_error = ''
-                        const mv_task = spawn('/usr/bin/mv', [`${settingsCache.settings.darknetDir}/predictions.jpg`, `${c.disk}/${c.folder}/mlimage${d.movement_key}.jpg`], { timeout: 5000 })
+                    mv_task.stdout.on('data', (data: string) => { mv_stdout += data })
+                    mv_task.stderr.on('data', (data: string) => { mv_stderr += data })
+                    mv_task.on('error', async (error: Error) => { mv_error = `${error.name}: ${error.message}` })
 
-                        mv_task.stdout.on('data', (data: string) => { mv_stdout += data })
-                        mv_task.stderr.on('data', (data: string) => { mv_stderr += data })
-                        mv_task.on('error', async (error: Error) => { mv_error = `${error.name}: ${error.message}` })
-
-                        mv_task.on('close', async (code: number) => {
-                            await movementdb.put(d.movement_key, { ...m, ml, ml_movejpg: { success: code === 0, stderr: mv_stderr, stdout: mv_stdout, error: mv_error } as SpawnData })
-                            acc(code)
-                        })
-                    } else {
-                        await movementdb.put(d.movement_key, { ...m, ml })
-                        acc(code)
-                    }
+                    mv_task.on('close', async (mv_code: number) => {
+                        const mv_succcess = mv_code === 0
+                        await movementdb.put(d.movement_key, { ...new_movement, ml_movejpg: { success: mv_succcess, ...(!mv_succcess && {stderr: mv_stderr, stdout: mv_stdout, error: mv_error }) }})
+                        acc(mv_code)
+                    })
 
                 } else {
-                    await movementdb.put(d.movement_key, { ...m, ml })
-                    acc(code)
+                    await movementdb.put(d.movement_key, new_movement)
+                    acc(ml_code)
                 }
 
             });
@@ -198,12 +198,13 @@ async function jobWorker(seq: number, d: JobData): Promise<JobReturn> {
             ffmpeg.stderr.on('data', (data: string) => { ff_stderr += data })
             ffmpeg.on('error', async (error: Error) => { ff_error = `${error.name}: ${error.message}` })
 
-            ffmpeg.on('close', async (code: number) => {
-                await movementdb.put(d.movement_key, { ...m, ffmpeg: { success: code === 0, stderr: ff_stderr, stdout: ff_stdout, error: ff_error } as SpawnData })
-                if (code === 0 && settingsCache.settings.enable_ml) {
+            ffmpeg.on('close', async (ff_code: number) => {
+                const ff_succcess = ff_code === 0
+                await movementdb.put(d.movement_key, { ...m, ffmpeg: { success: ff_succcess, ...(!ff_succcess && {stderr: ff_stderr, stdout: ff_stdout, error: ff_error })} })
+                if (ff_succcess && settingsCache.settings.enable_ml) {
                     newJob = { task: JobTask.ML, movement_key: d.movement_key }
                 }
-                acc(code)
+                acc(ff_code)
             });
         })
     }

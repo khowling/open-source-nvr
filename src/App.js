@@ -135,17 +135,6 @@ function App() {
   React.useEffect(getServerData, [])
 
 
-  /*
-  function _onActiveItemChanged(m, idx, a) {
-    console.log(`_onActiveItemChanged idx=${idx}  (m.key=${m && m.key}) `)
-    console.log(a)
-    //if (idx !== inputState.current_idx) {
-      //setInputState({ current_idx: idx, current_movement: m, allSelected: inputState.allSelected, inputs: { ...inputState.inputs, [m.key]: { reviewed: true } } })
-    
-      playVideo(m.cameraKey, m.key)
-    //}
-  }
-*/
   function playVideo(cKey, mKey) {
     console.log (`playVideo cameraKey=${cKey} mKey=${mKey}`)
     const mPlayer = playerRef.current
@@ -167,11 +156,6 @@ function App() {
     }
   }
 
-  function reloadlist() {
-    //setInputState({ current_idx: 'none', allSelected: inputState.allSelected, inputs: {} })
-    getServerData()
-  }
-
   
   const _selection = new Selection({
     getKey: function (m) { return  m.key },
@@ -185,22 +169,15 @@ function App() {
     }
   })
 
-
-
   function downloadMovement() {
-    //console.log(inputState.current_movement)
-    //if (/*playerReady && */ inputState.current_movement) {
-      //let mPlayer = videojs.getPlayer()
-      //console.log(mPlayer.currentTime())
-      //const c = data.cameras.find(c => c.key === inputState.current_movement.movement.cameraKey)
     if (currentPlaying && currentPlaying.cKey && currentPlaying.mKey) {
       const c = data.cameras.find(c => c.key === currentPlaying.cKey)
       window.open(`/mp4/${currentPlaying.mKey}${c ? `?preseq=${c.segments_prior_to_movement}&postseq=${c.segments_post_movement}` : ''}`, '_blank').focus()
     }
   }
 
-  function filterIgnoreTags(cameraKey, ml) {
 
+  function filterIgnoreTags(cameraKey, ml) {
     if (ml && ml.success && Array.isArray(ml.tags) && ml.tags.length > 0) {
       const { ignore_tags } = data.cameras.find(c => c.key === cameraKey) || {}
       if (ignore_tags && Array.isArray(ignore_tags) && ignore_tags.length > 0) {
@@ -587,7 +564,7 @@ function App() {
           </Stack.Item>
         }
 
-        <Stack.Item styles={showPlayer ? { root: { width: "300px" } } : {}} grow={1}>
+        <Stack.Item styles={showPlayer ? { root: { minWidth: "411px" } } : {}} grow={0}>
 
           <CommandBar
             items={[
@@ -606,7 +583,12 @@ function App() {
                       text: c.name,
                       iconProps: { iconName: 'FrontCamera' },
                       onClick: () => playVideo(c.key)
-                    }})
+                    }})/*.concat([{
+                      key: 'all',
+                      text: 'All',
+                      iconProps: { iconName: 'FrontCamera' },
+                      onClick: () => playVideo('all')
+                    }])*/
                 }
               },
               {
@@ -614,7 +596,7 @@ function App() {
                 text: 'Refresh',
                 checked: data.status === "fetching",
                 iconProps: { iconName: 'Refresh' },
-                onClick: reloadlist,
+                onClick: getServerData,
               },
               {
                 key: 'download',
