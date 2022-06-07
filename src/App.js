@@ -390,7 +390,9 @@ function App() {
                 }})}
                 compact={true}
                 setKey="key"
-                //listProps={state}
+                onShouldVirtualize={() => {
+                  return false;
+                }}
                 columns={[
                   {
                     key: "startDate_en_GB", 
