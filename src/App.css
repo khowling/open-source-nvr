@@ -1,3 +1,20 @@
+/* If player & list cannot fit on same row: (player: "700px") (list: "420px") */
+
+.scrollMe { 
+  overflow: auto;
+  width: 100vw;
+  height: calc(((100vw - 420px) * 0.75) - 43px)
+}
+
+@media screen and (max-width: 1120px) {
+  .scrollMe { 
+    overflow: auto;
+    width: 100vw;
+    height: calc(100vh - 80px - (100vw * 0.75))
+  }
+}
+
+
 .App {
   text-align: center;
 }
