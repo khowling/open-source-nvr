@@ -10,7 +10,7 @@ import Router from '@koa/router'
 import bodyParser from 'koa-bodyparser'
 import level from 'level'
 import sub from 'subleveldown'
-import { diskCheck, DiskCheckReturn } from './diskcheck.js'
+import { catalogVideo, diskCheck, DiskCheckReturn } from './diskcheck.js'
 
 import { JobManager, JobStatus, JobReturn, JobData, JobTask } from './jobmanager.js'
 
@@ -26,7 +26,7 @@ interface MovementEntry {
     cameraKey: string;
     startDate: number;
     startSegment: number;
-    lhs_seg_duration_seq: number;
+    lhs_seg_duration_seq?: number;
     seconds: number;
     consecutivesecondswithout: number;
     ml?: MLData;
@@ -481,6 +481,48 @@ async function init_web() {
             }
 
         })
+        .get('/video/:startSegment/:seconds/:cameraKey/:file', async (ctx, _next) => {
+            const 
+                startSegment = ctx.params['startSegment'],
+                seconds = ctx.params['seconds'],
+                cameraKey = ctx.params['cameraKey'],
+                file = ctx.params['file']
+
+            const ce: CameraEntry = cameraCache[cameraKey].ce
+            
+            if (file.endsWith('.m3u8')) {
+                const segmentInt = parseInt(startSegment)//.getTime()
+                const secondsInt = parseInt(seconds)//.getTime()
+                if (isNaN(segmentInt) || isNaN(secondsInt) ) {
+                    ctx.throw(400, `message=${startSegment} or ${seconds} not valid values`)
+                } else {
+                    //const startSegment = segment // (d / 1000 | 0) - 1600000000
+                    const preseq: number = ctx.query['preseq'] ? parseInt(ctx.query['preseq'] as any) : 0
+                    const postseq: number = ctx.query['postseq'] ? parseInt(ctx.query['postseq'] as any) : 0
+
+                    const body = `#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:2
+` + [...Array(Math.round(secondsInt / 2) + preseq + postseq).keys()].map(n => `#EXTINF:2.000000,
+stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n"
+    
+                    ctx.body = body
+                }
+            } else if (file.endsWith('.ts')) {
+                const serve = `${ce.disk}/${ce.folder}/${file}`
+                //console.log(`serving : ${serve}`)
+                try {
+                    const { size } = await fs.stat(serve)
+                    ctx.body = createReadStream(serve, { encoding: undefined }).on('error', ctx.onerror)
+                } catch (e) {
+                    const err : Error = e as Error
+                    ctx.throw(400, `message=${err.message}`)
+                }
+            } else {
+                ctx.throw(400, `unknown file=${file}`)
+            }
+        })
+        /*
         .get('/video/:mid/:file', async (ctx, _next) => {
             const movement = ctx.params['mid'],
                   file = ctx.params['file']
@@ -523,7 +565,47 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
                 ctx.throw(400, `unknown file=${file}`)
             }
 
-        }).get('/mp4/:movement', async (ctx, _next) => {
+        })
+        */
+        .get('/mp4/:startSegment/:seconds/:cameraKey', async (ctx, _next) => {
+            const 
+                startSegment = ctx.params['startSegment'],
+                seconds = ctx.params['seconds'],
+                cameraKey = ctx.params['cameraKey']
+
+            try {
+                const ce: CameraEntry = await cameraCache[cameraKey].ce
+
+                const preseq: number = ctx.query['preseq'] ? parseInt(ctx.query['preseq'] as any) : 0
+                const postseq: number = ctx.query['postseq'] ? parseInt(ctx.query['postseq'] as any) : 0
+                const serve = `${ce.disk}/${ce.folder}/save${startSegment}-${seconds}.mp4`
+
+                await new Promise(async (res, rej) => {
+                    const mv_task = spawn('/usr/bin/ffmpeg', ['-y', '-i', `http://localhost:${PORT}/video/${startSegment}/${seconds}/${cameraKey}/stream.m3u8${preseq > 0 || postseq > 0 ? `?preseq=${preseq}&postseq=${postseq}` : ''}`, '-c', 'copy', serve], { timeout: 50000 })
+                    let stdout = '', stderr = '', myerror = ''
+                    mv_task.stdout.on('data', (data: string) => { stdout += data })
+                    mv_task.stderr.on('data', (data: string) => { stderr += data })
+                    mv_task.on('error', async (error: Error) => { myerror = `${error.name}: ${error.message}` })
+
+                    mv_task.on('close', async (code: number) => {
+                        if (code === 0) {
+                            res(0)
+                        } else {
+                            rej(new Error(`ffmpeg stderr=${stderr} error=${myerror}`))
+                        }
+                    })
+                })
+
+                ctx.set('Content-Type', 'video/mp4')
+                ctx.body = createReadStream(serve, { encoding: undefined }).on('error', ctx.onerror)
+
+            } catch (e) {
+                ctx.throw(`error mp4 gen error=${e}`)
+            }
+
+        })
+        /*
+        .get('/mp4/:movement', async (ctx, _next) => {
             const movement = ctx.params['movement']
 
             const preseq: number = ctx.query['preseq'] ? parseInt(ctx.query['preseq'] as any) : -1
@@ -558,7 +640,10 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
                 ctx.throw(`error mp4 gen error=${e}`)
             }
 
-        }).get('/mp4old/:movement', async (ctx, _next) => {
+        })
+        */
+        /*
+        .get('/mp4old/:movement', async (ctx, _next) => {
             console.log(`serving video: ${ctx.params[0]}`)
             const filepath = `./test_video/${ctx.params[0]}`
             let streamoptions: any = { encoding: null }
@@ -568,7 +653,7 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
 
                 const [range_start, range_end] = ctx.headers.range.replace(/bytes=/, "").split("-"),
                     start = parseInt(range_start, 10),
-                    chunklength = range_end ? parseInt(range_end, 10) - start + 1 : Math.min(1024 * 1024 * 32 /* 32KB default */, size - start /* whats left in the file */),
+                    chunklength = range_end ? parseInt(range_end, 10) - start + 1 : Math.min(1024 * 1024 * 32 / * 32KB default * /, size - start / * whats left in the file  * /),
                     end = start + chunklength - 1
 
                 console.log(`serving video request range: ${range_start} -> ${range_end},  providing ${start} -> ${end} / ${size}`)
@@ -582,7 +667,9 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
             }
             ctx.body = createReadStream(filepath, streamoptions).on('error', ctx.onerror)
 
-        }).get(['/(.*)'], async (ctx, _next) => {
+        })
+        */
+        .get(['/(.*)'], async (ctx, _next) => {
             const path = ctx.params[0]
             console.log(`serving static: ${path}`)
             await send(ctx, !path || path === "video_only" ? '/index.html' : path, { root: process.env['WEBPATH'] || './build' })
@@ -679,6 +766,7 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
             } else {
                 ctx.status = 500
             }
+            /*
         }).post('/movements/:id', async (ctx, _next) => {
             const cid = ctx.params['camera']
             if (ctx.request.body && ctx.request.body.length > 0) {
@@ -687,8 +775,9 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
                 const succ = await movementdb.batch(cmd as any)
                 ctx.status = 201
             }
+            */
         }).get('/movements', async (ctx, _next) => {
-
+            const mode = ctx.query['mode'] 
             const cameras: CameraEntryClient[] = Object.keys(cameraCache).filter(c => !cameraCache[c].ce.delete).map((key) => {
 
                 const c = cameraCache[key]
@@ -702,21 +791,58 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
 
             ctx.response.set("content-type", "application/json");
             ctx.body = await new Promise(async (res, _rej) => {
+
                 let movements: MovementToClient[] = []
 
-                // Everything in movementdb, with key time (movement start date) greater than the creation date of the oldest sequence file on disk
-                const feed = movementdb.createReadStream({ reverse: true /*, gt: oldestctimeMs > 0 ? (oldestctimeMs / 1000 | 0) - 1600000000 : 0 */})
-                    .on('data', (data) => {
-                        const { key, value } = data as {key: number, value: MovementEntry}
+                if (mode === "Time") {
+
+                    for (let c of cameras) {
+                        const listfiles = await catalogVideo(`${c.disk}/${c.folder}`)
+                        for (let i = listfiles.length - 1; i >= 0; i--) {
+                            const segs = listfiles[i]
                             movements.push({
-                                key,
-                                startDate_en_GB: new Intl.DateTimeFormat('en-GB', { weekday: "short", minute: "2-digit", hour: "2-digit",  hour12: true }).format(new Date(value.startDate)),
-                                movement: value
+                                key: parseInt(c.key.slice(1) + segs.segmentStart),
+                                startDate_en_GB: segs.startDate_en_GB,
+                                movement: {
+                                    cameraKey: c.key,
+                                    startDate: segs.ctimeMs,
+                                    startSegment: segs.segmentStart,
+                                    seconds: segs.seconds,
+                                    consecutivesecondswithout: 0
+                                }
                             })
-                        //}
-                    }).on('end', () => {
-                        res({ config: settingsCache, cameras, movements })
-                    })
+                        }
+                    }
+                    res({ config: settingsCache, cameras, movements })
+                } else {
+                    
+
+                    // Everything in movementdb, with key time (movement start date) greater than the creation date of the oldest sequence file on disk
+                    const feed = movementdb.createReadStream({ reverse: true /*, gt: oldestctimeMs > 0 ? (oldestctimeMs / 1000 | 0) - 1600000000 : 0 */})
+                        .on('data', (data) => {
+                            const { key, value } = data as {key: number, value: MovementEntry}
+                            const { ml, cameraKey } = value
+
+                            let tags = ml?.success ? ml.tags : null
+                            if (mode === 'Filtered') {
+                                if (tags && Array.isArray(tags) && tags.length > 0) {
+                                    const { ignore_tags } = cameraCache[cameraKey]?.ce || {}
+                                    if (ignore_tags && Array.isArray(ignore_tags) && ignore_tags.length > 0) {
+                                        tags = tags.reduce((a, c) => ignore_tags.includes(c.tag) ? a : a.concat(c), [])
+                                    } 
+                                }
+                            }
+                            if (mode === 'Movement' || (mode === 'Filtered' && tags?.length >0)) {
+                                movements.push({
+                                    key,
+                                    startDate_en_GB: new Intl.DateTimeFormat('en-GB', { weekday: "short", minute: "2-digit", hour: "2-digit",  hour12: true }).format(new Date(value.startDate)),
+                                    movement: {...value, ...(tags &&  { ml: { ...value.ml, tags}})}
+                                })
+                            }
+                        }).on('end', () => {
+                            res({ config: settingsCache, cameras, movements })
+                        })
+                }
             })
 
         })

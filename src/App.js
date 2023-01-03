@@ -1,6 +1,6 @@
 //import logo from './logo.svg';
 import './App.css';
-import React  from 'react';
+import React, { useEffect }  from 'react';
 import videojs from 'video.js'
 import { ThemeProvider, CommandBar, Text, DetailsList, Stack, Selection } from '@fluentui/react'
 import { initializeIcons } from '@fluentui/react/lib/Icons';
@@ -83,14 +83,16 @@ function App() {
   const [data, setData] = React.useState(init_data)
   const [currentPlaying, setCurrentPlaying] = React.useState(null)
   //const [inputState, setInputState] = React.useState({ current_idx: 'none', allSelected: false, inputs: {} })
-  const [taggedOnly, setTaggedOnly] = React.useState(true)
+  const [mode, setMode] = React.useState('Filtered')
   const [showPlayer, setShowPlayer] = React.useState(true)
   //const [playerReady, setPlayerReady] = React.useState(false)
 
 
-  console.log ("data: ", data)
+
   const playerRef = React.useRef(null);
-  
+
+  console.log ("mode: ", mode)
+
   const handlePlayerReady = (player) => {
     playerRef.current = player;
 
@@ -106,13 +108,14 @@ function App() {
 
   function getServerData() {
     //setCurrentPlaying(null)
+    console.log ('getServerData, mode=', mode)
     setData({...init_data, status: 'fetching'})
-    fetch(`/api/movements`)
+    fetch(`/api/movements?mode=${mode}`)
       .then(res => res.json())
       .then(
         (result) => {
           setData({...result, status: 'success'})
-          if (!result?.config?.settings?.enable_ml) setTaggedOnly(false)
+
           console.log (`got refresh, find first streaming enabled camera & play`)
           const streamingCameras = result?.cameras.filter(c => c.enable_streaming)
 
@@ -133,11 +136,12 @@ function App() {
         }
       )
   }
-  React.useEffect(getServerData, [])
 
+  
+  useEffect(getServerData, [mode])
 
-  function playVideo(cKey, mKey, segments_prior_to_movement, segments_post_movement) {
-    console.log (`playVideo cameraKey=${cKey} mKey=${mKey}`)
+  function playVideo(cKey, mKey, mStartSegment, mSeconds, segments_prior_to_movement, segments_post_movement) {
+    console.log (`playVideo mode=${mode} cameraKey=${cKey} mKey=${mKey}`)
     const mPlayer = playerRef.current
     //console.log ("playVideo data: ", data)
     //const camera = cKey && data.cameras.find(c => c.key === cKey)
@@ -145,7 +149,7 @@ function App() {
 
       setCurrentPlaying({ cKey, mKey})
       mPlayer.src({
-        src: `/video/${mKey || `live/${cKey}`}/stream.m3u8${mKey && segments_prior_to_movement ? `?preseq=${segments_prior_to_movement}&postseq=${segments_post_movement}` : ''}`,
+        src: `/video/${mKey ? `${mStartSegment}/${mSeconds}` : 'live' }/${cKey}/stream.m3u8${(mKey && segments_prior_to_movement) ? `?preseq=${segments_prior_to_movement}&postseq=${segments_post_movement}` : ''}`,
         type: 'application/x-mpegURL'
       })
 
@@ -165,8 +169,8 @@ function App() {
       //console.log (`onSelectionChanged: getSelectedIndices()=${JSON.stringify(_selection.getSelectedIndices())}, getSelection()=${JSON.stringify(_selection.getSelection())}`)
       const selectedItems = _selection.getSelection()
       if (selectedItems.length > 0) {
-        const {key, cameraKey, segments_prior_to_movement, segments_post_movement} = selectedItems[0]
-        playVideo(cameraKey, key, segments_prior_to_movement, segments_post_movement)
+        const {key, cameraKey, startSegment, seconds, segments_prior_to_movement, segments_post_movement} = selectedItems[0]
+        playVideo(cameraKey, key, startSegment, seconds, segments_prior_to_movement, segments_post_movement)
       }
     }
   })
@@ -174,11 +178,12 @@ function App() {
   function downloadMovement() {
     if (currentPlaying && currentPlaying.cKey && currentPlaying.mKey) {
       const c = data.cameras.find(c => c.key === currentPlaying.cKey)
-      window.open(`/mp4/${currentPlaying.mKey}${c ? `?preseq=${c.segments_prior_to_movement}&postseq=${c.segments_post_movement}` : ''}`, '_blank').focus()
+      const m = data.movements.find(m => m.key === currentPlaying.mKey)
+      window.open(`/mp4/${m.movement.startSegment}/${m.movement.seconds}/${m.movement.cameraKey}${(c && mode !== 'Time') ? `?preseq=${c.segments_prior_to_movement}&postseq=${c.segments_post_movement}` : ''}`, '_blank').focus()
     }
   }
 
-
+/*
   function filterIgnoreTags(cameraKey, ml) {
     if (ml && ml.success && Array.isArray(ml.tags) && ml.tags.length > 0) {
       const { ignore_tags } = data.cameras.find(c => c.key === cameraKey) || {}
@@ -190,7 +195,7 @@ function App() {
     }
     return []
   }
-
+*/
   function renderTags(selectedList, idx) {
 
     if (false) {
@@ -202,9 +207,9 @@ function App() {
 
     if (ml) {
       if (ml.success) {
-        const filteredTags = filterIgnoreTags(cameraKey, ml)
-        if (filteredTags.length > 0) {
-          return <a target="_blank" href={img}><Stack>{filteredTags.map((t, idx) => <Text key={idx} variant="mediumPlus" >{t.tag} ({t.probability})</Text>)}</Stack></a>
+        //const filteredTags = filterIgnoreTags(cameraKey, ml)
+        if (ml.tags.length > 0) {
+          return <a target="_blank" href={img}><Stack>{ml.tags.map((t, idx) => <Text key={idx} variant="mediumPlus" >{t.tag} ({t.probability})</Text>)}</Stack></a>
         } else {
           return <a target="_blank" href={img}><Text variant="mediumPlus" >ML Image</Text></a>
         }
@@ -284,6 +289,30 @@ function App() {
                 }
               },
               {
+                key: 'mode',
+                text: mode,
+                iconProps: { iconName: 'Filter' },
+                subMenuProps: {
+                  items: [
+                    {
+                      key: 'movement',
+                      text: 'Movement',
+                      onClick: () => setMode ('Movement'),
+                    },
+                    {
+                      key: 'filtered',
+                      text: 'Filtered',
+                      onClick: () => setMode ('Filtered'),
+                    },
+                    {
+                      key: 'time',
+                      text: 'Time',
+                      onClick: () => setMode ('Time'),
+                    }
+                  ]
+                }
+              },
+              {
                 key: 'refresh',
                 text: 'Refresh',
                 checked: data.status === "fetching",
@@ -295,14 +324,7 @@ function App() {
                 text: 'Download',
                 iconProps: { iconName: 'Download' },
                 onClick: downloadMovement,
-              },
-              {
-                key: 'filter',
-                text: 'Filter',
-                iconProps: { iconName: taggedOnly? 'Filter': 'ClearFilter' },
-                checked: taggedOnly,
-                onClick: () => setTaggedOnly(!taggedOnly)
-              },
+              }
             ]}
             farItems={[{
               key: 'tile',
@@ -382,11 +404,17 @@ function App() {
               <DetailsList
                 className="scrollMe"
                 isHeaderVisible={false}
-                items={(taggedOnly ? data.movements.filter(({movement}) => movement && filterIgnoreTags(movement.cameraKey, movement.ml).length > 0) : data.movements).map(m => { 
+                items={data.movements.map(m => { 
                   const camera =  data.cameras.find(c => c.key === m.movement.cameraKey)
-                  return  {key: m.key, ...m.movement, 
+                  return  {
+                    key: m.key,
+                    ...m.movement, 
                     startDate_en_GB: m.startDate_en_GB, 
-                    ...(camera && { cameraName: camera.name, segments_prior_to_movement: camera.segments_prior_to_movement, segments_post_movement: camera.segments_post_movement})
+                    ...(camera && { 
+                      cameraName: camera.name, 
+                      segments_prior_to_movement: mode === "Time" ? 0: camera.segments_prior_to_movement, 
+                      segments_post_movement: mode === "Time" ? 0: camera.segments_post_movement
+                    })
                 }})}
                 compact={true}
                 setKey="key"
@@ -414,7 +442,7 @@ function App() {
                     minWidth: 25,
                     maxWidth: 30
                   }*/
-                ].concat(showPlayer ? {
+                ].concat(mode !== "Time" && showPlayer ? {
                   name: "Save", 
                   key: "stat",  
                   onRender: renderTags

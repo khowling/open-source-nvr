@@ -165,3 +165,50 @@ export async function diskCheck(rootFolder: string, cameraFolders: Array<string>
         }
     
 }
+
+export async function catalogVideo (cameraFolder: string): Promise<Array<{ctimeMs: number, startDate_en_GB: string, segmentStart: number, seqmentEnd: number, seconds: number}>> {
+
+    const re = new RegExp(`stream([\\d]+).ts`, 'g');
+
+    let flist : Array<[size: number, filename: string]>, 
+        flist_result : Array<{ctimeMs: number, startDate_en_GB: string, segmentStart: number, seqmentEnd: number, seconds: number}> = [],
+        lastSeq,
+        currentRes = null
+
+
+
+        const stats = await stat(cameraFolder)
+        if (!stats.isDirectory()) {
+            throw new Error(`${cameraFolder} is not a directory`)
+        }
+
+        flist = (await lsOrderTime(cameraFolder)).filter(([,f]) => f.match(/(\.ts)$/))
+
+        for (let idx = 0; idx < flist.length; idx++) {
+
+            const [,filename] = flist[idx]
+            const currentSeg = parseInt([...filename.matchAll(re)][0][1])
+
+            if (currentRes) {
+                // If continuation of a series, and we are less than 1hour in length, and we are not on the last file
+                if (currentSeg === lastSeq+1 && ((currentSeg - currentRes.segmentStart)+1) <= ((60*60)/2) && (idx+1) < flist.length) {// got a continuation sequence that is under 30mins long
+                    lastSeq = currentSeg
+                } else { // must be new sequence, safe old, and start a new
+                    flist_result = flist_result.concat({...currentRes, seqmentEnd: lastSeq, seconds: ((lastSeq - currentRes.segmentStart) + 1)*2})
+                    currentRes = null
+                }
+            }
+
+            if (!currentRes) {
+                
+                const ctimeMs = (await fs.stat(`${cameraFolder}/${filename}`)).ctimeMs
+                currentRes = {
+                    ctimeMs,
+                    startDate_en_GB: new Intl.DateTimeFormat('en-GB', { weekday: "short", minute: "2-digit", hour: "2-digit",  hour12: true }).format(new Date(ctimeMs)),
+                    segmentStart: currentSeg
+                }
+                lastSeq = currentSeg
+            }
+        }
+        return flist_result
+}
