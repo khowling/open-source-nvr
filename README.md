@@ -94,11 +94,11 @@ Create a executable `web.sh` file containing the following (the paths need to be
 WEBPATH="/home/<user>/open-source-nvr/build" DBPATH="/home/<user>/open-source-nvr/mydb" node /home/<user>/open-source-nvr/lib/index.js
 ```
 
-Now, create a `camera_web.service` file for Linux Systemd service managers, to ensure your website starts when the machine starts & will be kept running
+Now, create a `open-source-nvr.service` file for Linux Systemd service managers, to ensure your website starts when the machine starts & will be kept running
 
 ```
 [Unit]
-Description=camera1_web
+Description=open-source-nvr
 Wants=network-online.target
 After=network-online.target
 
@@ -112,13 +112,13 @@ ExecStart=/home/<user>/open-source-nvr/web.sh
 WantedBy=multi-user.target
 ```
 
-Copy the `camera_web.service` file to `/etc/systemd/system` , and replacing the `<user>`
+Copy the `open-source-nvr.service` file to `/etc/systemd/system` , and replacing the `<user>`
 
 Enable & run the service
 
 ```
-sudo systemctl enable  camera_web.service
-sudo systemctl start  camera_web.service
+sudo systemctl enable  open-source-nvr.service
+sudo systemctl start  open-source-nvr.service
 ```
 
 
@@ -130,8 +130,8 @@ systemctl --type=service
 ```
 ### list logs
 ```
-sudo journalctl -u camera_web.service -f
-sudo journalctl -u camera_web.service -n 100 --no-pager
+sudo journalctl -u open-source-nvr.service -f
+sudo journalctl -u open-source-nvr.service -n 100 --no-pager
 ```
 
 
