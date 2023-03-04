@@ -348,14 +348,7 @@ function App() {
                     text: 'Settings',
                     iconProps: { iconName: 'DataManagementSettings' },
                     onClick: () => {
-                      setPanel({...panel, open: true, key: 'settings', invalidArray:[], heading: 'General and Disk Settings', values: {
-                        disk_base_dir: data.config.settings.disk_base_dir,
-                        enable_cleanup: data.config.settings.enable_cleanup,
-                        cleanup_interval: data.config.settings.cleanup_interval,
-                        cleanup_capacity: data.config.settings.cleanup_capacity,
-                        enable_ml: data.config.settings.enable_ml,
-                        darknetDir: data.config.settings.darknetDir
-                      }})
+                      setPanel({...panel, open: true, key: 'settings', invalidArray:[], heading: 'General and Disk Settings', values: { ...data.config.settings }})
                     }
                 }].concat(data.cameras.map(c => { return {
                     key: c.key,
@@ -369,6 +362,7 @@ function App() {
                         folder: c.folder,
                         disk: c.disk,
                         secWithoutMovement: c.secWithoutMovement,
+                        secMaxSingleMovement: c.secMaxSingleMovement,
                         mSPollFrequency: c.mSPollFrequency,
                         segments_prior_to_movement: c.segments_prior_to_movement,
                         segments_post_movement: c.segments_post_movement,
@@ -384,6 +378,7 @@ function App() {
                     iconProps: { iconName: 'Add' },
                     onClick: () => setPanel({...panel, open: true, key: 'new', invalidArray: [], heading: 'Add New Camera', values: {
                       secWithoutMovement: 10,
+                      secMaxSingleMovement: 600,
                       mSPollFrequency: 1000,
                       disk: data.config.settings.disk_base_dir,
                       segments_prior_to_movement: 10, // 20 seconds (2second segments)
@@ -435,13 +430,13 @@ function App() {
                     minWidth: 38,
                     maxWidth: 38
                     //onRender: (item) => <Text variant='medium' styles={{root: {background: 'yellow'}}} >{item.cameraName}</Text>
-                  }/*,
+                  },
                   {
                     key: "seconds", 
                     fieldName: "seconds",
                     minWidth: 25,
                     maxWidth: 30
-                  }*/
+                  }
                 ].concat(mode !== "Time" && showPlayer ? {
                   name: "Save", 
                   key: "stat",  

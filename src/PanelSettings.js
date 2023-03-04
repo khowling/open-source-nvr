@@ -128,7 +128,7 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
         if (panel.key === 'settings') {
           invalidFn('disk_base_dir', !panel.values.disk_base_dir || panel.values.disk_base_dir.endsWith('/') || !panel.values.disk_base_dir.startsWith('/'),
             <Text>Must be abosolute path (cannot end with '/')</Text>)
-          invalidFn('darknetDir', panel.values.enable_ml && (!panel.values.darknetDir || panel.values.darknetDir.endsWith('/') || !panel.values.darknetDir.startsWith('/')),
+          invalidFn('mlDir', panel.values.enable_ml && (!panel.values.mlDir || panel.values.mlDir.endsWith('/') || !panel.values.mlDir.startsWith('/')),
             <Text>Must be abosolute path (cannot end with '/')</Text>)
         } else {
           invalidFn('name', !panel.values.name || panel.values.name.match(/^[a-z0-9][_\-a-z0-9]+[a-z0-9]$/i) === null || panel.values.name.length > 19,
@@ -191,6 +191,7 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
 
     const currCamera = panel.key === 'edit' && data.cameras && panel.values.key && data.cameras.find(c => c.key === panel.values.key)
 
+    console.log (panel.values)
 
     return (
 
@@ -214,12 +215,14 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
                     <Slider disabled={!panel.values.enable_cleanup} label="Check Capacity Interval (minutes)" min={1} max={60} step={1} defaultValue={panel.values.cleanup_interval} showValue onChange={(val) => updatePanelValues('cleanup_interval', val)} />
 
 
-                    <Separator styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}><b>Object Detection (using <a target="_other" href="https://pjreddie.com/darknet/yolo/">yolo</a>)</b></Separator>
+                    <Separator styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}><b>Object Detection</b></Separator>
                     
                     <Checkbox label="Enable Object Detection" checked={panel.values.enable_ml} onChange={(ev, val) => updatePanelValues('enable_ml', val)} styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}/>
                     
-                    <TextField disabled={!panel.values.enable_ml} label="DarkNet and Yolo install folder " iconProps={{ iconName: 'Folder' }}  required value={panel.values.darknetDir} onChange={(ev, val) => updatePanelValues('darknetDir', val)} errorMessage={getError('darknetDir')} />
+                    <TextField disabled={!panel.values.enable_ml} label="Object Detection Run Folder" iconProps={{ iconName: 'Folder' }}  required value={panel.values.mlDir} onChange={(ev, val) => updatePanelValues('mlDir', val)} errorMessage={getError('mlDir')} />
                     
+                    <TextField disabled={!panel.values.enable_ml} label="Object Detection Command (use {in} and {out} for images)" iconProps={{ iconName: 'Folder' }}  required value={panel.values.mlCmd} onChange={(ev, val) => updatePanelValues('mlCmd', val)} errorMessage={getError('mlCmd')} />
+
                     { data.config && data.config.status  &&  Object.keys(data.config.status).length > 0 && 
                     <Stack.Item>
                         <Separator/>
@@ -289,7 +292,8 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
 
                     <Stack styles={{ root: { marginTop: "15px !important"} }}>
                     <Slider disabled={!panel.values.enable_movement} label="Poll Frequency (mS)" min={1000} max={10000} step={500} defaultValue={panel.values.mSPollFrequency} showValue onChange={(val) => updatePanelValues('mSPollFrequency', val)} />
-                    <Slider disabled={!panel.values.enable_movement} label="Seconds without movement" min={0} max={50} step={1} defaultValue={panel.values.secWithoutMovement} showValue onChange={(val) => updatePanelValues('secWithoutMovement', val)} />
+                    <Slider disabled={!panel.values.enable_movement} label="Continuation if no movement for (s)" min={0} max={50} step={1} defaultValue={panel.values.secWithoutMovement} showValue onChange={(val) => updatePanelValues('secWithoutMovement', val)} />
+                    <Slider disabled={!panel.values.enable_movement} label="Max. Single Movement (s)" min={60} max={600} step={10} defaultValue={panel.values.secMaxSingleMovement} showValue onChange={(val) => updatePanelValues('secMaxSingleMovement', val)} />
                     {panel.key}
                     </Stack>
 

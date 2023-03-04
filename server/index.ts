@@ -20,7 +20,8 @@ interface Settings {
     cleanup_interval: number;
     cleanup_capacity: number;
     enable_ml: boolean;
-    darknetDir: string;
+    mlDir: string;
+    mlCmd: string;
 }
 interface MovementEntry {
     cameraKey: string;
@@ -61,6 +62,7 @@ interface CameraEntry {
     enable_streaming: boolean;
     enable_movement: boolean;
     secWithoutMovement: number;
+    secMaxSingleMovement: number;
     mSPollFrequency: number;
     segments_prior_to_movement: number;
     segments_post_movement: number;
@@ -140,9 +142,12 @@ async function jobWorker(seq: number, d: JobData): Promise<JobReturn> {
         let new_movement: MovementEntry = {...m}
         const c = cameraCache[m.cameraKey].ce
         const input = `${c.disk}/${c.folder}/image${d.movement_key}.jpg`
+        const outpic = `${c.disk}/${c.folder}/mlimage${d.movement_key}.jpg`
         await new Promise((acc, _rej) => {
             let ml_stdout = '', ml_stderr = '', ml_error = ''
-            const ml_task = spawn('./darknet', ['detect', 'cfg/yolov3.cfg', 'cfg/yolov3.weights', input], { cwd: settingsCache.settings.darknetDir, timeout: 120000 });
+            // './darknet', ['detect', 'cfg/yolov3.cfg', 'cfg/yolov3.weights', input]
+            let [cmd, ...rest] = settingsCache.settings.mlCmd.split(' ')
+            const ml_task = spawn(cmd, rest.map(a => a === '{in}' ? input : a === '{out}' ? outpic : a), { cwd: settingsCache.settings.mlDir, timeout: 120000 });
 
             ml_task.stdout.on('data', (data: string) => { ml_stdout += data })
             ml_task.stderr.on('data', (data: string) => { ml_stderr += data })
@@ -160,18 +165,18 @@ async function jobWorker(seq: number, d: JobData): Promise<JobReturn> {
                     new_movement = {...new_movement, ml: {...ml, tags}}
                     await movementdb.put(d.movement_key, new_movement)
 
-                    let mv_stdout = '', mv_stderr = '', mv_error = ''
-                    const mv_task = spawn('/usr/bin/mv', [`${settingsCache.settings.darknetDir}/predictions.jpg`, `${c.disk}/${c.folder}/mlimage${d.movement_key}.jpg`], { timeout: 5000 })
+                    //let mv_stdout = '', mv_stderr = '', mv_error = ''
+                    //const mv_task = spawn('/usr/bin/mv', [`${settingsCache.settings.mlDir}/predictions.jpg`, outpic], { timeout: 5000 })
 
-                    mv_task.stdout.on('data', (data: string) => { mv_stdout += data })
-                    mv_task.stderr.on('data', (data: string) => { mv_stderr += data })
-                    mv_task.on('error', async (error: Error) => { mv_error = `${error.name}: ${error.message}` })
+                    //mv_task.stdout.on('data', (data: string) => { mv_stdout += data })
+                    //mv_task.stderr.on('data', (data: string) => { mv_stderr += data })
+                    //mv_task.on('error', async (error: Error) => { mv_error = `${error.name}: ${error.message}` })
 
-                    mv_task.on('close', async (mv_code: number) => {
-                        const mv_succcess = mv_code === 0
-                        await movementdb.put(d.movement_key, { ...new_movement, ml_movejpg: { success: mv_succcess, ...(!mv_succcess && {stderr: mv_stderr, stdout: mv_stdout, error: mv_error }) }})
-                        acc(mv_code)
-                    })
+                    //mv_task.on('close', async (mv_code: number) => {
+                    //    const mv_succcess = mv_code === 0
+                    //    await movementdb.put(d.movement_key, { ...new_movement, ml_movejpg: { success: mv_succcess, ...(!mv_succcess && {stderr: mv_stderr, stdout: mv_stdout, error: mv_error }) }})
+                        acc(0)
+                    //})
 
                 } else {
                     await movementdb.put(d.movement_key, new_movement)
@@ -226,7 +231,7 @@ async function processMovement(cameraKey: string, jobManager: JobManager) : Prom
     // prevent multiple movement processes from running at the same time (needed with setInterval)
     cameraCache[cameraKey] = {...cameraCache[cameraKey],  movementStatus: {...cameraCache[cameraKey].movementStatus, in_progress: true}}
 
-    const {ip, passwd, disk, folder, secWithoutMovement} = ce
+    const {ip, passwd, disk, folder, secWithoutMovement, secMaxSingleMovement} = ce
     try {
 
         const current_movement = movementStatus?.current_movement
@@ -242,7 +247,7 @@ async function processMovement(cameraKey: string, jobManager: JobManager) : Prom
             // Got movement (state ===1)
             if (!current_movement) {
                 // got NEW movement
-                console.log(`got movement`)
+                console.log(`processMovement: Got NEW movement (${cameraCache[cameraKey].ce.name})`)
 
                 // Need to determine the segment that corrisponds to the movement
                 // Read the curren live stream.m3u8, and get a array of all the stream23059991.ts files
@@ -266,6 +271,8 @@ async function processMovement(cameraKey: string, jobManager: JobManager) : Prom
                 }}
             } else {
                 // continuatation of same movment event
+                console.log(`processMovement: continuatation movement (${cameraCache[cameraKey].ce.name}) (${current_movement.seconds + 1 + current_movement.consecutivesecondswithout}s)`)
+
                 cameraCache[cameraKey] = {...cameraCache[cameraKey], movementStatus: {
                     ...movementStatus,
                     in_progress: false, fail: false, status: "continuatation of same movment event",
@@ -280,7 +287,10 @@ async function processMovement(cameraKey: string, jobManager: JobManager) : Prom
             // no movement from camera
             if (current_movement) {
                 // got current movement
-                if (current_movement.consecutivesecondswithout > secWithoutMovement) {
+                if (current_movement.consecutivesecondswithout > secWithoutMovement || current_movement.seconds > (secMaxSingleMovement || 600)) {
+
+                    console.log(`processMovement:  movement complete (${cameraCache[cameraKey].ce.name}) (${current_movement.seconds}s)`)
+
                     // no movement for too long, end movement and queue Job for Image processing
                     const movement_key = (current_movement.startDate / 1000 | 0) - 1600000000
                     await movementdb.put(movement_key, current_movement)
@@ -914,7 +924,7 @@ async function main() {
     })
 
     // Populate settingsCache
-    settingsCache = {settings: { disk_base_dir: '',  enable_cleanup: false, darknetDir:'', enable_ml: false, cleanup_interval: 120, cleanup_capacity: 99}, status: { fail: false, nextCheckInMinutes: 0}}
+    settingsCache = {settings: { disk_base_dir: '',  enable_cleanup: false, mlDir:'', mlCmd:'', enable_ml: false, cleanup_interval: 120, cleanup_capacity: 99}, status: { fail: false, nextCheckInMinutes: 0}}
     try {
         settingsCache = {...settingsCache, settings : await db.get('settings') as Settings}
     } catch (e) {
