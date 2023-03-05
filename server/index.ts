@@ -843,9 +843,10 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
                                 }
                             }
                             if (mode === 'Movement' || (mode === 'Filtered' && tags?.length >0)) {
+                                const startDate = new Date(value.startDate)
                                 movements.push({
                                     key,
-                                    startDate_en_GB: new Intl.DateTimeFormat('en-GB', { weekday: "short", minute: "2-digit", hour: "2-digit",  hour12: true }).format(new Date(value.startDate)),
+                                    startDate_en_GB: new Intl.DateTimeFormat('en-GB', { ...(startDate.toDateString() !== (new Date()).toDateString() && {weekday: "short"}), minute: "2-digit", hour: "2-digit",  hour12: true }).format(startDate),
                                     movement: {...value, ...(tags &&  { ml: { ...value.ml, tags}})}
                                 })
                             }

@@ -2,7 +2,7 @@
 import './App.css';
 import React, { useEffect }  from 'react';
 import videojs from 'video.js'
-import { ThemeProvider, CommandBar, Text, DetailsList, Stack, Selection } from '@fluentui/react'
+import { ThemeProvider, CommandBar, Text, DetailsList, Stack, Selection, SelectionMode } from '@fluentui/react'
 import { initializeIcons } from '@fluentui/react/lib/Icons';
 import { createTheme } from '@fluentui/react';
 import { PanelSettings } from './PanelSettings.js'
@@ -174,6 +174,11 @@ function App() {
       }
     }
   })
+
+  function _debug(item) {
+    console.log (item)
+    alert (JSON.stringify(item, null, 4))
+  }
 
   function downloadMovement() {
     if (currentPlaying && currentPlaying.cKey && currentPlaying.mKey) {
@@ -444,7 +449,8 @@ function App() {
                 } : [])
                 }
                 selection={_selection}
-                //selectionMode={SelectionMode.single}
+                selectionMode={SelectionMode.single}
+                onItemInvoked={_debug}
                 //onActiveItemChanged={_onActiveItemChanged}
               />
            
