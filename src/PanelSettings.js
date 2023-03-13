@@ -33,7 +33,7 @@ import {
   MenuPopover
 } from "@fluentui/react-components";
 import { Alert } from '@fluentui/react-components/unstable';
-import { Dismiss12Regular } from "@fluentui/react-icons";
+import { Dismiss12Regular, Folder16Filled } from "@fluentui/react-icons";
 
 
 const useStyles = makeStyles({
@@ -50,7 +50,7 @@ const useStyles = makeStyles({
     gridTemplateRows: "repeat(1fr)",
     justifyItems: "start",
     ...shorthands.gap("2px"),
-    maxWidth: "500px",
+    //maxWidth: "400px",
     marginTop: "15px" 
   },
   tagsList: {
@@ -174,6 +174,7 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
     const styles = useStyles();
 
     function updatePanelValues(field, value) {
+        console.log (`updatePanelValues ${field} ${JSON.stringify(value)}`)
         var calcFolder = panel.values.folder || ''
         if (field === "name") {
           if (!calcFolder) {
@@ -286,39 +287,39 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
 
                     <div className={styles.root}>
                       <Label>Disk Mount Folder</Label>
-                      <Input iconProps={{ iconName: 'Folder' }}  required value={panel.values.disk_base_dir} onChange={(_, data) => updatePanelValues('disk_base_dir', data.value)} errorMessage={getError('disk_base_dir')} />
+                      <Input style={{"width": "100%"}}contentAfter={<Folder16Filled/>} required value={panel.values.disk_base_dir} onChange={(_, data) => updatePanelValues('disk_base_dir', data.value)} errorMessage={getError('disk_base_dir')} />
                     </div>
 
 
                     <div className={styles.root}>
                       <label>Check Capacity Interval {panel.values.cleanup_interval} minutes</label>
-                      <Slider min={0} max={60} step={5} defaultValue={panel.values.cleanup_interval} showValue onChange={(_,data) => updatePanelValues('cleanup_interval', data.value)} />
+                      <Slider style={{"width": "100%"}} min={0} max={60} step={5} defaultValue={panel.values.cleanup_interval} showValue onChange={(_,data) => updatePanelValues('cleanup_interval', data.value)} />
                     </div>
 
                     <div className={styles.root}>
                       <label>Keep under Capacity {panel.values.cleanup_capacity}%</label>
-                      <Slider disabled={panel.values.cleanup_interval === 0}  min={20} max={100} step={5} defaultValue={panel.values.cleanup_capacity} showValue onChange={(_,data) => updatePanelValues('cleanup_capacity', data.value)} />
+                      <Slider style={{"width": "100%"}} disabled={panel.values.cleanup_interval === 0}  min={20} max={100} step={5} defaultValue={panel.values.cleanup_capacity} showValue onChange={(_,data) => updatePanelValues('cleanup_capacity', data.value)} />
                     </div>
 
 
                     <Divider styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}><b>Object Detection</b></Divider>
                     
-                    <Checkbox label="Enable Object Detection" checked={panel.values.enable_ml} onChange={(_,data) => updatePanelValues('enable_ml', data.value)} styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}/>
+                    <Checkbox label="Enable Object Detection" checked={panel.values.enable_ml} onChange={(_,data) => updatePanelValues('enable_ml', data.checked)} styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}/>
                     
                     <div className={styles.root}>
                       <label>Object Detection Run Folder</label>
-                      <Input disabled={!panel.values.enable_ml} iconProps={{ iconName: 'Folder' }}  required value={panel.values.mlDir} onChange={(_, data) => updatePanelValues('mlDir', data.value)} errorMessage={getError('mlDir')} />
+                      <Input style={{"width": "100%"}} disabled={!panel.values.enable_ml} iconProps={{ iconName: 'Folder' }}  required value={panel.values.mlDir} onChange={(_, data) => updatePanelValues('mlDir', data.value)} errorMessage={getError('mlDir')} />
                     </div>
 
                     <div className={styles.root}>
                       <label>Object Detection Command (use in and out for images)</label>
-                      <Input disabled={!panel.values.enable_ml} iconProps={{ iconName: 'Folder' }}  required value={panel.values.mlCmd} onChange={(_, data) => updatePanelValues('mlCmd', data.value)} errorMessage={getError('mlCmd')} />
+                      <Input style={{"width": "100%"}} disabled={!panel.values.enable_ml} iconProps={{ iconName: 'Folder' }}  required value={panel.values.mlCmd} onChange={(_, data) => updatePanelValues('mlCmd', data.value)} errorMessage={getError('mlCmd')} />
                     </div>
 
 
                     <div className={styles.root}>
                       <Label >Model Labels</Label>
-                      <Textarea value={panel.values.labels} onChange={(ev, val) => updatePanelValues('labels', val.value)}/>
+                      <Textarea resize="vertical" disabled={!panel.values.enable_ml}  value={panel.values.labels} onChange={(ev, val) => updatePanelValues('labels', val.value)}/>
                     </div>
 
                     { data.config && data.config.status  &&  Object.keys(data.config.status).length > 0 && 
