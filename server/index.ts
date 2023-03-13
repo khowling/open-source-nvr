@@ -16,12 +16,12 @@ import { JobManager, JobStatus, JobReturn, JobData, JobTask } from './jobmanager
 
 interface Settings {
     disk_base_dir: string;
-    enable_cleanup: boolean;
     cleanup_interval: number;
     cleanup_capacity: number;
     enable_ml: boolean;
     mlDir: string;
     mlCmd: string;
+    labels: string;
 }
 interface MovementEntry {
     cameraKey: string;
@@ -689,12 +689,12 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
         .post('/settings', async (ctx, _next) => {
             console.log (`settings save -  ${JSON.stringify(ctx.request.body)}`)
             if (ctx.request.body) {
-                const new_settings: Settings = ctx.request.body
+                const new_settings: Settings = ctx.request.body as Settings
                 try {
                     const dirchk = await fs.stat(new_settings.disk_base_dir)
                     if (!dirchk.isDirectory())  throw new Error(`${new_settings.disk_base_dir} is not a directory`)
                     await db.put('settings', new_settings)
-                    settingsCache = {...settingsCache, settings: new_settings, status: {...settingsCache.status, nextCheckInMinutes: new_settings.enable_cleanup ?  new_settings.cleanup_interval : 0}}
+                    settingsCache = {...settingsCache, settings: new_settings, status: {...settingsCache.status, nextCheckInMinutes:  new_settings.cleanup_interval }}
                     ctx.status = 201
                 } catch (err) {
                     ctx.body = err
@@ -712,7 +712,7 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
 
             console.log (`camera save ${cameraKey} -  ${JSON.stringify(ctx.request.body)}`)
             if (ctx.request.body) {
-                const new_ce: CameraEntry = ctx.request.body
+                const new_ce: CameraEntry = ctx.request.body as CameraEntry
                 const folder = `${new_ce.disk}/${new_ce.folder}`
                 if (cameraKey === 'new') {
                     // creating new entry
@@ -828,7 +828,7 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
                     
 
                     // Everything in movementdb, with key time (movement start date) greater than the creation date of the oldest sequence file on disk
-                    const feed = movementdb.createReadStream({ reverse: true /*, gt: oldestctimeMs > 0 ? (oldestctimeMs / 1000 | 0) - 1600000000 : 0 */})
+                    const feed = movementdb.createReadStream({ reverse: true, limit: 100 /*, gt: oldestctimeMs > 0 ? (oldestctimeMs / 1000 | 0) - 1600000000 : 0 */})
                         .on('data', (data) => {
                             const { key, value } = data as {key: number, value: MovementEntry}
                             const { ml, cameraKey } = value
@@ -925,7 +925,7 @@ async function main() {
     })
 
     // Populate settingsCache
-    settingsCache = {settings: { disk_base_dir: '',  enable_cleanup: false, mlDir:'', mlCmd:'', enable_ml: false, cleanup_interval: 120, cleanup_capacity: 99}, status: { fail: false, nextCheckInMinutes: 0}}
+    settingsCache = {settings: { disk_base_dir: '', mlDir:'', mlCmd:'', enable_ml: false, labels: '', cleanup_interval: 0, cleanup_capacity: 90}, status: { fail: false, nextCheckInMinutes: 0}}
     try {
         settingsCache = {...settingsCache, settings : await db.get('settings') as Settings}
     } catch (e) {
@@ -950,7 +950,7 @@ async function main() {
 
         if (status.nextCheckInMinutes === 0) {
             settingsCache = {...settingsCache, status: {...status, nextCheckInMinutes: settings.cleanup_interval}}
-            if (settings.enable_cleanup && settings.disk_base_dir) {
+            if (settings.cleanup_interval > 0 && settings.disk_base_dir) {
                 try {
                     const diskres = await clearDownDisk(settings.disk_base_dir, Object.keys(cameraCache).filter(c => (!cameraCache[c].ce.delete) && cameraCache[c].ce.enable_streaming), settings.cleanup_capacity )
                     settingsCache = {...settingsCache, status: {...status, fail:false, error: '',  ...diskres, lastChecked: new Date()}}

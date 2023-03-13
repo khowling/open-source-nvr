@@ -400,7 +400,7 @@ function App() {
             primaryGroupAriaLabel="Email actions"
             farItemsGroupAriaLabel="More actions"
           />
-          <ThemeProvider theme={appTheme}>
+       
               <DetailsList
                 className="scrollMe"
                 isHeaderVisible={false}
@@ -454,7 +454,7 @@ function App() {
                 //onActiveItemChanged={_onActiveItemChanged}
               />
            
-          </ThemeProvider>
+ 
         </Stack.Item>
 
 
