@@ -1,5 +1,4 @@
 import React  from 'react';
-//import {  Text, DefaultButton, Dropdown, Stack, Input, Slider, TagPicker, Divider, MessageBar, MessageBarType, Checkbox, PrimaryButton, Panel } from '@fluentui/react'
 
 import {
   Text, 
@@ -32,14 +31,15 @@ import {
   MenuItem,
   MenuPopover
 } from "@fluentui/react-components";
-import { Alert } from '@fluentui/react-components/unstable';
-import { Dismiss12Regular, Folder16Filled } from "@fluentui/react-icons";
+import { Alert, Field } from '@fluentui/react-components/unstable';
+import { Dismiss12Regular, Folder16Regular, KeyCommand16Regular, Camera16Regular, NetworkAdapter16Regular, Password16Regular } from "@fluentui/react-icons";
 
 
 const useStyles = makeStyles({
   base: {
     display: "flex",
     flexDirection: "column",
+    rowGap: tokens.spacingVerticalS,
     "& > label": {
       marginBottom: tokens.spacingVerticalMNudge,
     },
@@ -103,7 +103,7 @@ export const MultiselectWithTags = ({label, options, selectedOptions, setSelecte
 
   return (
     <div className={styles.root}>
-      <Label weight="semibold" id={comboId}>{label}</Label>
+      <Label id={comboId}>{label}</Label>
       {selectedOptions.length ? (
         <ul
           id={selectedListId}
@@ -135,7 +135,7 @@ export const MultiselectWithTags = ({label, options, selectedOptions, setSelecte
       <Combobox
         aria-labelledby={labelledBy}
         multiselect={true}
-        placeholder="Select one or more animals"
+        placeholder="Select one or more tags"
         selectedOptions={selectedOptions}
         onOptionSelect={onSelect}
         ref={comboboxInputRef}
@@ -281,15 +281,16 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
             <DialogTitle>{ panel.key !== 'settings'? `Camera ${panel.values.key}` : 'Settings'}</DialogTitle>
             
             { panel.key === 'settings' ? 
-              <DialogContent>
+              <DialogContent className={styles.base}>
 
-                    <Divider styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}><b>Storage Settings</b></Divider>
+                    <Divider ><b>Storage Settings</b></Divider>
 
-                    <div className={styles.root}>
-                      <Label>Disk Mount Folder</Label>
-                      <Input style={{"width": "100%"}}contentAfter={<Folder16Filled/>} required value={panel.values.disk_base_dir} onChange={(_, data) => updatePanelValues('disk_base_dir', data.value)} errorMessage={getError('disk_base_dir')} />
-                    </div>
-
+                    <Field
+                      label="Disk Mount Folder"
+                      validationState={getError('disk_base_dir') ? "error" : "none"}
+                      validationMessage={getError('disk_base_dir')}>
+                      <Input style={{"width": "100%"}} contentBefore={<Folder16Regular/>} required value={panel.values.disk_base_dir} onChange={(_, data) => updatePanelValues('disk_base_dir', data.value)}  />
+                    </Field>
 
                     <div className={styles.root}>
                       <label>Check Capacity Interval {panel.values.cleanup_interval} minutes</label>
@@ -302,19 +303,24 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
                     </div>
 
 
-                    <Divider styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}><b>Object Detection</b></Divider>
+                    <Divider><b>Object Detection</b></Divider>
                     
-                    <Checkbox label="Enable Object Detection" checked={panel.values.enable_ml} onChange={(_,data) => updatePanelValues('enable_ml', data.checked)} styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}/>
+                    <Checkbox label="Enable Object Detection" checked={panel.values.enable_ml} onChange={(_,data) => updatePanelValues('enable_ml', data.checked)} />
                     
-                    <div className={styles.root}>
-                      <label>Object Detection Run Folder</label>
-                      <Input style={{"width": "100%"}} disabled={!panel.values.enable_ml} iconProps={{ iconName: 'Folder' }}  required value={panel.values.mlDir} onChange={(_, data) => updatePanelValues('mlDir', data.value)} errorMessage={getError('mlDir')} />
-                    </div>
 
-                    <div className={styles.root}>
-                      <label>Object Detection Command (use in and out for images)</label>
-                      <Input style={{"width": "100%"}} disabled={!panel.values.enable_ml} iconProps={{ iconName: 'Folder' }}  required value={panel.values.mlCmd} onChange={(_, data) => updatePanelValues('mlCmd', data.value)} errorMessage={getError('mlCmd')} />
-                    </div>
+                    <Field
+                      label="Object Detection Run Folder"
+                      validationState={getError('mlDir') ? "error" : "none"}
+                      validationMessage={getError('mlDir')}>
+                      <Input style={{"width": "100%"}} disabled={!panel.values.enable_ml} contentBefore={<Folder16Regular/>}  required value={panel.values.mlDir} onChange={(_, data) => updatePanelValues('mlDir', data.value)} />
+                    </Field>
+
+                    <Field
+                      label="Object Detection Command (use in and out for images)"
+                      validationState={getError('mlCmd') ? "error" : "none"}
+                      validationMessage={getError('mlCmd')}>
+                      <Input style={{"width": "100%"}} disabled={!panel.values.enable_ml} contentBefore={<KeyCommand16Regular/>}  required value={panel.values.mlCmd} onChange={(_, data) => updatePanelValues('mlCmd', data.value)} />
+                    </Field>
 
 
                     <div className={styles.root}>
@@ -332,16 +338,46 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
 
               </DialogContent>
             :
-              <DialogContent>
+              <DialogContent className={styles.base}>
                     
-                    <Input label="Camera Name" onChange={(ev, val) => updatePanelValues('name', val)} required errorMessage={getError('name')} value={panel.values.name} />
-                    <Input label="IP Address" prefix="IP" onChange={(ev, val) => updatePanelValues('ip', val)} required errorMessage={getError('ip')} value={panel.values.ip} />
-                    <Input label="admin Password" type="password"  value={panel.values.passwd} onChange={(ev, val) => updatePanelValues('passwd', val)} />
-                    
-                    <div className={styles.base}>
-                      <Select label="Disk" selectedKey={panel.values.disk} options={data.config && [ { key: data.config.settings.disk_base_dir, text: data.config.settings.disk_base_dir}]} required onChange={(ev, {key}) => updatePanelValues('disk', key)} errorMessage={getError('disk')} />
-                      <Input label="Steaming Folder" iconProps={{ iconName: 'Folder' }}  required value={panel.values.folder} onChange={(ev, val) => updatePanelValues('folder', val)} errorMessage={getError('folder')} />
-                    </div>
+                    <Field
+                      label="Camera Name"
+                      validationState={getError('name') ? "error" : "none"}
+                      validationMessage={getError('name')}>
+                      <Input style={{"width": "100%"}} contentBefore={<Camera16Regular/>}  required value={panel.values.name} onChange={(_, data) => updatePanelValues('name', data.value)} />
+                    </Field>
+
+                    <Field
+                      label="IP Address (display on create only)"
+                      validationState={getError('ip') ? "error" : "none"}
+                      validationMessage={getError('ip')}>
+                      <Input style={{"width": "100%"}} contentBefore={<NetworkAdapter16Regular/>}  required value={panel.values.ip} onChange={(_, data) => updatePanelValues('ip', data.value)} />
+                    </Field>
+
+                    <Field
+                      label="Camera Password (display on create only)"
+                      validationState={getError('passwd') ? "error" : "none"}
+                      validationMessage={getError('passwd')}>
+                      <Input style={{"width": "100%"}} contentBefore={<Password16Regular/>}  required type="password" value={panel.values.passwd} onChange={(_, data) => updatePanelValues('passwd', data.value)} />
+                    </Field>
+
+
+                    <Field
+                      label="Video Files"
+                      validationState={getError('disk') || getError('folder') ? "error" : "none"}
+                      validationMessage={getError('disk') || getError('folder')}>
+                      <div>
+                          <div  style={{"display": "inline-block"}} >
+                          <Select style={{ "maxWidth": "150px"}} value={panel.values.disk}  required onChange={(_, data) => updatePanelValues('disk', data.value)} >
+                            {data.config &&  <option>{data.config.settings.disk_base_dir}</option>  }
+                          </Select>
+                          </div>
+                          /
+                          <div  style={{"display": "inline-block"}} >
+                            <Input contentAfter={<Folder16Regular/>}  required value={panel.values.folder} onChange={(_, data) => updatePanelValues('folder', data.value)} />
+                          </div>
+                      </div>
+                    </Field>
 
                     <MultiselectWithTags 
                       label="Filter Tags (Requires Object Detection)" 
@@ -350,36 +386,50 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
                       setSelectedOptions={val => { updatePanelValues('ignore_tags', val)}} />
 
                     
-                    <Divider styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}><b>Playback</b></Divider>
-                    <Checkbox label="Enable Streaming" checked={panel.values.enable_streaming} onChange={(ev, val) => { updatePanelValues('enable_streaming', val)} } />
+                    <Divider><b>Playback</b></Divider>
+
+                    <Checkbox label="Enable Streaming" checked={panel.values.enable_streaming} onChange={(_,data) => { updatePanelValues('enable_streaming', data.checked)} } />
+
+                    <div className={styles.root}>
+                      <label>Playback seconds prior to movement: {panel.values.segments_prior_to_movement*2} seconds</label>
+                      <Slider style={{"width": "100%"}} disabled={!panel.values.enable_streaming}  min={0} max={60} step={1} defaultValue={panel.values.segments_prior_to_movement}  onChange={(_,data) => updatePanelValues('segments_prior_to_movement', data.value)} />
+                    </div>
+                    
+                    <div className={styles.root}>
+                      <label>Playback seconds post movement: {panel.values.segments_post_movement*2} seconds</label>
+                      <Slider style={{"width": "100%"}} disabled={!panel.values.enable_streaming}  min={0} max={60} step={1} defaultValue={panel.values.segments_post_movement}  onChange={(_,data) => updatePanelValues('segments_post_movement', data.value)} />
+                    </div>
 
                     { currCamera && currCamera.ffmpeg_process &&
-                    <Alert intent={currCamera.ffmpeg_process.error ? 'error' : (currCamera.ffmpeg_process.running ?  'success' : 'warning')} action="Dismiss">
+                    <Alert intent={currCamera.ffmpeg_process.error ? 'error' : (currCamera.ffmpeg_process.running ?  'success' : 'warning')}>
                       {JSON.stringify(currCamera.ffmpeg_process, null, 2)}
                     </Alert>
                     }
 
-                    <div className={styles.base}>
-                      <Slider disabled={!panel.values.enable_streaming} label="Segments(2s) prior to movement" min={0} max={60} step={1} defaultValue={panel.values.segments_prior_to_movement} showValue onChange={(val) => updatePanelValues('segments_prior_to_movement', val)} />
-                      <Slider disabled={!panel.values.enable_streaming} label="Segments(2s) post movement" min={0} max={60} step={1} defaultValue={panel.values.segments_post_movement} showValue onChange={(val) => updatePanelValues('segments_post_movement', val)} />
+                    <Divider><b>Movement processing</b></Divider>
+                    
+                    <Checkbox disabled={!panel.values.enable_streaming} label="Enable Movement" checked={panel.values.enable_movement} onChange={(_, data) => updatePanelValues('enable_movement', data.checked)} />
+                    
+                    <div className={styles.root}>
+                      <label>Poll Frequency: {panel.values.mSPollFrequency/1000} seconds</label>
+                      <Slider style={{"width": "100%"}} disabled={!panel.values.enable_movement} min={1000} max={10000} step={500} defaultValue={panel.values.mSPollFrequency}  onChange={(_,data) => updatePanelValues('mSPollFrequency', data.value)} />
                     </div>
 
-                    <Divider styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}><b>Movement processing</b></Divider>
+                    <div className={styles.root}>
+                      <label>Continuation if no movement for {panel.values.secWithoutMovement} seconds</label>
+                      <Slider style={{"width": "100%"}} disabled={!panel.values.enable_movement}  min={0} max={50} step={1} defaultValue={panel.values.secWithoutMovement}  onChange={(_,data) => updatePanelValues('secWithoutMovement', data.value)} />
+                    </div>
                     
-                    <Checkbox disabled={!panel.values.enable_streaming} label="Enable Movement" checked={panel.values.enable_movement} onChange={(ev, val) => updatePanelValues('enable_movement', val)} />
-                    
+                    <div className={styles.root}>
+                      <label>Max. Single Movement {panel.values.secMaxSingleMovement} seconds</label>
+                      <Slider style={{"width": "100%"}} disabled={!panel.values.enable_movement}  min={60} max={600} step={10} defaultValue={panel.values.secMaxSingleMovement}  onChange={(_,data) => updatePanelValues('secMaxSingleMovement', data.value)} />
+                    </div>
+
                     { currCamera && currCamera.movementStatus &&
-                    <Alert intent={currCamera.movementStatus.fail ? 'error' : (currCamera.movementStatus.current_movement ?  'success' : 'warning')} action="Dismiss">
+                    <Alert intent={currCamera.movementStatus.fail ? 'error' : (currCamera.movementStatus.current_movement ?  'success' : 'warning')}>
                       {JSON.stringify(currCamera.movementStatus, null, 2)}
                       </Alert>
                     }
-
-                    <div className={styles.base}>
-                      <Slider disabled={!panel.values.enable_movement} label="Poll Frequency (mS)" min={1000} max={10000} step={500} defaultValue={panel.values.mSPollFrequency} showValue onChange={(val) => updatePanelValues('mSPollFrequency', val)} />
-                      <Slider disabled={!panel.values.enable_movement} label="Continuation if no movement for (s)" min={0} max={50} step={1} defaultValue={panel.values.secWithoutMovement} showValue onChange={(val) => updatePanelValues('secWithoutMovement', val)} />
-                      <Slider disabled={!panel.values.enable_movement} label="Max. Single Movement (s)" min={60} max={600} step={10} defaultValue={panel.values.secMaxSingleMovement} showValue onChange={(val) => updatePanelValues('secMaxSingleMovement', val)} />
-                      {panel.key}
-                    </div>
 
               </DialogContent>
             }

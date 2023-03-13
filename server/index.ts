@@ -828,7 +828,7 @@ ${ce.name}.${n + m.startSegment - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLI
                     
 
                     // Everything in movementdb, with key time (movement start date) greater than the creation date of the oldest sequence file on disk
-                    const feed = movementdb.createReadStream({ reverse: true, limit: 100 /*, gt: oldestctimeMs > 0 ? (oldestctimeMs / 1000 | 0) - 1600000000 : 0 */})
+                    const feed = movementdb.createReadStream({ reverse: true /*, limit: 100*/ /*, gt: oldestctimeMs > 0 ? (oldestctimeMs / 1000 | 0) - 1600000000 : 0 */})
                         .on('data', (data) => {
                             const { key, value } = data as {key: number, value: MovementEntry}
                             const { ml, cameraKey } = value

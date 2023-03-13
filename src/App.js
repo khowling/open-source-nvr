@@ -6,92 +6,25 @@ import { ThemeProvider, CommandBar, Text, DetailsList, Stack, Selection, Selecti
 import { initializeIcons } from '@fluentui/react/lib/Icons';
 import { createTheme } from '@fluentui/react';
 import { PanelSettings } from './PanelSettings.js'
+import {Button, Portal, Toolbar, Menu, MenuTrigger, Tooltip, SplitButton, MenuPopover, MenuList, MenuItem, ToolbarButton, ToolbarDivider, createTableColumn, TableCellLayout } from "@fluentui/react-components";
+import {
+  DataGridBody,
+  DataGrid,
+  DataGridRow,
+  DataGridHeader,
+  DataGridCell,
+  DataGridHeaderCell,
+} from "@fluentui/react-data-grid-react-window";
+import { Dismiss12Regular, Folder16Regular, KeyCommand16Regular, Camera16Regular, NetworkAdapter16Regular, Password16Regular } from "@fluentui/react-icons";
 
-const appTheme = createTheme({
-  defaultFontStyle: { fontWeight: 'regular' },
-  fonts: {
-    small: {
-      fontSize: '14px',
-    },
-    medium: {
-      fontSize: '16px',
-    },
-    large: {
-      fontSize: '16px',
-      fontWeight: 'semibold',
-    },
-    xLarge: {
-      fontSize: '18px',
-      fontWeight: 'semibold',
-    },
-  },
-});
 
 initializeIcons(/* optional base url */);
-
-function VideoJS (props)  {
-
-  const videoRef = React.useRef(null);
-  const playerRef = React.useRef(null);
-  const { options, onReady } = props;
-
-  React.useEffect(() => {
-    // make sure Video.js player is only initialized once
-    if (!playerRef.current) {
-      const videoElement = videoRef.current;
-      if (!videoElement) return;
-
-      const player = playerRef.current = videojs(videoElement, options, () => {
-        console.log("player is ready");
-        onReady && onReady(player);
-      });
-    } else {
-      // you can update player here [update player through props]
-      // const player = playerRef.current;
-      // player.autoplay(options.autoplay);
-      // player.src(options.sources);
-    }
-  }, [options, videoRef]);
-
-  // Dispose the Video.js player when the functional component unmounts
-  React.useEffect(() => {
-    const player = playerRef.current;
-
-    return () => {
-      if (player) {
-        player.dispose();
-        playerRef.current = null;
-      }
-    };
-  }, [playerRef]);
-
-  return (
-    <div data-vjs-player>
-      <video ref={videoRef} className="video-js vjs-big-play-centered" />
-    </div>
-  );
-}
 
 
 function App() {
 
-  const [panel, setPanel] = React.useState({open: false, invalidArray: []});
-
-  //const [invalidArray, setInvalidArray] = React.useState([])
-
-  const init_data = { cameras: [], movements: [] }
-  const [data, setData] = React.useState(init_data)
-  const [currentPlaying, setCurrentPlaying] = React.useState(null)
-  //const [inputState, setInputState] = React.useState({ current_idx: 'none', allSelected: false, inputs: {} })
-  const [mode, setMode] = React.useState('Filtered')
-  const [showPlayer, setShowPlayer] = React.useState(true)
-  //const [playerReady, setPlayerReady] = React.useState(false)
-
-
-
+  const videoElement = document.getElementById("video");
   const playerRef = React.useRef(null);
-
-  console.log ("mode: ", mode)
 
   const handlePlayerReady = (player) => {
     playerRef.current = player;
@@ -106,8 +39,43 @@ function App() {
     });
   };
 
+  React.useEffect(() => {
+    // make sure Video.js player is only initialized once
+    if (!playerRef.current) {
+      if (!videoElement) return;
+
+      const player = playerRef.current = videojs(videoElement, { 
+        autoplay: true,
+        muted:"muted",
+        controls: true,
+        liveui: true,
+      }, () => {
+        console.log("player is ready");
+        handlePlayerReady(player);
+      });
+    } else {
+      // you can update player here [update player through props]
+      // const player = playerRef.current;
+      // player.autoplay(options.autoplay);
+      // player.src(options.sources);
+    }
+  }, []);
+
+  return <CCTVControl playerRef={playerRef}/>
+}
+
+function CCTVControl({playerRef}) {
+
+  const [primaryActionButtonRef, setPrimaryActionButtonRef] = React.useState(null);
+  const [panel, setPanel] = React.useState({open: false, invalidArray: []});
+
+  const init_data = { cameras: [], movements: [] }
+  const [data, setData] = React.useState(init_data)
+  const [currentPlaying, setCurrentPlaying] = React.useState(null)
+  const [mode, setMode] = React.useState('Filtered')
+  const [showPlayer, setShowPlayer] = React.useState(true)
+
   function getServerData() {
-    //setCurrentPlaying(null)
     console.log ('getServerData, mode=', mode)
     setData({...init_data, status: 'fetching'})
     fetch(`/api/movements?mode=${mode}`)
@@ -175,6 +143,18 @@ function App() {
     }
   })
 
+
+const onSelectionChange = (_, d) => {
+  console.log ('onselection')
+  if (d.selectedItems.size > 0) {
+    const {key, movement} = data.movements.find(m => m.key === [...d.selectedItems][0])
+    const { cameraKey, startSegment, seconds } = movement
+    const { segments_prior_to_movement, segments_post_movement } = data.cameras.find(c => c.key === cameraKey)
+    playVideo(cameraKey, key, startSegment, seconds, segments_prior_to_movement, segments_post_movement)
+  }
+}
+
+
   function _debug(item) {
     console.log (item)
     alert (JSON.stringify(item, null, 4))
@@ -188,24 +168,7 @@ function App() {
     }
   }
 
-/*
-  function filterIgnoreTags(cameraKey, ml) {
-    if (ml && ml.success && Array.isArray(ml.tags) && ml.tags.length > 0) {
-      const { ignore_tags } = data.cameras.find(c => c.key === cameraKey) || {}
-      if (ignore_tags && Array.isArray(ignore_tags) && ignore_tags.length > 0) {
-        return ml.tags.reduce((a, c) => ignore_tags.includes(c.tag) ? a : a.concat(c), [])
-      } else {
-        return ml.tags
-      }
-    }
-    return []
-  }
-*/
   function renderTags(selectedList, idx) {
-
-    if (false) {
-    return <a target="_blank" href="http://www.google.com"><Stack>{[{tag: "tag1", probability: 100},{tag: "tag1", probability: 100}].map((t, idx) => <Text key={idx} variant="mediumPlus" >{t.tag} ({t.probability})</Text>)}</Stack></a>
-    }
 
     const { key, cameraKey, ml, ffmpeg} = selectedList
     const img = `/image/${key}`
@@ -232,41 +195,103 @@ function App() {
     }
   }
 
-  return (
-    <main>
-
-      <nav className="header">
-        <div className="logo">Home Surveillance</div>
-        <input className="menu-btn" type="checkbox" id="menu-btn" />
-        <label className="menu-icon" htmlFor="menu-btn"><span className="navicon"></span></label>
-        <ul className="menu">
-          <li><a href="/grafana/?orgId=1">Grafana</a></li>
-          <li><a href="/network">Network Control</a></li>
-        </ul>
-      </nav>
-
-      <div style={{ "height": "34px", "width": "100%" }} />
-
-      <PanelSettings data={data} panel={panel} setPanel={setPanel} getServerData={getServerData}/>
-
-      <Stack horizontal wrap >
+  return <>
 
 
-        {showPlayer &&
-          <Stack.Item styles={{ root: { width: "700px" } }} grow={1}>
-            <VideoJS  options={{
-                autoplay: true,
-                muted:"muted",
-                controls: true,
-                aspectRatio: '4:3',
-                liveui: true
-              }} onReady={handlePlayerReady}/>
+      <Portal>
+        <PanelSettings data={data} panel={panel} setPanel={setPanel} getServerData={getServerData}/>
+      </Portal>
 
 
-          </Stack.Item>
-        }
+      <Toolbar aria-label="Default" >
+        <ToolbarButton
+          aria-label="Increase Font Size"
+          appearance="primary"
+          icon={<Camera16Regular />}
+        />
 
-        <Stack.Item styles={showPlayer ? { root: { width: "420px" } } : {}} grow={0}>
+        <Menu positioning="below-end">
+          <MenuTrigger disableButtonEnhancement>
+            <Button  icon={<Camera16Regular />}>{currentPlaying ? data.cameras.find(c => c.key === currentPlaying.cKey)?.name : 'Live'}</Button>
+          </MenuTrigger>
+
+          <MenuPopover>
+            <MenuList>
+              { data.cameras.filter(c => c.enable_streaming).map(c => 
+                <MenuItem key={c.key} icon={<Camera16Regular />}  onClick={() => playVideo(c.key)}>{c.name}</MenuItem>
+              )}
+            </MenuList>
+          </MenuPopover>
+        </Menu>
+
+      </Toolbar>
+
+      <DataGrid
+        size="small"
+        selectionMode="single"
+        onSelectionChange={onSelectionChange}
+        getRowId={(item) => item.key}
+        columns={[
+          createTableColumn({
+            columnId: "startDate_en_GB",
+            renderCell: (item) => {
+              return (
+                <TableCellLayout>{item.startDate_en_GB}</TableCellLayout>
+              )
+            }
+
+          }),
+          createTableColumn({
+            columnId: "cameraName",
+            renderCell: (item) => {
+              return (
+                <TableCellLayout>{item.cameraName}</TableCellLayout>
+              )
+            }
+
+          }),
+          createTableColumn({
+            columnId: "seconds",
+            renderCell: (item) => {
+              return (
+                <TableCellLayout>{item.seconds}</TableCellLayout>
+              )
+            }
+
+          }),
+          createTableColumn({
+            columnId: "tags",
+            renderCell: (item) => {
+              return (
+                <TableCellLayout>{renderTags(item,0)}</TableCellLayout>
+              )
+            }
+
+          })
+        ]}
+       items={data.movements.map(m => { 
+        const camera =  data.cameras.find(c => c.key === m.movement.cameraKey)
+        return  {
+          key: m.key,
+          ...m.movement, 
+          startDate_en_GB: m.startDate_en_GB, 
+          ...(camera && {  cameraName: camera.name })
+        }})} >
+
+          <DataGridBody itemSize={50} height={700}>
+            {({ item, rowId }, style) => (
+              <DataGridRow key={item.key} style={style}>
+                {({ renderCell }) => (
+                  <DataGridCell>{renderCell(item)}</DataGridCell>
+                )}
+              </DataGridRow>
+            )}
+          </DataGridBody>
+
+
+      </DataGrid>
+
+      { false && [
 
           <CommandBar
             items={[
@@ -399,9 +424,9 @@ function App() {
             ariaLabel="Inbox actions"
             primaryGroupAriaLabel="Email actions"
             farItemsGroupAriaLabel="More actions"
-          />
-       
-              <DetailsList
+          />,
+
+          <DetailsList
                 className="scrollMe"
                 isHeaderVisible={false}
                 items={data.movements.map(m => { 
@@ -453,14 +478,8 @@ function App() {
                 onItemInvoked={_debug}
                 //onActiveItemChanged={_onActiveItemChanged}
               />
-           
- 
-        </Stack.Item>
-
-
-      </Stack>
-    </main >
-  )
+            ]}
+  </>
 }
 
 export default App;
