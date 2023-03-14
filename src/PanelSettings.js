@@ -266,9 +266,6 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
     }
 
     const currCamera = panel.key === 'edit' && data.cameras && panel.values.key && data.cameras.find(c => c.key === panel.values.key)
-
-    console.log (panel.values)
-
     return (
 
       <Dialog 
