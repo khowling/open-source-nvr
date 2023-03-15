@@ -307,12 +307,12 @@ const onSelectionChange = (_, d) => {
             <MenuPopover>
               <MenuList>
                 <MenuItem key="general" icon={<DataUsageSettings20Regular />}  onClick={() => {
-                      setPanel({...panel, open: true, key: 'settings', invalidArray:[], heading: 'General and Disk Settings', values: { ...data.config.settings }})
+                      setPanel({...panel, open: true, key: 'settings', invalidArray:[], heading: 'General Settings', values: { ...data.config.settings }})
                 }}>General</MenuItem>
 
                 { data.cameras.map(c => 
                   <MenuItem key={c.key} icon={<Video20Regular />}  onClick={() => {
-                    setPanel({...panel, open: true, key: 'edit', invalidArray: [],  heading: 'Edit Camera Details', values: {
+                    setPanel({...panel, open: true, key: 'edit', invalidArray: [],  heading: `Edit Camera Details (${c.key})`, values: {
                       key: c.key,
                       name: c.name,
                       folder: c.folder,

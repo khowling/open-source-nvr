@@ -158,8 +158,8 @@ export const MySplitButton = ({label, items}) => (
 
     <MenuPopover>
       <MenuList>
-        { items.map(i =>
-          <MenuItem>{i.text}</MenuItem>  
+        { items.map((i, idx) =>
+          <MenuItem key={idx}>{i.text}</MenuItem>  
         )}
         
       </MenuList>
@@ -266,16 +266,12 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
     }
 
     const currCamera = panel.key === 'edit' && data.cameras && panel.values.key && data.cameras.find(c => c.key === panel.values.key)
-    return (
+    return panel.open && (
 
-      <Dialog 
-        headerText={panel.heading}
-        open={panel.open}>
-
-        { panel.open && 
+      <Dialog modalType='modal' open={panel.open}>
         <DialogSurface>
           <DialogBody>
-            <DialogTitle>{ panel.key !== 'settings'? `Camera ${panel.values.key}` : 'Settings'}</DialogTitle>
+            <DialogTitle>{panel.heading}</DialogTitle>
             
             { panel.key === 'settings' ? 
               <DialogContent className={styles.base}>
@@ -378,7 +374,7 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
 
                     <MultiselectWithTags 
                       label="Filter Tags (Requires Object Detection)" 
-                      options={data.config.settings.labels.split(/[;,\n]/)}
+                      options={data.config.settings.labels ? data.config.settings.labels.split(/[;,\n]/): []}
                       selectedOptions={panel.values.ignore_tags}
                       setSelectedOptions={val => { updatePanelValues('ignore_tags', val)}} />
 
@@ -461,11 +457,10 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
                 </Alert>
               }
             </DialogActions>
-           
-        
           </DialogBody>
         </DialogSurface>
-      }
-      </Dialog>
+      
+      </Dialog> 
     )
+    
 }
