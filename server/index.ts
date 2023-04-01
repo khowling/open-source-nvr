@@ -160,8 +160,8 @@ async function jobWorker(seq: number, d: JobData): Promise<JobReturn> {
                 new_movement = {...new_movement, ml}
 
                 if (ml_succcess) {
-                    let mltags = ml_stdout.match(/([\w]+): ([\d]+)%/g)
-                    const tags = mltags? mltags.map(d => { const i = d.indexOf(': '); return { tag: d.substr(0, i), probability: parseInt(d.substr(i + 2, d.length - i - 3)) } }) : []
+                    let mltags = ml_stdout.match(/[\w ]+: [\d]+%/g)
+                    const tags = mltags? mltags.map(d => { let c = d.match(/([\w ]+): ([\d]+)%/); return { tag: c[1], probability: parseInt(c[2])}}) : []
                     new_movement = {...new_movement, ml: {...ml, tags}}
                     await movementdb.put(d.movement_key, new_movement)
 
@@ -176,7 +176,7 @@ async function jobWorker(seq: number, d: JobData): Promise<JobReturn> {
                     //    const mv_succcess = mv_code === 0
                     //    await movementdb.put(d.movement_key, { ...new_movement, ml_movejpg: { success: mv_succcess, ...(!mv_succcess && {stderr: mv_stderr, stdout: mv_stdout, error: mv_error }) }})
                         acc(0)
-                    //})
+
 
                 } else {
                     await movementdb.put(d.movement_key, new_movement)
