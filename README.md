@@ -41,6 +41,11 @@ Using the settings menu, you first select the disk you will be using to stream r
 
 The benifit of this app, its, its open-source, and it can be installed on any comodity h/w running linux (a free o/s operating system), techincal savvy users should be able to get this working.
 
+## ROADMAP
+
+
+See the [ROADMAP.md](./ROADMAP.md) for planned features and future development.
+
 
 ### Build & Run Web App
 

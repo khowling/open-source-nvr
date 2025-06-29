@@ -1,0 +1,4 @@
+# Add your dependencies below
+numpy
+opencv-python
+rknn-toolkit2
