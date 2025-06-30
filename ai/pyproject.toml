@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta:__legacy__"
+
+[project]
+name = "open-source-nvr-detector"
+version = "0.1.0"
+description = "Object detection module for Open Source NVR system"
+readme = "README.md"
+requires-python = ">=3.8"
+authors = [
+    {name = "Your Name", email = "your.email@example.com"},
+]
+keywords = ["object-detection", "nvr", "computer-vision", "rknn"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "numpy>=1.19.0",
+    "opencv-python>=4.5.0",
+    "torch>=1.9.0",
+    "rknn-toolkit2",
+]
+
+
+
+[project.scripts]
+nvr-detect = "detector.detect:main"
+
+[project.urls]
+Homepage = "https://github.com/your-username/open-source-nvr"
+Repository = "https://github.com/your-username/open-source-nvr"
+Issues = "https://github.com/your-username/open-source-nvr/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["detector*", "py_utils*"]

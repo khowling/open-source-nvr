@@ -9,51 +9,8 @@ import argparse
 #realpath = realpath.split(_sep)
 #sys.path.append(os.path.join(realpath[0]+_sep, *realpath[1:realpath.index('rknn_model_zoo')+1]))
 
+from py_utils.coco_utils import COCO_test_helper
 import numpy as np
-
-from shapes_helper import shapes_helper
-from rknn.api import RKNN
-
-class RKNN_model_container():
-    def __init__(self, model_path, target=None, device_id=None) -> None:
-        rknn = RKNN()
-
-        # Direct Load RKNN Model
-        rknn.load_rknn(model_path)
-
-        print('--> Init runtime environment')
-        if target==None:
-            ret = rknn.init_runtime()
-        else:
-            ret = rknn.init_runtime(target=target, device_id=device_id)
-        if ret != 0:
-            print('Init runtime environment failed')
-            exit(ret)
-        print('done')
-
-        self.rknn = rknn
-
-    # def __del__(self):
-    #     self.release()
-
-    def run(self, inputs):
-        if self.rknn is None:
-            print("ERROR: rknn has been released")
-            return []
-
-        if isinstance(inputs, list) or isinstance(inputs, tuple):
-            pass
-        else:
-            inputs = [inputs]
-
-        result = self.rknn.inference(inputs=inputs)
-
-        return result
-
-    def release(self):
-        self.rknn.release()
-        self.rknn = None
-
 
 
 OBJ_THRESH = 0.25
@@ -65,7 +22,7 @@ NMS_THRESH = 0.45
 
 IMG_SIZE = (640, 640)  # (width, height), such as (1280, 736)
 # IMG_SIZE = (2560, 1920)
-IMG_SIZE = (1280, 1280)
+#IMG_SIZE = (1280, 1280)
 
 CLASSES = ("person", "bicycle", "car","motorbike ","aeroplane ","bus ","train","truck ","boat","traffic light",
            "fire hydrant","stop sign ","parking meter","bench","bird","cat","dog ","horse ","sheep","cow","elephant",
@@ -78,6 +35,7 @@ CLASSES = ("person", "bicycle", "car","motorbike ","aeroplane ","bus ","train","
 coco_id_list = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 31, 32, 33, 34,
          35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63,
          64, 65, 67, 70, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 84, 85, 86, 87, 88, 89, 90]
+
 
 
 def filter_boxes(boxes, box_confidences, box_class_probs):
@@ -161,13 +119,23 @@ def box_process(position):
 
 def post_process(input_data):
     boxes, scores, classes_conf = [], [], []
-    defualt_branch=3
-    pair_per_branch = len(input_data)//defualt_branch
-    # Python 忽略 score_sum 输出
-    for i in range(defualt_branch):
-        boxes.append(box_process(input_data[pair_per_branch*i]))
-        classes_conf.append(input_data[pair_per_branch*i+1])
-        scores.append(np.ones_like(input_data[pair_per_branch*i+1][:,:1,:,:], dtype=np.float32))
+    defualt_branch = 3
+    # For YOLO11/YOLOv5 ONNX, output is (1, 84, N), N = h*w per branch
+    # You need to split N into 80*80, 40*40, 20*20 for 3 branches
+    branch_shapes = [(80, 80), (40, 40), (20, 20)]
+    start = 0
+    for i, (h, w) in enumerate(branch_shapes):
+        branch_len = h * w
+        # input_data[0] shape: (1, 84, 8400)
+        branch = input_data[0][:, :, start:start+branch_len]  # (1, 84, branch_len)
+        branch = branch.reshape(1, 84, h, w)  # (1, 84, h, w)
+        #print(f"DEBUG: branch {i} reshaped to {branch.shape}")
+        boxes.append(box_process(branch))
+        # For class conf, assume the next input_data element is class conf, or use branch itself if only one output
+        # If your model only outputs one array, use branch for both boxes and class conf
+        classes_conf.append(branch[0, 4:, :, :].reshape(1, -1, h, w))  # adjust as needed
+        scores.append(np.ones_like(branch[:, :1, :, :], dtype=np.float32))
+        start += branch_len
 
     def sp_flatten(_in):
         ch = _in.shape[1]
@@ -211,11 +179,11 @@ def post_process(input_data):
 
 def draw(image, boxes, scores, classes):
     for box, score, cl in zip(boxes, scores, classes):
-        top, left, right, bottom = [int(_b) for _b in box]
-        print("%s @ (%d %d %d %d) %.3f" % (CLASSES[cl], top, left, right, bottom, score))
-        cv2.rectangle(image, (top, left), (right, bottom), (255, 0, 0), 2)
+        left, top, right, bottom = [int(_b) for _b in box]
+        print("%s @ (%d %d %d %d) %.3f" % (CLASSES[cl], left, top, right, bottom, score))
+        cv2.rectangle(image, (left, top), (right, bottom), (255, 0, 0), 2)
         cv2.putText(image, '{0} {1:.2f}'.format(CLASSES[cl], score),
-                    (top, left - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                    (left, top - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
 def setup_model(args):
     model_path = args.model_path
@@ -225,6 +193,7 @@ def setup_model(args):
         model = Torch_model_container(args.model_path)
     elif model_path.endswith('.rknn'):
         platform = 'rknn'
+        from py_utils.rknn_executor import RKNN_model_container 
         model = RKNN_model_container(args.model_path, args.target, args.device_id)
     elif model_path.endswith('onnx'):
         platform = 'onnx'
@@ -242,7 +211,8 @@ def img_check(path):
             return True
     return False
 
-if __name__ == '__main__':
+def main():
+    """Main entry point for the detector package"""
     parser = argparse.ArgumentParser(description='Process some integers.')
     # basic params
     parser.add_argument('--model_path', type=str, required= True, help='model path, could be .pt or .rknn file')
@@ -254,8 +224,6 @@ if __name__ == '__main__':
 
     # data params
     parser.add_argument('--anno_json', type=str, default='../../../datasets/COCO/annotations/instances_val2017.json', help='coco annotation path')
-    # coco val folder: '../../../datasets/COCO//val2017'
-    #parser.add_argument('--img_folder', type=str, default='../model', help='img folder path')
     parser.add_argument('--coco_map_test', action='store_true', help='enable coco map test')
 
     args = parser.parse_args()
@@ -263,27 +231,21 @@ if __name__ == '__main__':
     # init model
     model, platform = setup_model(args)
 
-    #file_list = sorted(os.listdir(args.img_folder))
-    #img_list = []
-    #for path in file_list:
-    #    if img_check(path):
-    #        img_list.append(path)
-    co_helper = shapes_helper(enable_letter_box=True)
+    co_helper = COCO_test_helper(enable_letter_box=True)
 
     # run test
     img_counter = 0
-    for line in sys.stdin: #i in range(len(img_list)):
+    for line in sys.stdin:
         img_path = line.strip()
         if not img_path:
             continue
 
+        if hasattr(co_helper, "letter_box_info_list") and co_helper.letter_box_info_list is not None:
+            co_helper.letter_box_info_list.clear()
+        
         img_name = os.path.basename(img_path)
         img_counter += 1
 
-        #print('infer {}/{}'.format(i+1, len(img_list)), end='\r')
-
-        #img_name = img_list[i]
-        #img_path = os.path.join(args.img_folder, img_name)
         if not os.path.exists(img_path):
             print("{} is not found", img_name)
             continue
@@ -292,21 +254,11 @@ if __name__ == '__main__':
         if img_src is None:
             continue
 
-        '''
-        # using for test input dumped by C.demo
-        img_src = np.fromfile('./input_b/demo_c_input_hwc_rgb.txt', dtype=np.uint8).reshape(640,640,3)
-        img_src = cv2.cvtColor(img_src, cv2.COLOR_RGB2BGR)
-        '''
-
-        # Due to rga init with (0,0,0), we using pad_color (0,0,0) instead of (114, 114, 114)
         pad_color = (0,0,0)
         img = co_helper.letter_box(im= img_src.copy(), new_shape=(IMG_SIZE[1], IMG_SIZE[0]), pad_color=(0,0,0))
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-        # save image to file
-        cv2.imwrite(f"./testimage.jpg", img)
 
-        # preprocee if not rknn model
         if platform in ['pytorch', 'onnx']:
             input_data = img.transpose((2,0,1))
             input_data = input_data.reshape(1,*input_data.shape).astype(np.float32)
@@ -316,22 +268,22 @@ if __name__ == '__main__':
 
         outputs = model.run([input_data])
 
-        print (outputs)
-
         boxes, classes, scores = post_process(outputs)
 
-        print({"image": img_name, "detection": [
-            {"className": CLASSES[idx], "score": f"{score:.5f}"}
-                for idx, score in zip(classes, scores)
-            ]
-        })
-
-
+        for box, score, cl in zip(boxes, scores, classes):
+            left, top, right, bottom = [int(_b) for _b in box]
+            print("%s @ (%d %d %d %d) %.3f" % (CLASSES[cl], left, top, right, bottom, score))
+        
         if args.img_show or args.img_save:
             print('\n\nIMG: {}'.format(img_name))
             img_p = img_src.copy()
             if boxes is not None:
-                draw(img_p, co_helper.get_real_box(boxes), scores, classes)
+                print("Original image shape:", img_src.shape)
+                print("Letterboxed image shape:", img.shape)
+                print("First 5 boxes before mapping:", boxes[:5])
+                real_boxes = co_helper.get_real_box(boxes)
+                print("First 5 boxes after mapping:", real_boxes[:5])
+                draw(img_p, real_boxes, scores, classes)
 
             if args.img_save:
                 if not os.path.exists('./result'):
@@ -343,9 +295,8 @@ if __name__ == '__main__':
             if args.img_show:
                 cv2.imshow("full post process result", img_p)
                 cv2.waitKeyEx(0)
-
-
-
-
-    # release
+ 
     model.release()
+
+if __name__ == '__main__':
+    main()
