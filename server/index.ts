@@ -29,6 +29,7 @@ interface MovementEntry {
     startSegment: number;
     lhs_seg_duration_seq?: number;
     seconds: number;
+    pollCount: number;
     consecutivesecondswithout: number;
     mlProcessing?: boolean;
     ml?: MLData;
@@ -480,7 +481,8 @@ async function processMovement(cameraKey: string) : Promise<void> {
                     startDate,
                     startSegment,
                     lhs_seg_duration_seq,
-                    seconds: 0, // Will be calculated from elapsed time
+                    seconds: 0,
+                    pollCount: 1,
                     consecutivesecondswithout: 0,
                     mlProcessing: settingsCache.settings.enable_ml
                 })
@@ -491,10 +493,11 @@ async function processMovement(cameraKey: string) : Promise<void> {
                 // continuatation of same movment event
                 const m: MovementEntry = await movementdb.get(current_key)
                 
-                // Calculate actual elapsed time in seconds
-                const elapsedSeconds = Math.floor((Date.now() - m.startDate) / 1000);
+                // Calculate duration based on poll count × poll frequency
+                const updatedPollCount = m.pollCount + 1;
+                const durationSeconds = Math.floor((updatedPollCount * cameraEntry.mSPollFrequency) / 1000);
 
-                if (elapsedSeconds > (secMaxSingleMovement || 600)) {
+                if (durationSeconds > (secMaxSingleMovement || 600)) {
                     logger.info('Movement ended - max duration', { camera: cameraEntry.name, duration: `${secMaxSingleMovement}s` })
                     current_taskid?.kill() // kill the ffmpeg process, so it stops writing images
                     
@@ -508,8 +511,8 @@ async function processMovement(cameraKey: string) : Promise<void> {
                     cameraCache[cameraKey] = {...cameraCache[cameraKey],  movementStatus: {current_key: null, status: `Movement ended, recorded to database key=${current_key}`, control: {...control, fn_not_finnished: false}}}
                     
                 } else {
-                    logger.debug('Movement continuation', { camera: cameraEntry.name, duration: `${elapsedSeconds}s` });
-                    await movementdb.put(current_key, {...m, seconds: elapsedSeconds, consecutivesecondswithout: 0})
+                    logger.debug('Movement continuation', { camera: cameraEntry.name, duration: `${durationSeconds}s` });
+                    await movementdb.put(current_key, {...m, seconds: durationSeconds, pollCount: updatedPollCount, consecutivesecondswithout: 0})
                     cameraCache[cameraKey] = {...cameraCache[cameraKey],  movementStatus: {...movementStatus, status: "Movement Continuation", control: {...control, fn_not_finnished: false}}}
                 }
 
@@ -993,6 +996,7 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n"
                                     startDate: segs.ctimeMs,
                                     startSegment: segs.segmentStart,
                                     seconds: segs.seconds,
+                                    pollCount: 1,
                                     consecutivesecondswithout: 0
                                 }
                             })
