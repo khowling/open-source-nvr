@@ -31,7 +31,7 @@ interface MovementEntry {
     lhs_seg_duration_seq?: number;
     seconds: number;
     pollCount: number;
-    consecutivesecondswithout: number;
+    consecutivePollsWithoutMovement: number;
     mlProcessing?: boolean;
     ml?: MLData;
     ml_movejpg?: SpawnData;
@@ -71,7 +71,7 @@ interface CameraEntry {
     passwd?: string;
     enable_streaming: boolean;
     enable_movement: boolean;
-    secWithoutMovement: number;
+    pollsWithoutMovement: number;
     secMaxSingleMovement: number;
     mSPollFrequency: number;
     segments_prior_to_movement: number;
@@ -369,7 +369,7 @@ async function processMovement(cameraKey: string) : Promise<void> {
     // ---------- end Circuit breaker
 
 
-    const {ip, passwd, disk, folder, secWithoutMovement, secMaxSingleMovement} = cameraEntry
+    const {ip, passwd, disk, folder, pollsWithoutMovement, secMaxSingleMovement} = cameraEntry
     try {
 
         const {current_key, current_taskid } = movementStatus || { current_key: null, current_taskid: null }
@@ -478,6 +478,16 @@ async function processMovement(cameraKey: string) : Promise<void> {
                     ff_error = `${error.name}: ${error.message}` 
                 })
 
+                ffmpeg.on('exit', (code: number, signal: string) => {
+                    logger.info('ffmpeg frame extraction exited', { 
+                        camera: cameraEntry.name, 
+                        movement: movement_key, 
+                        exitCode: code, 
+                        signal: signal,
+                        pid: ffmpeg.pid 
+                    });
+                });
+
                 // Monitor for new JPG files and send them to ML detection immediately
                 let lastImageCount = 0;
                 const imageMonitor = setInterval(async () => {
@@ -549,7 +559,7 @@ async function processMovement(cameraKey: string) : Promise<void> {
                     lhs_seg_duration_seq,
                     seconds: 0,
                     pollCount: 1,
-                    consecutivesecondswithout: 0,
+                    consecutivePollsWithoutMovement: 0,
                     mlProcessing: settingsCache.settings.enable_ml
                 })
 
@@ -565,7 +575,10 @@ async function processMovement(cameraKey: string) : Promise<void> {
 
                 if (durationSeconds > (secMaxSingleMovement || 600)) {
                     logger.info('Movement ended - max duration', { camera: cameraEntry.name, duration: `${secMaxSingleMovement}s` })
-                    current_taskid?.kill() // kill the ffmpeg process, so it stops writing images
+                    if (current_taskid && current_taskid.exitCode === null) {
+                        logger.info('Terminating ffmpeg frame extraction', { camera: cameraEntry.name, movement: current_key, reason: 'max duration exceeded', pid: current_taskid.pid });
+                        current_taskid.kill();
+                    }
                     
                     // Flush ML detections if enabled
                     if (settingsCache.settings.enable_ml) {
@@ -578,7 +591,7 @@ async function processMovement(cameraKey: string) : Promise<void> {
                     
                 } else {
                     logger.debug('Movement continuation', { camera: cameraEntry.name, duration: `${durationSeconds}s` });
-                    await movementdb.put(current_key, {...m, seconds: durationSeconds, pollCount: updatedPollCount, consecutivesecondswithout: 0})
+                    await movementdb.put(current_key, {...m, seconds: durationSeconds, pollCount: updatedPollCount, consecutivePollsWithoutMovement: 0})
                     cameraCache[cameraKey] = {...cameraCache[cameraKey],  movementStatus: {...movementStatus, status: "Movement Continuation", control: {...control, fn_not_finnished: false}}}
                 }
 
@@ -589,14 +602,18 @@ async function processMovement(cameraKey: string) : Promise<void> {
                 // got current movement
                 const m: MovementEntry = await movementdb.get(current_key)
                 
-                // Calculate actual elapsed time and time since last movement
+                // Increment consecutive polls without movement
+                const consecutivePolls = m.consecutivePollsWithoutMovement + 1;
                 const elapsedSeconds = Math.floor((Date.now() - m.startDate) / 1000);
-                const timeSinceLastMovement = elapsedSeconds - m.seconds;
                 
-                if (timeSinceLastMovement > secWithoutMovement || elapsedSeconds > (secMaxSingleMovement || 600)) {
+                if (consecutivePolls >= (pollsWithoutMovement || 1) || elapsedSeconds > (secMaxSingleMovement || 600)) {
 
-                    logger.info('Movement complete', { camera: cameraEntry.name, duration: `${elapsedSeconds}s` })
-                    current_taskid?.kill() // kill the ffmpeg process, so it stops writing images
+                    logger.info('Movement complete', { camera: cameraEntry.name, duration: `${elapsedSeconds}s`, pollsWithoutMovement: consecutivePolls })
+                    if (current_taskid && current_taskid.exitCode === null) {
+                        const reason = consecutivePolls >= (pollsWithoutMovement || 1) ? `${consecutivePolls} polls without movement` : 'max duration exceeded';
+                        logger.info('Terminating ffmpeg frame extraction', { camera: cameraEntry.name, movement: current_key, reason, pid: current_taskid.pid });
+                        current_taskid.kill();
+                    }
                     
                     // Flush ML detections if enabled
                     if (settingsCache.settings.enable_ml) {
@@ -609,8 +626,8 @@ async function processMovement(cameraKey: string) : Promise<void> {
                     
 
                 } else {
-                    // still same movement, update elapsed time and time since last movement
-                    await movementdb.put(current_key, {...m, seconds: elapsedSeconds, consecutivesecondswithout: timeSinceLastMovement})
+                    // still same movement, update elapsed time and consecutive polls without movement
+                    await movementdb.put(current_key, {...m, seconds: elapsedSeconds, consecutivePollsWithoutMovement: consecutivePolls})
                     cameraCache[cameraKey] = {...cameraCache[cameraKey],  movementStatus: {...movementStatus, status: "Movement Continuation (withoutmovement)", control: {...control, fn_not_finnished: false}}}
                 }
             } else {
@@ -1052,7 +1069,7 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n"
                                     startSegment: segs.segmentStart,
                                     seconds: segs.seconds,
                                     pollCount: 1,
-                                    consecutivesecondswithout: 0
+                                    consecutivePollsWithoutMovement: 0
                                 }
                             })
                         }
