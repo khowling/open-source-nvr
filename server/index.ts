@@ -179,8 +179,9 @@ function sendImageToMLDetection(imagePath: string, movement_key: number): void {
             // Track which movement this image belongs to
             imageToMovementMap.set(imagePath, movement_key);
             currentProcessingImage = imagePath; // Track current image being processed
+            const imageName = imagePath.split('/').pop() || imagePath;
             mlDetectionProcess.stdin.write(`${imagePath}\n`);
-            logger.debug('Image path written to ML stdin', { imagePath, movement: movement_key });
+            logger.info('Frame sent to ML detector', { frame: imageName, movement: movement_key, path: imagePath });
         } catch (error) {
             logger.warn('Failed to send image to ML detection', { error: String(error) });
         }
@@ -212,6 +213,13 @@ function processDetectionResult(line: string): void {
     if (!movement_key) return;
     
     const imageName = currentProcessingImage.split('/').pop() || currentProcessingImage;
+    
+    logger.info('Detection received from ML', { 
+        frame: imageName, 
+        movement: movement_key, 
+        object: objectType, 
+        probability: `${(probability * 100).toFixed(1)}%` 
+    });
     
     // Initialize accumulator for this movement if needed
     if (!detectionAccumulator[movement_key]) {
