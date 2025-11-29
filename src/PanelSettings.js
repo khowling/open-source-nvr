@@ -1,97 +1,202 @@
 import React  from 'react';
-import {  Text, DefaultButton, Dropdown, Stack, TextField, Slider, TagPicker, Separator, Label, MessageBar, MessageBarType, Checkbox, PrimaryButton, Panel } from '@fluentui/react'
+
+import {
+  Text, 
+  Select,
+  Dropdown,
+  Divider,
+  Input,
+  Checkbox,
+  Slider,
+  makeStyles,
+  tokens,
+  useId,
+  Label,
+  Textarea,
+  TextareaProps,
+  shorthands,
+  Combobox,
+  Option,
+  Dialog,
+  DialogSurface,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  DialogTrigger,
+  DialogBody,
+  Button,
+  Menu,
+  MenuTrigger,
+  SplitButton,
+  MenuList,
+  MenuItem,
+  MenuPopover,
+  Field
+} from "@fluentui/react-components";
+import { Alert } from '@fluentui/react-components/unstable';
+import { Dismiss12Regular, Folder16Regular, KeyCommand16Regular, Camera16Regular, NetworkAdapter16Regular, Password16Regular } from "@fluentui/react-icons";
 
 
-const cocoNames= [
-    "person",
-    "bicycle",
-    "car",
-    "motorbike",
-    "aeroplane",
-    "bus",
-    "train",
-    "truck",
-    "boat",
-    "traffic light",
-    "fire hydrant",
-    "stop sign",
-    "parking meter",
-    "bench",
-    "bird",
-    "cat",
-    "dog",
-    "horse",
-    "sheep",
-    "cow",
-    "elephant",
-    "bear",
-    "zebra",
-    "giraffe",
-    "backpack",
-    "umbrella",
-    "handbag",
-    "tie",
-    "suitcase",
-    "frisbee",
-    "skis",
-    "snowboard",
-    "sports ball",
-    "kite",
-    "baseball bat",
-    "baseball glove",
-    "skateboard",
-    "surfboard",
-    "tennis racket",
-    "bottle",
-    "wine glass",
-    "cup",
-    "fork",
-    "knife",
-    "spoon",
-    "bowl",
-    "banana",
-    "apple",
-    "sandwich",
-    "orange",
-    "broccoli",
-    "carrot",
-    "hot dog",
-    "pizza",
-    "donut",
-    "cake",
-    "chair",
-    "sofa",
-    "pottedplant",
-    "bed",
-    "diningtable",
-    "toilet",
-    "tvmonitor",
-    "laptop",
-    "mouse",
-    "remote",
-    "keyboard",
-    "cell phone",
-    "microwave",
-    "oven",
-    "toaster",
-    "sink",
-    "refrigerator",
-    "book",
-    "clock",
-    "vase",
-    "scissors",
-    "teddy bear",
-    "hair drier",
-    "toothbrush"
-    ].map(item => ({ key: item, name: item }));
+const useStyles = makeStyles({
+  base: {
+    display: "flex",
+    flexDirection: "column",
+    rowGap: tokens.spacingVerticalS,
+    "& > label": {
+      marginBottom: tokens.spacingVerticalMNudge,
+    },
+  },
+  root: {
+    // Stack the label above the field with a gap
+    display: "grid",
+    gridTemplateRows: "repeat(1fr)",
+    justifyItems: "start",
+    ...shorthands.gap("2px"),
+    //maxWidth: "400px",
+    marginTop: "15px" 
+  },
+  tagsList: {
+    listStyleType: "none",
+    marginBottom: tokens.spacingVerticalXXS,
+    marginTop: 0,
+    paddingLeft: 0,
+    display: "flex",
+    gridGap: tokens.spacingHorizontalXXS,
+  },
+});
 
+export const MultiselectWithTags = ({label, options, selectedOptions, setSelectedOptions}) => {
+  // generate ids for handling labelling
+  const comboId = useId("combo-multi");
+  const selectedListId = `${comboId}-selection`;
+
+  // refs for managing focus when removing tags
+  const selectedListRef = React.useRef(null);
+  const comboboxInputRef = React.useRef(null);
+
+  const styles = useStyles();
+
+  // Handle selectedOptions both when an option is selected or deselected in the Combobox,
+  // and when an option is removed by clicking on a tag
+  //const [selectedOptions, setSelectedOptions] = React.useState<string[]>([]);
+
+  const onSelect = (event, data) => {
+    setSelectedOptions(data.selectedOptions);
+  };
+
+  const onTagClick = (option, index) => {
+    // remove selected option
+    setSelectedOptions(selectedOptions.filter((o) => o !== option));
+
+    // focus previous or next option, defaulting to focusing back to the combo input
+    const indexToFocus = index === 0 ? 1 : index - 1;
+    const optionToFocus = selectedListRef.current?.querySelector(
+      `#${comboId}-remove-${indexToFocus}`
+    );
+    if (optionToFocus) {
+      (optionToFocus).focus();
+    } else {
+      comboboxInputRef.current?.focus();
+    }
+  };
+
+  const labelledBy =
+    selectedOptions.length > 0 ? `${comboId} ${selectedListId}` : comboId;
+
+  return (
+    <div className={styles.root}>
+      <Label id={comboId}>{label}</Label>
+      {selectedOptions.length ? (
+        <ul
+          id={selectedListId}
+          className={styles.tagsList}
+          ref={selectedListRef}
+        >
+          {/* The "Remove" span is used for naming the buttons without affecting the Combobox name */}
+          <span id={`${comboId}-remove`} hidden>
+            Remove
+          </span>
+          {selectedOptions.map((option, i) => (
+            <li key={option}>
+              <Button
+                size="small"
+                shape="circular"
+                appearance="primary"
+                icon={<Dismiss12Regular />}
+                iconPosition="after"
+                onClick={() => onTagClick(option, i)}
+                id={`${comboId}-remove-${i}`}
+                aria-labelledby={`${comboId}-remove ${comboId}-remove-${i}`}
+              >
+                {option}
+              </Button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <Combobox
+        aria-labelledby={labelledBy}
+        multiselect={true}
+        placeholder="Select one or more tags"
+        selectedOptions={selectedOptions}
+        onOptionSelect={onSelect}
+        ref={comboboxInputRef}
+      >
+        {options.map((option) => (
+          <Option key={option}>{option}</Option>
+        ))}
+      </Combobox>
+    </div>
+  );
+};
+
+export const MySplitButton = ({label, items}) => (
+  <Menu positioning="below-end">
+    <MenuTrigger disableButtonEnhancement>
+      {(triggerProps) => (
+        <SplitButton menuButton={triggerProps}>{label}</SplitButton>
+      )}
+    </MenuTrigger>
+
+    <MenuPopover>
+      <MenuList>
+        { items.map((i, idx) =>
+          <MenuItem key={idx}>{i.text}</MenuItem>  
+        )}
+        
+      </MenuList>
+    </MenuPopover>
+  </Menu>
+);
 
 
 export function PanelSettings({panel, setPanel, data, getServerData}) {
 
     const [error, setError] = React.useState(null)
+    const [models, setModels] = React.useState([]);
+    const [modelsLoading, setModelsLoading] = React.useState(false);
+
+    // Fetch available ML models when panel opens
+    React.useEffect(() => {
+        if (panel.open && panel.key === 'settings' && !modelsLoading && models.length === 0) {
+            setModelsLoading(true);
+            fetch('/api/ml-models')
+                .then(res => res.json())
+                .then(data => {
+                    setModels(data.models || []);
+                    setModelsLoading(false);
+                })
+                .catch(err => {
+                    console.error('Failed to fetch ML models:', err);
+                    setModelsLoading(false);
+                });
+        }
+    }, [panel.open, panel.key, models.length, modelsLoading]);
+
+    const styles = useStyles();
 
     function updatePanelValues(field, value) {
+        console.log (`updatePanelValues ${field} ${JSON.stringify(value)}`)
         var calcFolder = panel.values.folder || ''
         if (field === "name") {
           if (!calcFolder) {
@@ -128,8 +233,10 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
         if (panel.key === 'settings') {
           invalidFn('disk_base_dir', !panel.values.disk_base_dir || panel.values.disk_base_dir.endsWith('/') || !panel.values.disk_base_dir.startsWith('/'),
             <Text>Must be abosolute path (cannot end with '/')</Text>)
-          invalidFn('mlDir', panel.values.enable_ml && (!panel.values.mlDir || panel.values.mlDir.endsWith('/') || !panel.values.mlDir.startsWith('/')),
-            <Text>Must be abosolute path (cannot end with '/')</Text>)
+          invalidFn('mlModel', panel.values.enable_ml && (!panel.values.mlModel),
+            <Text>Must select a model for object detection</Text>)
+          invalidFn('mlFramesPath', panel.values.enable_ml && panel.values.mlFramesPath && (panel.values.mlFramesPath.endsWith('/')),
+            <Text>Frames path cannot end with '/'</Text>)
         } else {
           invalidFn('name', !panel.values.name || panel.values.name.match(/^[a-z0-9][_\-a-z0-9]+[a-z0-9]$/i) === null || panel.values.name.length > 19,
             <Text>Enter valid camera name</Text>)
@@ -148,15 +255,6 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
               <Text>Enter valid camera IPv4 address</Text>)
           }
         }
-    }
-
-
-
-    const listContainsTagList = (tag, tagList) => {
-      if (!tagList || !tagList.length || tagList.length === 0) {
-        return false;
-      }
-      return tagList.some(compareTag => compareTag.key === tag.key);
     }
 
     function savePanel(event, ctx) {
@@ -190,117 +288,189 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
     }
 
     const currCamera = panel.key === 'edit' && data.cameras && panel.values.key && data.cameras.find(c => c.key === panel.values.key)
+    return panel.open && (
 
-    console.log (panel.values)
+      <Dialog modalType='modal' open={panel.open}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>{panel.heading}</DialogTitle>
+            
+            { panel.key === 'settings' ? 
+              <DialogContent className={styles.base}>
 
-    return (
+                    <Divider ><b>Storage Settings</b></Divider>
 
-        <Panel
-            headerText={panel.heading}
-            isOpen={panel.open}
-            onDismiss={() => setPanel({...panel, open: false, invalidArray: []})}
-            // You MUST provide this prop! Otherwise screen readers will just say "button" with no label.
-            closeButtonAriaLabel="Close">
+                    <Field
+                      label="Disk Mount Folder"
+                      validationState={getError('disk_base_dir') ? "error" : "none"}
+                      validationMessage={getError('disk_base_dir')}>
+                      <Input style={{"width": "100%"}} contentBefore={<Folder16Regular/>} required value={panel.values.disk_base_dir} onChange={(_, data) => updatePanelValues('disk_base_dir', data.value)}  />
+                    </Field>
 
-          { panel.open && 
-            <Stack>
-                { panel.key === 'settings' ? 
-                <>
+                    <div className={styles.root}>
+                      <label>Check Capacity Interval {panel.values.cleanup_interval} minutes</label>
+                      <Slider style={{"width": "100%"}} min={0} max={60} step={5} defaultValue={panel.values.cleanup_interval} showValue onChange={(_,data) => updatePanelValues('cleanup_interval', data.value)} />
+                    </div>
 
-                    <Separator styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}><b>Storage Settings</b></Separator>
-                    <TextField label="Disk Mount Folder" iconProps={{ iconName: 'Folder' }}  required value={panel.values.disk_base_dir} onChange={(ev, val) => updatePanelValues('disk_base_dir', val)} errorMessage={getError('disk_base_dir')} />
+                    <div className={styles.root}>
+                      <label>Keep under Capacity {panel.values.cleanup_capacity}%</label>
+                      <Slider style={{"width": "100%"}} disabled={panel.values.cleanup_interval === 0}  min={20} max={100} step={5} defaultValue={panel.values.cleanup_capacity} showValue onChange={(_,data) => updatePanelValues('cleanup_capacity', data.value)} />
+                    </div>
+
+
+                    <Divider><b>Object Detection</b></Divider>
                     
-                    <Checkbox label="Enable Disk Cleanup" checked={panel.values.enable_cleanup} onChange={(ev, val) => updatePanelValues('enable_cleanup', val)} styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}/>
-                    <Slider disabled={!panel.values.enable_cleanup} label="Keep under Capacity %" min={1} max={99} step={1} defaultValue={panel.values.cleanup_capacity} showValue onChange={(val) => updatePanelValues('cleanup_capacity', val)} />
-                    <Slider disabled={!panel.values.enable_cleanup} label="Check Capacity Interval (minutes)" min={1} max={60} step={1} defaultValue={panel.values.cleanup_interval} showValue onChange={(val) => updatePanelValues('cleanup_interval', val)} />
+                    <Checkbox label="Enable Object Detection" checked={panel.values.enable_ml} onChange={(_,data) => updatePanelValues('enable_ml', data.checked)} />
+                    
+                    <Field
+                      label="YOLO Model"
+                      validationState={getError('mlModel') ? "error" : "none"}
+                      validationMessage={getError('mlModel')}>
+                      <Dropdown 
+                        style={{"width": "100%"}} 
+                        disabled={!panel.values.enable_ml || modelsLoading}
+                        placeholder={modelsLoading ? "Loading models..." : "Select a model"}
+                        value={panel.values.mlModel || ''}
+                        selectedOptions={panel.values.mlModel ? [panel.values.mlModel] : []}
+                        onOptionSelect={(_, data) => updatePanelValues('mlModel', data.optionValue)}>
+                        {models.map(model => (
+                          <Option key={model} value={model}>{model}</Option>
+                        ))}
+                      </Dropdown>
+                    </Field>
+
+                    <Field
+                      label="Frames Output Path"
+                      hint="Relative to Base Directory above (e.g., 'frames' or 'ml_images'). Leave empty to use camera folder."
+                      validationState={getError('mlFramesPath') ? "error" : "none"}
+                      validationMessage={getError('mlFramesPath')}>
+                      <Input 
+                        style={{"width": "100%"}} 
+                        disabled={!panel.values.enable_ml} 
+                        contentBefore={<Folder16Regular/>}  
+                        placeholder="frames"
+                        value={panel.values.mlFramesPath || ''} 
+                        onChange={(_, data) => updatePanelValues('mlFramesPath', data.value)} />
+                    </Field>
 
 
-                    <Separator styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}><b>Object Detection</b></Separator>
-                    
-                    <Checkbox label="Enable Object Detection" checked={panel.values.enable_ml} onChange={(ev, val) => updatePanelValues('enable_ml', val)} styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}/>
-                    
-                    <TextField disabled={!panel.values.enable_ml} label="Object Detection Run Folder" iconProps={{ iconName: 'Folder' }}  required value={panel.values.mlDir} onChange={(ev, val) => updatePanelValues('mlDir', val)} errorMessage={getError('mlDir')} />
-                    
-                    <TextField disabled={!panel.values.enable_ml} label="Object Detection Command (use {in} and {out} for images)" iconProps={{ iconName: 'Folder' }}  required value={panel.values.mlCmd} onChange={(ev, val) => updatePanelValues('mlCmd', val)} errorMessage={getError('mlCmd')} />
+                    <Field
+                      label="Model Labels (COCO dataset - optional)"
+                      hint="Comma-separated list of object classes. Defaults to COCO 80 classes.">
+                      <Textarea resize="vertical" disabled={!panel.values.enable_ml} rows={3} value={panel.values.labels} onChange={(ev, val) => updatePanelValues('labels', val.value)}/>
+                    </Field>
 
                     { data.config && data.config.status  &&  Object.keys(data.config.status).length > 0 && 
-                    <Stack.Item>
-                        <Separator/>
-                        <MessageBar>{JSON.stringify(data.config.status, null, 2)}</MessageBar>
-                    </Stack.Item>
+                      <div className={styles.root}>
+                        <Alert intent="info">{JSON.stringify(data.config.status, null, 2)}</Alert>
+                      </div>
                     }
 
-                </>
-                :
-                <>
-                    <Label>Camera ID: {panel.values.key}</Label>
-                    <TextField label="Camera Name" onChange={(ev, val) => updatePanelValues('name', val)} required errorMessage={getError('name')} value={panel.values.name} />
-                    <TextField label="IP Address" prefix="IP" onChange={(ev, val) => updatePanelValues('ip', val)} required errorMessage={getError('ip')} value={panel.values.ip} />
-                    <TextField label="admin Password" type="password"  value={panel.values.passwd} onChange={(ev, val) => updatePanelValues('passwd', val)} />
+                    <div className={styles.root}></div>
+
+              </DialogContent>
+            :
+              <DialogContent className={styles.base}>
                     
-                    <Stack horizontal tokens={{ childrenGap: 10 }}>
-                    <Dropdown label="Disk" selectedKey={panel.values.disk} options={data.config && [ { key: data.config.settings.disk_base_dir, text: data.config.settings.disk_base_dir}]} required onChange={(ev, {key}) => updatePanelValues('disk', key)} errorMessage={getError('disk')} />
-                    <TextField label="Steaming Folder" iconProps={{ iconName: 'Folder' }}  required value={panel.values.folder} onChange={(ev, val) => updatePanelValues('folder', val)} errorMessage={getError('folder')} />
-                    </Stack>
+                    <Field
+                      label="Camera Name"
+                      validationState={getError('name') ? "error" : "none"}
+                      validationMessage={getError('name')}>
+                      <Input style={{"width": "100%"}} contentBefore={<Camera16Regular/>}  required value={panel.values.name} onChange={(_, data) => updatePanelValues('name', data.value)} />
+                    </Field>
 
-                    <Label>Filter Tags (Requires Object Detection)</Label>
-                    <TagPicker
-                    disabled={data.config && !data.config.settings.enable_ml}
-                    onChange={(i) => panel.values.ignore_tags = i.map(i => i.key)}
-                    defaultSelectedItems={panel.values.ignore_tags ? panel.values.ignore_tags.map(i => {return {key:i,name:i}} ) : []}
-                    removeButtonAriaLabel="Remove"
-                    selectionAriaLabel="Selected colors"
-                    onResolveSuggestions={(filterText, tagList) => {
-                        return filterText
-                        ? cocoNames.filter(
-                            tag => tag.name.toLowerCase().indexOf(filterText.toLowerCase()) === 0 && !listContainsTagList(tag, tagList),
-                            )
-                        : [];
-                    }}
-                    getTextFromItem={(i) => i.name}
-                    pickerSuggestionsProps={{
-                        suggestionsHeaderText: 'Suggested tags',
-                        noResultsFoundText: 'No tags found',
-                    }}
-                    />
+                    <Field
+                      label="IP Address (display on create only)"
+                      validationState={getError('ip') ? "error" : "none"}
+                      validationMessage={getError('ip')}>
+                      <Input style={{"width": "100%"}} contentBefore={<NetworkAdapter16Regular/>}  required value={panel.values.ip} onChange={(_, data) => updatePanelValues('ip', data.value)} />
+                    </Field>
 
-                    <Separator styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}><b>Playback</b></Separator>
-                    <Checkbox label="Enable Streaming" checked={panel.values.enable_streaming} onChange={(ev, val) => { updatePanelValues('enable_streaming', val)} } />
+                    <Field
+                      label="Camera Password (display on create only)"
+                      validationState={getError('passwd') ? "error" : "none"}
+                      validationMessage={getError('passwd')}>
+                      <Input style={{"width": "100%"}} contentBefore={<Password16Regular/>}  required type="password" value={panel.values.passwd} onChange={(_, data) => updatePanelValues('passwd', data.value)} />
+                    </Field>
+
+
+                    <Field
+                      label="Video Files"
+                      validationState={getError('disk') || getError('folder') ? "error" : "none"}
+                      validationMessage={getError('disk') || getError('folder')}>
+                      <div>
+                          <div  style={{"display": "inline-block"}} >
+                          <Select style={{ "maxWidth": "150px"}} value={panel.values.disk}  required onChange={(_, data) => updatePanelValues('disk', data.value)} >
+                            {data.config &&  <option>{data.config.settings.disk_base_dir}</option>  }
+                          </Select>
+                          </div>
+                          /
+                          <div  style={{"display": "inline-block"}} >
+                            <Input contentAfter={<Folder16Regular/>}  required value={panel.values.folder} onChange={(_, data) => updatePanelValues('folder', data.value)} />
+                          </div>
+                      </div>
+                    </Field>
+
+                    <MultiselectWithTags 
+                      label="Filter Tags (Requires Object Detection)" 
+                      options={data.config.settings.labels ? data.config.settings.labels.split(/[;,\n]/): []}
+                      selectedOptions={panel.values.ignore_tags}
+                      setSelectedOptions={val => { updatePanelValues('ignore_tags', val)}} />
+
+                    
+                    <Divider><b>Playback</b></Divider>
+
+                    <Checkbox label="Enable Streaming" checked={panel.values.enable_streaming} onChange={(_,data) => { updatePanelValues('enable_streaming', data.checked)} } />
+
+                    <div className={styles.root}>
+                      <label>Playback seconds prior to movement: {panel.values.segments_prior_to_movement*2} seconds</label>
+                      <Slider style={{"width": "100%"}} disabled={!panel.values.enable_streaming}  min={0} max={60} step={1} defaultValue={panel.values.segments_prior_to_movement}  onChange={(_,data) => updatePanelValues('segments_prior_to_movement', data.value)} />
+                    </div>
+                    
+                    <div className={styles.root}>
+                      <label>Playback seconds post movement: {panel.values.segments_post_movement*2} seconds</label>
+                      <Slider style={{"width": "100%"}} disabled={!panel.values.enable_streaming}  min={0} max={60} step={1} defaultValue={panel.values.segments_post_movement}  onChange={(_,data) => updatePanelValues('segments_post_movement', data.value)} />
+                    </div>
 
                     { currCamera && currCamera.ffmpeg_process &&
-                    <Stack.Item>
-                        <Separator/>
-                        <MessageBar messageBarType={currCamera.ffmpeg_process.error ? MessageBarType.error : (currCamera.ffmpeg_process.running ?  MessageBarType.success : MessageBarType.warning)}>{JSON.stringify(currCamera.ffmpeg_process, null, 2)}</MessageBar>
-                    </Stack.Item>
+                    <Alert intent={currCamera.ffmpeg_process.error ? 'error' : (currCamera.ffmpeg_process.running ?  'success' : 'warning')}>
+                      {JSON.stringify(currCamera.ffmpeg_process, null, 2)}
+                    </Alert>
                     }
 
-                    <Stack styles={{ root: { marginTop: "15px !important"} }}>
-                    <Slider disabled={!panel.values.enable_streaming} label="Segments(2s) prior to movement" min={0} max={60} step={1} defaultValue={panel.values.segments_prior_to_movement} showValue onChange={(val) => updatePanelValues('segments_prior_to_movement', val)} />
-                    <Slider disabled={!panel.values.enable_streaming} label="Segments(2s) post movement" min={0} max={60} step={1} defaultValue={panel.values.segments_post_movement} showValue onChange={(val) => updatePanelValues('segments_post_movement', val)} />
-                    </Stack>
+                    <Divider><b>Movement processing</b></Divider>
+                    
+                    <Checkbox disabled={!panel.values.enable_streaming} label="Enable Movement" checked={panel.values.enable_movement} onChange={(_, data) => updatePanelValues('enable_movement', data.checked)} />
+                    
+                    <div className={styles.root}>
+                      <label>Poll Frequency: {panel.values.mSPollFrequency/1000} seconds</label>
+                      <Slider style={{"width": "100%"}} disabled={!panel.values.enable_movement} min={1000} max={10000} step={500} defaultValue={panel.values.mSPollFrequency}  onChange={(_,data) => updatePanelValues('mSPollFrequency', data.value)} />
+                    </div>
 
-                    <Separator styles={{ root: { marginTop: "15px !important", marginBottom: "5px" } }}><b>Movement processing</b></Separator>
+                    <div className={styles.root}>
+                      <label>Continuation if no movement for {panel.values.secWithoutMovement} seconds</label>
+                      <Slider style={{"width": "100%"}} disabled={!panel.values.enable_movement}  min={0} max={50} step={1} defaultValue={panel.values.secWithoutMovement}  onChange={(_,data) => updatePanelValues('secWithoutMovement', data.value)} />
+                    </div>
                     
-                    <Checkbox disabled={!panel.values.enable_streaming} label="Enable Movement" checked={panel.values.enable_movement} onChange={(ev, val) => updatePanelValues('enable_movement', val)} />
-                    
+                    <div className={styles.root}>
+                      <label>Max. Single Movement {panel.values.secMaxSingleMovement} seconds</label>
+                      <Slider style={{"width": "100%"}} disabled={!panel.values.enable_movement}  min={60} max={600} step={10} defaultValue={panel.values.secMaxSingleMovement}  onChange={(_,data) => updatePanelValues('secMaxSingleMovement', data.value)} />
+                    </div>
+
                     { currCamera && currCamera.movementStatus &&
-                    <Stack.Item>
-                        <Separator/>
-                        <MessageBar messageBarType={currCamera.movementStatus.fail ? MessageBarType.error : (currCamera.movementStatus.current_movement ?  MessageBarType.success : MessageBarType.warning)}>{JSON.stringify(currCamera.movementStatus, null, 2)}</MessageBar>
-                    </Stack.Item>
+                    <Alert intent={currCamera.movementStatus.fail ? 'error' : (currCamera.movementStatus.current_movement ?  'success' : 'warning')}>
+                      {JSON.stringify(currCamera.movementStatus, null, 2)}
+                      </Alert>
                     }
 
-                    <Stack styles={{ root: { marginTop: "15px !important"} }}>
-                    <Slider disabled={!panel.values.enable_movement} label="Poll Frequency (mS)" min={1000} max={10000} step={500} defaultValue={panel.values.mSPollFrequency} showValue onChange={(val) => updatePanelValues('mSPollFrequency', val)} />
-                    <Slider disabled={!panel.values.enable_movement} label="Continuation if no movement for (s)" min={0} max={50} step={1} defaultValue={panel.values.secWithoutMovement} showValue onChange={(val) => updatePanelValues('secWithoutMovement', val)} />
-                    <Slider disabled={!panel.values.enable_movement} label="Max. Single Movement (s)" min={60} max={600} step={10} defaultValue={panel.values.secMaxSingleMovement} showValue onChange={(val) => updatePanelValues('secMaxSingleMovement', val)} />
-                    {panel.key}
-                    </Stack>
+              </DialogContent>
+            }
 
+            <DialogActions>
 
-                    { panel.key === 'edit' &&
-                    <Stack styles={{ root: { marginTop: "15px !important"} }}>
-                        <DefaultButton  text="Delete" disabled={panel.invalidArray.length >0} split menuProps={{ items: [
+              { panel.key === 'edit' &&
+                      
+                 <MySplitButton  label="Delete" disabled={panel.invalidArray.length >0}  items={[
                         {
                             key: 'del',
                             text: 'Delete Camera',
@@ -312,22 +482,24 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
                             text: 'Delete Camera & Recordings',
                             iconProps: { iconName: 'Delete' },
                             onClick: savePanel
-                        }]}} />
-                        </Stack>
-                    }
+                   }]} />
+                   
+                }
+              <Button appearance="primary" disabled={panel.invalidArray.length >0} onClick={savePanel}>Save</Button>
+              <DialogTrigger disableButtonEnhancement >
+                <Button appearance="secondary" onClick={() => setPanel({...panel, open: false, invalidArray: []})} >Close</Button>
+              </DialogTrigger>
 
-                </>
-            }
-
-                <PrimaryButton styles={{ root: { marginTop: "15px !important"}}} disabled={panel.invalidArray.length >0} text="Save" onClick={savePanel}/>
-
-                {error &&
-                <MessageBar messageBarType={MessageBarType.error} isMultiline={false} truncated={true}>
+              {error &&
+                <Alert intent='error' >
                 {error}
-                </MessageBar>
-            }
-            </Stack>
-        }
-      </Panel>
+                </Alert>
+              }
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      
+      </Dialog> 
     )
+    
 }

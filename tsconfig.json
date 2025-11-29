@@ -1,7 +1,8 @@
 {
   "compilerOptions": {
     "lib": [
-      "es2021"
+      "es2021",
+      "dom"
     ],
     "module": "commonjs",
     "target": "es2021",
@@ -19,7 +20,6 @@
     "noUncheckedIndexedAccess": true,
     "noUnusedLocals": false,
     "noUnusedParameters": true,
-    "importsNotUsedAsValues": "error",
     "checkJs": true,
     "sourceMap": true,
     "outDir": "lib"

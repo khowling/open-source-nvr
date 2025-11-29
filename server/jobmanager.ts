@@ -130,7 +130,7 @@ export class JobManager {
                     }
                     res(value)
                 })
-            })
+            }) as ControlData
 
             // Restart running processes
             console.log(`JobManager: Re-starting: queued=${nextSequence} running=${numberRunning} completed=${numberCompleted} nextToRun=${nextToRun}`)

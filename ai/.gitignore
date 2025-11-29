@@ -1,0 +1,8 @@
+venv
+model/*
+__pycache__
+dist
+*.egg-info
+*.onnx
+*.pt
+*.jpg

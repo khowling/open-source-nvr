@@ -2,63 +2,74 @@
 import './App.css';
 import React, { useEffect }  from 'react';
 import videojs from 'video.js'
-import { ThemeProvider, CommandBar, Text, DetailsList, Stack, Selection, SelectionMode } from '@fluentui/react'
-import { initializeIcons } from '@fluentui/react/lib/Icons';
-import { createTheme } from '@fluentui/react';
 import { PanelSettings } from './PanelSettings.js'
+import { ToolbarGroup, Badge, Text, Button, Portal, Toolbar, Menu, MenuTrigger, Tooltip, SplitButton, MenuPopover, MenuList, MenuItem, ToolbarButton, ToolbarDivider, createTableColumn, TableCellLayout, Spinner } from "@fluentui/react-components";
+import {
+  DataGridBody,
+  DataGrid,
+  DataGridRow,
+  DataGridHeader,
+  DataGridCell,
+  DataGridHeaderCell,
+} from "@fluentui-contrib/react-data-grid-react-window";
+import { ArrowMove20Regular, AccessibilityCheckmark20Regular, AccessTime20Regular, Settings16Regular, ArrowDownload16Regular, DataUsageSettings20Regular, Tv16Regular, Video20Regular, VideoAdd20Regular, ArrowRepeatAll20Regular, Filter20Regular } from "@fluentui/react-icons";
 
-const appTheme = createTheme({
-  defaultFontStyle: { fontWeight: 'regular' },
-  fonts: {
-    small: {
-      fontSize: '14px',
-    },
-    medium: {
-      fontSize: '16px',
-    },
-    large: {
-      fontSize: '16px',
-      fontWeight: 'semibold',
-    },
-    xLarge: {
-      fontSize: '18px',
-      fontWeight: 'semibold',
-    },
-  },
-});
 
-initializeIcons(/* optional base url */);
-
-function VideoJS (props)  {
-
+export const VideoJS = ({options, onReady, play}) => {
   const videoRef = React.useRef(null);
   const playerRef = React.useRef(null);
-  const { options, onReady } = props;
 
   React.useEffect(() => {
-    // make sure Video.js player is only initialized once
+
+    // Make sure Video.js player is only initialized once
     if (!playerRef.current) {
-      const videoElement = videoRef.current;
-      if (!videoElement) return;
+      // The Video.js player needs to be _inside_ the component el for React 18 Strict Mode. 
+      const videoElement = document.createElement("video-js");
+
+      videoElement.classList.add('vjs-4-3');
+      videoRef.current.appendChild(videoElement);
 
       const player = playerRef.current = videojs(videoElement, options, () => {
-        console.log("player is ready");
+        videojs.log('player is ready');
         onReady && onReady(player);
       });
-    } else {
-      // you can update player here [update player through props]
-      // const player = playerRef.current;
-      // player.autoplay(options.autoplay);
-      // player.src(options.sources);
+
+    // You could update an existing player in the `else` block here
+    // on prop change, for example:
+    } else if (play) {
+
+      const { cKey, mKey, mStartSegment, mSeconds, segments_prior_to_movement, segments_post_movement} = play
+      const player = playerRef.current;
+
+      if (!player) {
+        console.warn('VideoJS: player not ready yet');
+        return;
+      }
+
+      player.src({
+        src: `/video/${mKey ? `${mStartSegment}/${mSeconds}` : 'live' }/${cKey}/stream.m3u8${(mKey && segments_prior_to_movement) ? `?preseq=${segments_prior_to_movement}&postseq=${segments_post_movement}` : ''}`,
+        type: 'application/x-mpegURL'
+      })
+
+   
+      if (mKey && segments_prior_to_movement) {
+        player.currentTime(segments_prior_to_movement * 2) // 20 seconds into stream (coresponds with 'segments_prior_to_movement')
+      }
+      
+      console.log ('VideoJS: play()')
+      player.play()
+
+      //player.autoplay(options.autoplay);
+      //player.src(options.sources);
     }
-  }, [options, videoRef]);
+  }, [options, videoRef, play]);
 
   // Dispose the Video.js player when the functional component unmounts
   React.useEffect(() => {
     const player = playerRef.current;
 
     return () => {
-      if (player) {
+      if (player && !player.isDisposed()) {
         player.dispose();
         playerRef.current = null;
       }
@@ -67,31 +78,32 @@ function VideoJS (props)  {
 
   return (
     <div data-vjs-player>
-      <video ref={videoRef} className="video-js vjs-big-play-centered" />
+      <div ref={videoRef} />
     </div>
   );
 }
 
-
 function App() {
 
-  const [panel, setPanel] = React.useState({open: false, invalidArray: []});
-
-  //const [invalidArray, setInvalidArray] = React.useState([])
-
-  const init_data = { cameras: [], movements: [] }
-  const [data, setData] = React.useState(init_data)
   const [currentPlaying, setCurrentPlaying] = React.useState(null)
-  //const [inputState, setInputState] = React.useState({ current_idx: 'none', allSelected: false, inputs: {} })
-  const [mode, setMode] = React.useState('Filtered')
-  const [showPlayer, setShowPlayer] = React.useState(true)
-  //const [playerReady, setPlayerReady] = React.useState(false)
-
-
-
+  //const videoElement = document.getElementById("video");
+  
   const playerRef = React.useRef(null);
+  
+  function playVideo(cKey, mKey, mStartSegment, mSeconds, segments_prior_to_movement, segments_post_movement) {
+    console.log (`App() : playVideo :   cameraKey=${cKey} mKey=${mKey} (${mStartSegment}/${mSeconds}) (prior:${segments_prior_to_movement}/post:${segments_post_movement})`)
+    const mPlayer = playerRef.current
+    //console.log ("playVideo data: ", data)
+    //const camera = cKey && data.cameras.find(c => c.key === cKey)
+    if (cKey && mPlayer && (!currentPlaying || (currentPlaying.cKey !== cKey || currentPlaying.mKey !== mKey))) {
 
-  console.log ("mode: ", mode)
+      setCurrentPlaying({ cKey, mKey, mStartSegment, mSeconds, segments_prior_to_movement, segments_post_movement})
+      
+      
+    } else {
+      console.warn(`App() : playVideo : player not ready or cannot find camera, or already playing selected camera/movement`)
+    }
+  }
 
   const handlePlayerReady = (player) => {
     playerRef.current = player;
@@ -105,9 +117,57 @@ function App() {
       console.log('handlePlayerReady: player will dispose');
     });
   };
+/*
+  React.useEffect(() => {
+    // make sure Video.js player is only initialized once
+    if (!playerRef.current) {
+      if (!videoElement) return;
+
+      const player = playerRef.current = videojs(videoElement, { 
+        autoplay: true,
+        muted:"muted",
+        controls: true,
+        liveui: true,
+      }, () => {
+        console.log("player is ready");
+        handlePlayerReady(player);
+      });
+    } else {
+      // you can update player here [update player through props]
+      // const player = playerRef.current;
+      // player.autoplay(options.autoplay);
+      // player.src(options.sources);
+    }
+  }, []);
+*/
+  return (
+    <div className="container">
+          <VideoJS options={{
+              autoplay: true,
+              muted:"muted",
+              controls: true,
+              liveui: true
+          }} onReady={handlePlayerReady} play={currentPlaying}/>
+        <div>
+          <CCTVControl playVideo={playVideo} currentPlaying={currentPlaying}/>
+        </div>
+      </div>
+  )
+  
+  
+}
+
+function CCTVControl({currentPlaying, playVideo}) {
+
+  const [panel, setPanel] = React.useState({open: false, invalidArray: []});
+
+  const init_data = { cameras: [], movements: [] }
+  const [data, setData] = React.useState(init_data)
+  
+  const [mode, setMode] = React.useState('Filtered')
+  const [showPlayer, setShowPlayer] = React.useState(true)
 
   function getServerData() {
-    //setCurrentPlaying(null)
     console.log ('getServerData, mode=', mode)
     setData({...init_data, status: 'fetching'})
     fetch(`/api/movements?mode=${mode}`)
@@ -140,40 +200,17 @@ function App() {
   
   useEffect(getServerData, [mode])
 
-  function playVideo(cKey, mKey, mStartSegment, mSeconds, segments_prior_to_movement, segments_post_movement) {
-    console.log (`playVideo mode=${mode} cameraKey=${cKey} mKey=${mKey}`)
-    const mPlayer = playerRef.current
-    //console.log ("playVideo data: ", data)
-    //const camera = cKey && data.cameras.find(c => c.key === cKey)
-    if (cKey && mPlayer && (!currentPlaying || (currentPlaying.cKey !== cKey || currentPlaying.mKey !== mKey))) {
-
-      setCurrentPlaying({ cKey, mKey})
-      mPlayer.src({
-        src: `/video/${mKey ? `${mStartSegment}/${mSeconds}` : 'live' }/${cKey}/stream.m3u8${(mKey && segments_prior_to_movement) ? `?preseq=${segments_prior_to_movement}&postseq=${segments_post_movement}` : ''}`,
-        type: 'application/x-mpegURL'
-      })
-
-      if (mKey && segments_prior_to_movement) {
-        mPlayer.currentTime(segments_prior_to_movement * 2) // 20 seconds into stream (coresponds with 'segments_prior_to_movement')
-      }
-      mPlayer.play()
-    } else {
-      console.warn(`playVideo : player not ready or cannot find camera, or already playing selected camera/movement`)
-    }
-  }
-
   
-  const _selection = new Selection({
-    getKey: function (m) { return  m.key },
-    onSelectionChanged: function () {
-      //console.log (`onSelectionChanged: getSelectedIndices()=${JSON.stringify(_selection.getSelectedIndices())}, getSelection()=${JSON.stringify(_selection.getSelection())}`)
-      const selectedItems = _selection.getSelection()
-      if (selectedItems.length > 0) {
-        const {key, cameraKey, startSegment, seconds, segments_prior_to_movement, segments_post_movement} = selectedItems[0]
-        playVideo(cameraKey, key, startSegment, seconds, segments_prior_to_movement, segments_post_movement)
-      }
-    }
-  })
+const onSelectionChange = (_, d) => {
+  console.log ('onselection')
+  if (d.selectedItems.size > 0) {
+    const {key, movement} = data.movements.find(m => m.key === [...d.selectedItems][0])
+    const { cameraKey, startSegment, seconds } = movement
+    const { segments_prior_to_movement, segments_post_movement } = data.cameras.find(c => c.key === cameraKey)
+    playVideo(cameraKey, key, startSegment, seconds, segments_prior_to_movement, segments_post_movement)
+  }
+}
+
 
   function _debug(item) {
     console.log (item)
@@ -188,38 +225,46 @@ function App() {
     }
   }
 
-/*
-  function filterIgnoreTags(cameraKey, ml) {
-    if (ml && ml.success && Array.isArray(ml.tags) && ml.tags.length > 0) {
-      const { ignore_tags } = data.cameras.find(c => c.key === cameraKey) || {}
-      if (ignore_tags && Array.isArray(ignore_tags) && ignore_tags.length > 0) {
-        return ml.tags.reduce((a, c) => ignore_tags.includes(c.tag) ? a : a.concat(c), [])
-      } else {
-        return ml.tags
-      }
-    }
-    return []
-  }
-*/
   function renderTags(selectedList, idx) {
-
-    if (false) {
-    return <a target="_blank" href="http://www.google.com"><Stack>{[{tag: "tag1", probability: 100},{tag: "tag1", probability: 100}].map((t, idx) => <Text key={idx} variant="mediumPlus" >{t.tag} ({t.probability})</Text>)}</Stack></a>
-    }
-
-    const { key, cameraKey, ml, ffmpeg} = selectedList
+    const { key, cameraKey, ml, mlProcessing, ffmpeg } = selectedList
     const img = `/image/${key}`
+
+    // Show spinner if ML processing is ongoing
+    if (mlProcessing) {
+      return (
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <Spinner size="tiny" />
+          <Text variant="mediumPlus">Detecting...</Text>
+        </div>
+      )
+    }
 
     if (ml) {
       if (ml.success) {
-        //const filteredTags = filterIgnoreTags(cameraKey, ml)
         if (ml.tags.length > 0) {
-          return <a target="_blank" href={img}><Stack>{ml.tags.map((t, idx) => <Text key={idx} variant="mediumPlus" >{t.tag} ({t.probability})</Text>)}</Stack></a>
+          // Sort tags by maxProbability descending and format with percentage
+          const sortedTags = [...ml.tags].sort((a, b) => b.maxProbability - a.maxProbability)
+          return (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "5px" }}>
+              {sortedTags.map((t, idx) => {
+                const frameUrl = t.maxProbabilityImage 
+                  ? `/frame/${key}/${t.maxProbabilityImage}`
+                  : img;
+                return (
+                  <a key={idx} style={{ textDecoration: "none" }} target="_blank" href={frameUrl}>
+                    <Badge appearance="outline" color={idx === 0 ? "brand" : "informative"}>
+                      {t.tag} ({(t.maxProbability * 100).toFixed(1)}%) {t.count > 1 && `×${t.count}`}
+                    </Badge>
+                  </a>
+                );
+              })}
+            </div>
+          )
         } else {
-          return <a target="_blank" href={img}><Text variant="mediumPlus" >ML Image</Text></a>
+          return <a target="_blank" href={img}><Text variant="mediumPlus">ML Image</Text></a>
         }
       } else {
-        return <Text styles={{ root: {color: 'red'}}} variant="mediumPlus">{ml.code}: {ml.stderr} {ml.error}</Text>
+        return <Text styles={{ root: { color: 'red' } }} variant="mediumPlus">{ml.code}: {ml.stderr} {ml.error}</Text>
       }
     } else if (ffmpeg) {
       if (ffmpeg.success) {
@@ -232,235 +277,169 @@ function App() {
     }
   }
 
-  return (
-    <main>
+  return <>
 
-      <nav className="header">
-        <div className="logo">Home Surveillance</div>
-        <input className="menu-btn" type="checkbox" id="menu-btn" />
-        <label className="menu-icon" htmlFor="menu-btn"><span className="navicon"></span></label>
-        <ul className="menu">
-          <li><a href="/grafana/?orgId=1">Grafana</a></li>
-          <li><a href="/network">Network Control</a></li>
-        </ul>
-      </nav>
+      <Portal>
+        <PanelSettings data={data} panel={panel} setPanel={setPanel} getServerData={getServerData}/>
+      </Portal>
 
-      <div style={{ "height": "34px", "width": "100%" }} />
+      <Toolbar aria-label="Default" style={{"justifyContent": "space-between" }}>
 
-      <PanelSettings data={data} panel={panel} setPanel={setPanel} getServerData={getServerData}/>
+        <ToolbarGroup role="presentation">
 
-      <Stack horizontal wrap >
-
-
-        {showPlayer &&
-          <Stack.Item styles={{ root: { width: "700px" } }} grow={1}>
-            <VideoJS  options={{
-                autoplay: true,
-                muted:"muted",
-                controls: true,
-                aspectRatio: '4:3',
-                liveui: true
-              }} onReady={handlePlayerReady}/>
-
-
-          </Stack.Item>
-        }
-
-        <Stack.Item styles={showPlayer ? { root: { width: "420px" } } : {}} grow={0}>
-
-          <CommandBar
-            items={[
-              {
-                key: 'camera',
-                text: currentPlaying ? data.cameras.find(c => c.key === currentPlaying.cKey)?.name : 'Live',
-                split: true,
-                cacheKey: 'myCacheKey', // changing this key will invalidate this item's cache
-                iconProps: { iconName: 'Webcam2' },
-                onClick: () => {
-                  currentPlaying && playVideo(currentPlaying.cKey)
-                },
-                subMenuProps: {
-                  items: data.cameras.filter(c => c.enable_streaming).map(c => { return {
-                      key: c.key,
-                      text: c.name,
-                      iconProps: { iconName: 'FrontCamera' },
-                      onClick: () => playVideo(c.key)
-                    }})/*.concat([{
-                      key: 'all',
-                      text: 'All',
-                      iconProps: { iconName: 'FrontCamera' },
-                      onClick: () => playVideo('all')
-                    }])*/
-                }
-              },
-              {
-                key: 'mode',
-                text: mode,
-                iconProps: { iconName: 'Filter' },
-                subMenuProps: {
-                  items: [
-                    {
-                      key: 'movement',
-                      text: 'Movement',
-                      onClick: () => setMode ('Movement'),
-                    },
-                    {
-                      key: 'filtered',
-                      text: 'Filtered',
-                      onClick: () => setMode ('Filtered'),
-                    },
-                    {
-                      key: 'time',
-                      text: 'Time',
-                      onClick: () => setMode ('Time'),
-                    }
-                  ]
-                }
-              },
-              {
-                key: 'refresh',
-                text: 'Refresh',
-                checked: data.status === "fetching",
-                iconProps: { iconName: 'Refresh' },
-                onClick: getServerData,
-              },
-              {
-                key: 'download',
-                text: 'Download',
-                iconProps: { iconName: 'Download' },
-                onClick: downloadMovement,
-              }
-            ]}
-            farItems={[{
-              key: 'tile',
-              text: 'Image view',
-              // This needs an ariaLabel since it's icon-only
-              ariaLabel: 'Image view',
-              iconOnly: true,
-              checked: !showPlayer,
-              iconProps: { iconName: 'Tiles' },
-              onClick: () => setShowPlayer(!showPlayer)
-            },{
-              key: 'settings',
-              text: 'Settings',
-              // This needs an ariaLabel since it's icon-only
-              ariaLabel: 'Settings',
-              iconOnly: true,
-              iconProps: { iconName: 'Settings' },
-              subMenuProps: {
-                items: [{
-                    key: 'settings',
-                    text: 'Settings',
-                    iconProps: { iconName: 'DataManagementSettings' },
-                    onClick: () => {
-                      setPanel({...panel, open: true, key: 'settings', invalidArray:[], heading: 'General and Disk Settings', values: { ...data.config.settings }})
-                    }
-                }].concat(data.cameras.map(c => { return {
-                    key: c.key,
-                    text: `Settings "${c.name}"`,
-                    iconProps: { iconName: 'FrontCamera' },
-                    ['data-automation-id']: 'newEmailButton', // optional
-                    onClick: () => {
-                      setPanel({...panel, open: true, key: 'edit', invalidArray: [],  heading: 'Edit Camera Details', values: {
-                        key: c.key,
-                        name: c.name,
-                        folder: c.folder,
-                        disk: c.disk,
-                        secWithoutMovement: c.secWithoutMovement,
-                        secMaxSingleMovement: c.secMaxSingleMovement,
-                        mSPollFrequency: c.mSPollFrequency,
-                        segments_prior_to_movement: c.segments_prior_to_movement,
-                        segments_post_movement: c.segments_post_movement,
-                        ignore_tags: c.ignore_tags,
-                        enable_streaming: c.enable_streaming,
-                        enable_movement: c.enable_movement,
-                      }})
-                    }
-                  }}).concat (
-                  {
-                    key: 'Add',
-                    text: 'Add Camera',
-                    iconProps: { iconName: 'Add' },
-                    onClick: () => setPanel({...panel, open: true, key: 'new', invalidArray: [], heading: 'Add New Camera', values: {
-                      secWithoutMovement: 10,
-                      secMaxSingleMovement: 600,
-                      mSPollFrequency: 1000,
-                      disk: data.config.settings.disk_base_dir,
-                      segments_prior_to_movement: 10, // 20 seconds (2second segments)
-                      segments_post_movement: 10, // 20 seconds (2second segments)
-                      ignore_tags: ['car'],
-                      enable_streaming: true,
-                      enable_movement: true,
-                    }}),
-                  }
-                ))
-              }
-            }]}
-            ariaLabel="Inbox actions"
-            primaryGroupAriaLabel="Email actions"
-            farItemsGroupAriaLabel="More actions"
+          <ToolbarButton
+            icon={<ArrowRepeatAll20Regular />}
+            onClick={getServerData}
           />
-          <ThemeProvider theme={appTheme}>
-              <DetailsList
-                className="scrollMe"
-                isHeaderVisible={false}
-                items={data.movements.map(m => { 
-                  const camera =  data.cameras.find(c => c.key === m.movement.cameraKey)
-                  return  {
-                    key: m.key,
-                    ...m.movement, 
-                    startDate_en_GB: m.startDate_en_GB, 
-                    ...(camera && { 
-                      cameraName: camera.name, 
-                      segments_prior_to_movement: mode === "Time" ? 0: camera.segments_prior_to_movement, 
-                      segments_post_movement: mode === "Time" ? 0: camera.segments_post_movement
-                    })
-                }})}
-                compact={true}
-                setKey="key"
-                onShouldVirtualize={() => {
-                  return false;
-                }}
-                columns={[
-                  {
-                    key: "startDate_en_GB", 
-                    isRowHeader: true,
-                    fieldName: "startDate_en_GB",
-                    minWidth: 120,
-                    maxWidth: 120
-                  },
-                  {
-                    key: "cameraName", 
-                    fieldName: "cameraName",
-                    minWidth: 38,
-                    maxWidth: 38
-                    //onRender: (item) => <Text variant='medium' styles={{root: {background: 'yellow'}}} >{item.cameraName}</Text>
-                  },
-                  {
-                    key: "seconds", 
-                    fieldName: "seconds",
-                    minWidth: 25,
-                    maxWidth: 30
-                  }
-                ].concat(mode !== "Time" && showPlayer ? {
-                  name: "Save", 
-                  key: "stat",  
-                  onRender: renderTags
-                } : [])
-                }
-                selection={_selection}
-                selectionMode={SelectionMode.single}
-                onItemInvoked={_debug}
-                //onActiveItemChanged={_onActiveItemChanged}
-              />
-           
-          </ThemeProvider>
-        </Stack.Item>
 
+          <Menu positioning="below-end">
+            <MenuTrigger disableButtonEnhancement>
+              <Button  icon={<Tv16Regular />}>{currentPlaying ? data.cameras.find(c => c.key === currentPlaying.cKey)?.name : 'Live'}</Button>
+            </MenuTrigger>
 
-      </Stack>
-    </main >
-  )
+            <MenuPopover>
+              <MenuList>
+                { data.cameras.filter(c => c.enable_streaming).map(c => 
+                  <MenuItem key={c.key} icon={<Video20Regular />}  onClick={() => playVideo(c.key)}>{c.name}</MenuItem>
+                )}
+              </MenuList>
+            </MenuPopover>
+          </Menu>
+
+          <ToolbarButton
+
+            icon={<ArrowDownload16Regular />}
+            onClick={downloadMovement}
+          />
+
+          <Menu positioning="below-end">
+            <MenuTrigger disableButtonEnhancement>
+              <Button  icon={<Filter20Regular />}>{mode}</Button>
+            </MenuTrigger>
+
+            <MenuPopover>
+              <MenuList>
+                <MenuItem key="movement" icon={<ArrowMove20Regular/>} onClick={ () => setMode ('Movement')}>All Movement</MenuItem>
+                <MenuItem key="Filtered" icon={<AccessibilityCheckmark20Regular/>} onClick={ () => setMode ('Filtered')}>Filtered</MenuItem>
+                <MenuItem key="Time"   icon={<AccessTime20Regular/>} onClick={ () => setMode ('Time')}>Time</MenuItem>
+              </MenuList>
+             </MenuPopover>
+          </Menu>
+
+        </ToolbarGroup>
+
+        <ToolbarGroup role="presentation">
+          <Menu positioning="below-end">
+            <MenuTrigger disableButtonEnhancement>
+              <Button  icon={<Settings16Regular />}></Button>
+            </MenuTrigger>
+
+            <MenuPopover>
+              <MenuList>
+                <MenuItem key="general" icon={<DataUsageSettings20Regular />}  onClick={() => {
+                      setPanel({...panel, open: true, key: 'settings', invalidArray:[], heading: 'General Settings', values: { ...data.config.settings }})
+                }}>General</MenuItem>
+
+                { data.cameras.map(c => 
+                  <MenuItem key={c.key} icon={<Video20Regular />}  onClick={() => {
+                    setPanel({...panel, open: true, key: 'edit', invalidArray: [],  heading: `Edit Camera Details (${c.key})`, values: {
+                      key: c.key,
+                      name: c.name,
+                      folder: c.folder,
+                      disk: c.disk,
+                      secWithoutMovement: c.secWithoutMovement,
+                      secMaxSingleMovement: c.secMaxSingleMovement,
+                      mSPollFrequency: c.mSPollFrequency,
+                      segments_prior_to_movement: c.segments_prior_to_movement,
+                      segments_post_movement: c.segments_post_movement,
+                      ignore_tags: c.ignore_tags,
+                      enable_streaming: c.enable_streaming,
+                      enable_movement: c.enable_movement,
+                    }})
+                  }}>{c.name}</MenuItem>
+                )}
+
+                <MenuItem key="add" icon={<VideoAdd20Regular />}  onClick={() => {
+                      setPanel({...panel, open: true, key: 'new', invalidArray: [], heading: 'Add New Camera', values: {
+                        secWithoutMovement: 10,
+                        secMaxSingleMovement: 600,
+                        mSPollFrequency: 1000,
+                        disk: data.config.settings.disk_base_dir,
+                        segments_prior_to_movement: 10, // 20 seconds (2second segments)
+                        segments_post_movement: 10, // 20 seconds (2second segments)
+                        ignore_tags: ['car'],
+                        enable_streaming: true,
+                        enable_movement: true,
+                      }})
+                    }}>Add</MenuItem>
+                
+              </MenuList>
+            </MenuPopover>
+          </Menu>
+        </ToolbarGroup>
+
+      </Toolbar>
+
+      
+
+      <DataGrid
+        size="small"
+        selectionMode="single"
+        onSelectionChange={onSelectionChange}
+        getRowId={(item) => item.key}
+        columns={[
+          createTableColumn({
+            columnId: "startDate_en_GB",
+            renderCell: (item) => {
+              return (
+                <TableCellLayout>{item.startDate_en_GB} ({item.seconds}s)</TableCellLayout>
+              )
+            }
+
+          }),
+          createTableColumn({
+            columnId: "cameraName",
+            renderCell: (item) => {
+              return (
+                <TableCellLayout>{item.cameraName}</TableCellLayout>
+              )
+            }
+
+          }),
+          createTableColumn({
+            columnId: "tags",
+            renderCell: (item) => {
+              return (
+                <TableCellLayout>{renderTags(item,0)}</TableCellLayout>
+              )
+            }
+
+          })
+        ]}
+        items={data.movements.map(m => { 
+          const camera =  data.cameras.find(c => c.key === m.movement.cameraKey)
+          return  {
+            key: m.key,
+            ...m.movement, 
+            startDate_en_GB: m.startDate_en_GB, 
+            ...(camera && {  cameraName: camera.name })
+          }})} 
+        
+          
+          >
+
+          <DataGridBody itemSize={50} height={700}>
+            {({ item, rowId }, style) => (
+              <DataGridRow key={rowId} style={style}>
+                {({ renderCell }) => (
+                  <DataGridCell>{renderCell(item)}</DataGridCell>
+                )}
+              </DataGridRow>
+            )}
+          </DataGridBody>
+      </DataGrid>
+
+  </>
 }
 
 export default App;

@@ -37,9 +37,20 @@ Using the settings menu, you first select the disk you will be using to stream r
 
 <br clear="both"/>
 
+## Repo structure
+
+- `/server` contains the typescript api server that runs forks the ffmpeg and object detection apps, stores state in a embeded database, and provides restful apis for the react frontend.
+- `/ai/detector` contains the python object detection app that uses YOLO models to detect objects in the images placed in a particular directory. 
+- `/src` contains the react components that is built into the frontend browser app.
+
 ## Install / Setup / Run
 
 The benifit of this app, its, its open-source, and it can be installed on any comodity h/w running linux (a free o/s operating system), techincal savvy users should be able to get this working.
+
+## ROADMAP
+
+
+See the [ROADMAP.md](./ROADMAP.md) for planned features and future development.
 
 
 ### Build & Run Web App
@@ -51,7 +62,8 @@ Clone this repo onto a Linux machine, then build the app by running these comman
 
 ```
 # install dependencies
-npm i
+# conflict between React 19 types and the older FluentUI data grid package
+npm i 
 
 # build typescript server
 npx tsc
