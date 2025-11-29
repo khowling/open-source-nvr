@@ -20,6 +20,7 @@ interface Settings {
     cleanup_capacity: number;
     enable_ml: boolean;
     mlModel: string;
+    mlTarget: string;
     mlFramesPath: string;
     labels: string;
 }
@@ -575,7 +576,8 @@ async function processController(
     enabled: boolean, 
     cmd: string, cmdArgs: Array<string>, 
     [checkAfter, checkFilePath]: [checkAfter: number, checkFilePath: string], 
-    task: ChildProcessWithoutNullStreams): Promise<ChildProcessWithoutNullStreams | undefined> {
+    task: ChildProcessWithoutNullStreams,
+    cwd?: string): Promise<ChildProcessWithoutNullStreams | undefined> {
     
     //console.log (`processController for [${name}], called with [pid=${task?.pid}] [exit code=${task?.exitCode}]`)
 
@@ -632,9 +634,10 @@ async function processController(
 
     try {
 
-        logger.info('Starting process', { name, cmd, args: cmdArgs.slice(0, 3) + '...', cwd: process.env['PWD'] });
+        const workingDir = cwd || process.env['PWD'] ;
+        logger.info('Starting process', { name, cmd, args: cmdArgs.slice(0, 3) + '...', cwd: workingDir });
         var childProcess : ChildProcessWithoutNullStreams = spawn(cmd, cmdArgs, {
-            cwd: process.env['PWD'] || '/home/kehowli/projects/open-source-nvr'
+            cwd: workingDir
         })
 
         let stdoutBuffer = '';
@@ -916,7 +919,7 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n"
                             cameraEntry: {...old_cc.cameraEntry, enable_streaming: false},
                         }
                         // kill the ffmpeg process if its running
-                        await processController ( old_cc.cameraEntry.name,false, null,  [], [0,''], old_cc.ffmpeg_task )
+                        await processController ( old_cc.cameraEntry.name,false, null,  [], [0,''], old_cc.ffmpeg_task, null )
                         
                         // Wait for process to fully terminate before updating
                         await new Promise(resolve => setTimeout(resolve, 1000));
@@ -950,19 +953,6 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n"
                 }
             } else {
                 ctx.status = 500
-            }
-          
-        }).get('/ml-models', async (ctx, _next) => {
-            // Discover available ML models in ai/model directory
-            try {
-                const modelDir = './ai/model';
-                const files = await fs.readdir(modelDir);
-                const models = files.filter(f => f.endsWith('.onnx') || f.endsWith('.rknn'));
-                ctx.response.set("content-type", "application/json");
-                ctx.body = { models };
-            } catch (e) {
-                const err: Error = e as Error;
-                ctx.throw(500, `Failed to list ML models: ${err.message}`);
             }
         }).get('/movements', async (ctx, _next) => {
             const mode = ctx.query['mode'] 
@@ -1116,7 +1106,7 @@ async function main() {
 
     // Populate settingsCache with default COCO labels
     const defaultLabels = "person,bicycle,car,motorbike,aeroplane,bus,train,truck,boat,traffic light,fire hydrant,stop sign,parking meter,bench,bird,cat,dog,horse,sheep,cow,elephant,bear,zebra,giraffe,backpack,umbrella,handbag,tie,suitcase,frisbee,skis,snowboard,sports ball,kite,baseball bat,baseball glove,skateboard,surfboard,tennis racket,bottle,wine glass,cup,fork,knife,spoon,bowl,banana,apple,sandwich,orange,broccoli,carrot,hot dog,pizza,donut,cake,chair,sofa,pottedplant,bed,diningtable,toilet,tvmonitor,laptop,mouse,remote,keyboard,cell phone,microwave,oven,toaster,sink,refrigerator,book,clock,vase,scissors,teddy bear,hair drier,toothbrush";
-    settingsCache = {settings: { disk_base_dir: '', mlModel:'', mlFramesPath:'', enable_ml: false, labels: defaultLabels, cleanup_interval: 0, cleanup_capacity: 90}, status: { fail: false, nextCheckInMinutes: 0}}
+    settingsCache = {settings: { disk_base_dir: '', mlModel:'', mlTarget:'', mlFramesPath:'', enable_ml: false, labels: defaultLabels, cleanup_interval: 0, cleanup_capacity: 90}, status: { fail: false, nextCheckInMinutes: 0}}
     try {
         settingsCache = {...settingsCache, settings : await db.get('settings') as Settings}
     } catch (e) {
@@ -1128,15 +1118,24 @@ async function main() {
         // Start ML detection process if enabled
         const { settings } = settingsCache;
         if (settings.enable_ml && settings.mlModel) {
-            const modelPath = `./ai/model/${settings.mlModel}`;
+            const baseDir = process.env['PWD'] ;
+            const aiDir = `${baseDir}/ai`;
+            const modelPath =settings.mlModel;
+            const cmdArgs = ['-u', '-m', 'detector.detect', '--model_path', modelPath];
+            
+            // Add target parameter if specified
+            if (settings.mlTarget) {
+                cmdArgs.push('--target', settings.mlTarget);
+            }
             
             const mlTask = await processController(
                 'ML-Detection',
                 true,
                 'python3',
-                ['-u', '-m', 'detector.detect', '--model_path', modelPath],
+                cmdArgs,
                 [0, ''], // No file check for ML process
-                mlDetectionProcess
+                mlDetectionProcess,
+                aiDir
             );
             
             // Set up stdout handler if this is a new process
@@ -1204,7 +1203,8 @@ async function main() {
                     '/usr/bin/ffmpeg', 
                     ['-rtsp_transport', 'tcp', '-i', `rtsp://admin:${cameraEntry.passwd}@${cameraEntry.ip}:554/h264Preview_01_main`, '-hide_banner', '-loglevel', 'error', '-vcodec', 'copy', '-start_number', ((Date.now() / 1000 | 0) - 1600000000).toString(), streamFile ],
                     [ 60, streamFile ],
-                    ffmpeg_task
+                    ffmpeg_task,
+                    null
                 )
                 //console.log (`got task for [${cKey}] [pid=${task?.pid}] [exit code=${task?.exitCode}]`)
                 cameraCache[cKey] =  {...cameraCache[cKey], ffmpeg_task: task }

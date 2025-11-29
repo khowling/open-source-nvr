@@ -15,7 +15,7 @@ https://docs.ultralytics.com/tasks/detect/
 
 
 
-### Installs 'yolo' CLI
+### (opt a) Installs 'yolo' CLI
 ```
 python3 -m pip install ultralytics
 ```
@@ -23,6 +23,7 @@ https://docs.ultralytics.com/integrations/onnx/#exporting-yolo11-models-to-onnx
 
 ```
 yolo export model=yolo11n.pt format=onnx imgsz=1280
+yolo export model=yolo11n.pt format=rknn name=rk3588
 ```
 
 
@@ -30,6 +31,11 @@ Lets test it
 
 ```
 yolo predict model=yolo11n.onnx source=./image150519558.jpg
+```
+
+### (opt B)
+```
+wget https://github.com/zifeng-radxa/rknn_model_zoo/releases/download/yolov11/yolo11n_3588_rknn_model.zip
 ```
 
 

@@ -323,25 +323,39 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
                     <Checkbox label="Enable Object Detection" checked={panel.values.enable_ml} onChange={(_,data) => updatePanelValues('enable_ml', data.checked)} />
                     
                     <Field
-                      label="YOLO Model"
+                      label="YOLO Model Path"
+                      hint="Relative to ./ai directory (e.g., 'model/yolo11n.onnx' or 'model/yolo11n-rk3588.rknn')"
                       validationState={getError('mlModel') ? "error" : "none"}
                       validationMessage={getError('mlModel')}>
+                      <Input 
+                        style={{"width": "100%"}} 
+                        disabled={!panel.values.enable_ml}
+                        placeholder="model/yolo11n.onnx"
+                        value={panel.values.mlModel || ''} 
+                        onChange={(_, data) => updatePanelValues('mlModel', data.value)} />
+                    </Field>
+
+                    <Field
+                      label="Target Platform"
+                      hint="Hardware acceleration target (leave empty for CPU/ONNX)"
+                      validationState={getError('mlTarget') ? "error" : "none"}
+                      validationMessage={getError('mlTarget')}>  
                       <Dropdown 
                         style={{"width": "100%"}} 
-                        disabled={!panel.values.enable_ml || modelsLoading}
-                        placeholder={modelsLoading ? "Loading models..." : "Select a model"}
-                        value={panel.values.mlModel || ''}
-                        selectedOptions={panel.values.mlModel ? [panel.values.mlModel] : []}
-                        onOptionSelect={(_, data) => updatePanelValues('mlModel', data.optionValue)}>
-                        {models.map(model => (
-                          <Option key={model} value={model}>{model}</Option>
-                        ))}
+                        disabled={!panel.values.enable_ml}
+                        placeholder="CPU (default)"
+                        value={panel.values.mlTarget || ''}
+                        selectedOptions={panel.values.mlTarget ? [panel.values.mlTarget] : []}
+                        onOptionSelect={(_, data) => updatePanelValues('mlTarget', data.optionValue)}>
+                        <Option key="" value="">CPU (default)</Option>
+                        <Option key="rk3588" value="rk3588">RK3588 (RKNN)</Option>
+                        <Option key="rk3576" value="rk3576">RK3576 (RKNN)</Option>
                       </Dropdown>
                     </Field>
 
                     <Field
                       label="Frames Output Path"
-                      hint="Relative to Base Directory above (e.g., 'frames' or 'ml_images'). Leave empty to use camera folder."
+                      hint="Relative to Base Directory above (e.g., 'frames' or 'ml_images')"
                       validationState={getError('mlFramesPath') ? "error" : "none"}
                       validationMessage={getError('mlFramesPath')}>
                       <Input 
