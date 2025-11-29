@@ -355,8 +355,11 @@ async function processMovement(cameraKey: string) : Promise<void> {
                       movement_key = (startDate / 1000 | 0) - 1600000000,
                       startSegment = parseInt(hls_segments[hls_segments.length - 1]) + 1
 
-                // Determine frame output path
-                const framesPath = settingsCache.settings.mlFramesPath || `${disk}/${folder}`;
+                // Determine frame output path - relative to disk_base_dir if provided, otherwise per-camera folder
+                const baseDir = settingsCache.settings.disk_base_dir || disk;
+                const framesPath = settingsCache.settings.mlFramesPath 
+                    ? `${baseDir}/${settingsCache.settings.mlFramesPath}`.replace(/\/+/g, '/') // Normalize slashes
+                    : `${disk}/${folder}`;
                 await ensureDir(framesPath);
 
                 const ffmpegArgs = [
@@ -1014,7 +1017,18 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n"
 
 
 async function clearDownDisk(diskDir: string, cameraKeys : Array<string>, cleanupCapacity: number) : Promise<DiskCheckReturn> {
-    const diskres = await diskCheck(diskDir, cameraKeys.map(key => `${diskDir}/${cameraCache[key].cameraEntry.folder}`), cleanupCapacity)
+    // Include camera folders and ML frames folder (if configured separately)
+    const cameraFolders = cameraKeys.map(key => `${diskDir}/${cameraCache[key].cameraEntry.folder}`);
+    const mlFramesFolder = settingsCache.settings.mlFramesPath 
+        ? `${diskDir}/${settingsCache.settings.mlFramesPath}`.replace(/\/+/g, '/')
+        : null;
+    
+    // Add frames folder if it's different from camera folders
+    const foldersToClean = mlFramesFolder && !cameraFolders.includes(mlFramesFolder)
+        ? [...cameraFolders, mlFramesFolder]
+        : cameraFolders;
+    
+    const diskres = await diskCheck(diskDir, foldersToClean, cleanupCapacity)
     logger.info('Disk check complete', diskres);
     if (diskres.revmovedMBTotal > 0) {
         const mostRecentctimMs = Object.keys(diskres.folderStats).reduce((acc, cur) => diskres.folderStats[cur].lastRemovedctimeMs ? (  diskres.folderStats[cur].lastRemovedctimeMs > acc? diskres.folderStats[cur].lastRemovedctimeMs : acc ) : acc ,0)

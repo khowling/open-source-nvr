@@ -340,14 +340,15 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
                     </Field>
 
                     <Field
-                      label="Frames Output Path (relative or absolute, leave empty to use camera folder)"
+                      label="Frames Output Path"
+                      hint="Relative to Base Directory above (e.g., 'frames' or 'ml_images'). Leave empty to use camera folder."
                       validationState={getError('mlFramesPath') ? "error" : "none"}
                       validationMessage={getError('mlFramesPath')}>
                       <Input 
                         style={{"width": "100%"}} 
                         disabled={!panel.values.enable_ml} 
                         contentBefore={<Folder16Regular/>}  
-                        placeholder="./frames or leave empty"
+                        placeholder="frames"
                         value={panel.values.mlFramesPath || ''} 
                         onChange={(_, data) => updatePanelValues('mlFramesPath', data.value)} />
                     </Field>
