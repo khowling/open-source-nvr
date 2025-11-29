@@ -462,8 +462,8 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
                     </div>
 
                     <div className={styles.root}>
-                      <label>Continuation if no movement for {panel.values.secWithoutMovement} seconds</label>
-                      <Slider style={{"width": "100%"}} disabled={!panel.values.enable_movement}  min={0} max={50} step={1} defaultValue={panel.values.secWithoutMovement}  onChange={(_,data) => updatePanelValues('secWithoutMovement', data.value)} />
+                      <label>End movement after {panel.values.pollsWithoutMovement} poll(s) without movement</label>
+                      <Slider style={{"width": "100%"}} disabled={!panel.values.enable_movement}  min={1} max={10} step={1} defaultValue={panel.values.pollsWithoutMovement}  onChange={(_,data) => updatePanelValues('pollsWithoutMovement', data.value)} />
                     </div>
                     
                     <div className={styles.root}>

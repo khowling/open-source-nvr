@@ -347,7 +347,7 @@ const onSelectionChange = (_, d) => {
                       name: c.name,
                       folder: c.folder,
                       disk: c.disk,
-                      secWithoutMovement: c.secWithoutMovement,
+                      pollsWithoutMovement: c.pollsWithoutMovement,
                       secMaxSingleMovement: c.secMaxSingleMovement,
                       mSPollFrequency: c.mSPollFrequency,
                       segments_prior_to_movement: c.segments_prior_to_movement,
@@ -361,7 +361,7 @@ const onSelectionChange = (_, d) => {
 
                 <MenuItem key="add" icon={<VideoAdd20Regular />}  onClick={() => {
                       setPanel({...panel, open: true, key: 'new', invalidArray: [], heading: 'Add New Camera', values: {
-                        secWithoutMovement: 10,
+                        pollsWithoutMovement: 1,
                         secMaxSingleMovement: 600,
                         mSPollFrequency: 1000,
                         disk: data.config.settings.disk_base_dir,
