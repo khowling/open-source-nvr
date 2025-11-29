@@ -332,14 +332,14 @@ async function processMovement(cameraKey: string) : Promise<void> {
         const body = JSON.parse(body_json)
         const movementState = body[0]?.value?.state;
         
-        logger.info('Fetch completed successfully', { 
+        logger.info('Movement API Poll', { 
             camera: cameraEntry.name, 
             duration: `${fetchDuration}ms`, 
             movementDetected: movementState === 1,
             state: movementState
         });
         
-        logger.debug('Response body received', { 
+        logger.debug('Movement API Response body received', { 
             camera: cameraEntry.name, 
             bodyLength: body_json.length,
             bodyPreview: body_json.substring(0, 100)
@@ -352,10 +352,10 @@ async function processMovement(cameraKey: string) : Promise<void> {
             // Got movement (state ===1)
             if (!current_key) {
                 // got NEW movement
-                logger.info('Movement detected', { camera: cameraEntry.name, type: 'movement_start' })
+                logger.info('New movement detected', { camera: cameraEntry.name, type: 'movement_start' })
 
-                // Need to determine the segment that corrisponds to the movement
-                // Read the curren live stream.m3u8, and get a array of all the stream23059991.ts files
+                // Need to determine the segment that corresponds to the movement
+                // Read the current live stream.m3u8, and get a array of all the stream23059991.ts files
                 // set startSegment to the LAST segment file index in the array (most recent) + 1 (+1 due to ffmpeg lag!)
                 const filepath = `${disk}/${folder}/stream.m3u8`
                 const hls = (await fs.readFile(filepath)).toString()
@@ -363,9 +363,13 @@ async function processMovement(cameraKey: string) : Promise<void> {
                 const targetduration = hls.match(/#EXT-X-TARGETDURATION:([\d])/)
                 const lhs_seg_duration_seq = parseInt(targetduration && targetduration.length>1? targetduration[1]: "2")
 
+                // Account for poll frequency - movement could have started anytime during poll interval
+                // Go back enough segments to cover the poll interval, plus 1 for ffmpeg lag
+                const segmentsToLookBack = Math.ceil(cameraEntry.mSPollFrequency / (lhs_seg_duration_seq * 1000));
+
                 const startDate = Date.now(),
                       movement_key = (startDate / 1000 | 0) - 1600000000,
-                      startSegment = parseInt(hls_segments[hls_segments.length - 1]) + 1
+                      startSegment = parseInt(hls_segments[hls_segments.length - 1]) - segmentsToLookBack + 1
 
                 // Determine frame output path - relative to disk_base_dir if provided, otherwise per-camera folder
                 const baseDir = settingsCache.settings.disk_base_dir || disk;
