@@ -193,6 +193,9 @@ function sendImageToMLDetection(imagePath: string, movement_key: number): void {
     }
 }
 
+// Track pending updates per movement to avoid concurrent DB writes
+var pendingUpdates: Set<number> = new Set();
+
 // Function to parse detection output and accumulate results
 function processDetectionResult(line: string): void {
     // Parse format: "person @ (392 72 552 391) 0.648"
@@ -226,18 +229,80 @@ function processDetectionResult(line: string): void {
     } else {
         current.count++;
     }
+    
+    // Update database immediately (debounced per movement)
+    updateDetectionsInDatabase(movement_key);
 }
 
-// Function to flush detection results to database
+// Update database with current detection state (debounced to avoid excessive writes)
+async function updateDetectionsInDatabase(movement_key: number): Promise<void> {
+    // Skip if update already pending for this movement
+    if (pendingUpdates.has(movement_key)) return;
+    
+    pendingUpdates.add(movement_key);
+    
+    // Small delay to batch multiple detections from same frame
+    setTimeout(async () => {
+        try {
+            const detections = detectionAccumulator[movement_key];
+            if (!detections || Object.keys(detections).length === 0) {
+                pendingUpdates.delete(movement_key);
+                return;
+            }
+            
+            const movement: MovementEntry = await movementdb.get(movement_key);
+            
+            // Convert accumulator to MLTag array
+            const tags: MLTag[] = Object.entries(detections).map(([tag, data]) => ({
+                tag,
+                maxProbability: data.maxProbability,
+                count: data.count,
+                maxProbabilityImage: data.maxProbabilityImage
+            })).sort((a, b) => b.maxProbability - a.maxProbability);
+            
+            // Update movement with current detection results (still processing)
+            await movementdb.put(movement_key, {
+                ...movement,
+                mlProcessing: true,
+                ml: {
+                    success: true,
+                    code: 0,
+                    stdout: '',
+                    stderr: '',
+                    error: '',
+                    tags
+                }
+            });
+            
+            logger.debug('ML results updated', { 
+                movement: movement_key, 
+                objectTypes: tags.length,
+                detections: tags.map(t => ({ tag: t.tag, probability: `${(t.maxProbability*100).toFixed(1)}%`, count: t.count }))
+            });
+        } catch (error) {
+            logger.warn('Failed to update detections', { movement: movement_key, error: String(error) });
+        } finally {
+            pendingUpdates.delete(movement_key);
+        }
+    }, 100); // 100ms debounce
+}
+
+// Function to finalize detection results when movement ends
 async function flushDetectionsToDatabase(movement_key: number): Promise<void> {
     const detections = detectionAccumulator[movement_key];
-    if (!detections || Object.keys(detections).length === 0) {
-        logger.debug('No detections to flush', { movement: movement_key });
-        return;
-    }
     
     try {
         const movement: MovementEntry = await movementdb.get(movement_key);
+        
+        if (!detections || Object.keys(detections).length === 0) {
+            // No detections found, mark as complete with empty results
+            await movementdb.put(movement_key, {
+                ...movement,
+                mlProcessing: false
+            });
+            logger.debug('No detections for movement', { movement: movement_key });
+            return;
+        }
         
         // Convert accumulator to MLTag array
         const tags: MLTag[] = Object.entries(detections).map(([tag, data]) => ({
@@ -245,9 +310,9 @@ async function flushDetectionsToDatabase(movement_key: number): Promise<void> {
             maxProbability: data.maxProbability,
             count: data.count,
             maxProbabilityImage: data.maxProbabilityImage
-        })).sort((a, b) => b.maxProbability - a.maxProbability); // Sort by probability descending
+        })).sort((a, b) => b.maxProbability - a.maxProbability);
         
-        // Update movement with detection results
+        // Final update: mark processing as complete
         await movementdb.put(movement_key, {
             ...movement,
             mlProcessing: false,
@@ -261,7 +326,7 @@ async function flushDetectionsToDatabase(movement_key: number): Promise<void> {
             }
         });
         
-        logger.info('ML results saved', { 
+        logger.info('ML processing complete', { 
             movement: movement_key, 
             objectTypes: tags.length,
             detections: tags.map(t => ({ tag: t.tag, probability: `${(t.maxProbability*100).toFixed(1)}%`, count: t.count, image: t.maxProbabilityImage }))
@@ -277,7 +342,7 @@ async function flushDetectionsToDatabase(movement_key: number): Promise<void> {
             }
         }
     } catch (error) {
-        logger.warn('Failed to flush detections', { movement: movement_key, error: String(error) });
+        logger.warn('Failed to finalize detections', { movement: movement_key, error: String(error) });
     }
 }
 
