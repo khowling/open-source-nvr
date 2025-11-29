@@ -55,45 +55,49 @@ See the [ROADMAP.md](./ROADMAP.md) for planned features and future development.
 
 ### Build & Run Web App
 
-Ensure you have `nodejs` (recommended version >= 16 LTS) and `ffmpeg` (latest version) installed.
+Ensure you have `nodejs` (recommended version >= 16 LTS), `python3`, and `ffmpeg` (latest version) installed.
 
 Clone this repo onto a Linux machine, then build the app by running these commands: 
 
 
 ```
-# install dependencies
-# conflict between React 19 types and the older FluentUI data grid package
+# install Node.js dependencies
 npm i 
 
 # build typescript server
 npx tsc
 
-# build fromend
+# build frontend
 npm run-script build
+
+# install Python ML detector dependencies
+cd ai
+pip install -e .
+cd ..
 ```
 
 ### To manually run the server
 
 ```
-node ./lib/index.js
+LOG_LEVEL=info node ./lib/index.js
 ```
 
-Then open a browser and navigate to `http://<hostname>:8080`.  You are free to use a proxy like nginx and add TLS/DNS, authenitcation, then expose your app to the internet so you can monitor your home when away
+Set `LOG_LEVEL` to `debug` for verbose logging, or `error` for minimal output.
+
+Then open a browser and navigate to `http://<hostname>:8080`.  You are free to use a proxy like nginx and add TLS/DNS, authentication, then expose your app to the internet so you can monitor your home when away
 
 
-## Darknet Real-time object detection
+## Object Detection with YOLO11n ONNX
 
-To enable the Object Detection feature, you will  need to install the following darknet/yolo project, information here: https://pjreddie.com/darknet/yolo/.  Then, go into the settings panel, enable object detection, and set the installation folder.
-  
-The install folder must include the following files
+The app includes a YOLO11n ONNX model at `./ai/model/yolo11n.onnx` for real-time object detection. To use it:
 
-<pre>
-.    
-├── darknet (the executable)  
-└── cfg (directory)  
-     ├── yolov3.cfg  
-     └── yolov3.weights  
-</pre>
+1. Install Python dependencies (see build instructions above)
+2. In the settings panel, enable ML detection
+3. Configure the ML model (defaults to YOLO11n)
+4. Optionally set a custom frames path for extracted images
+5. Configure object detection labels to filter (e.g., ignore "car" detections)
+
+The detector will automatically run when motion is detected, tagging objects found in the frames.
   
 
   
@@ -103,7 +107,7 @@ Create a executable `web.sh` file containing the following (the paths need to be
 
 ```
 #!/bin/bash
-WEBPATH="/home/<user>/open-source-nvr/build" DBPATH="/home/<user>/open-source-nvr/mydb" node /home/<user>/open-source-nvr/lib/index.js
+LOG_LEVEL=info WEBPATH="/home/<user>/open-source-nvr/build" DBPATH="/home/<user>/open-source-nvr/mydb" node /home/<user>/open-source-nvr/lib/index.js
 ```
 
 Now, create a `open-source-nvr.service` file for Linux Systemd service managers, to ensure your website starts when the machine starts & will be kept running
