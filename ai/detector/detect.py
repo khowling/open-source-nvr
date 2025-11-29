@@ -268,10 +268,16 @@ def main():
 
             boxes, classes, scores = post_process(outputs)
 
-            for box, score, cl in zip(boxes, scores, classes):
-                left, top, right, bottom = [int(_b) for _b in box]
-                print("%s @ (%d %d %d %d) %.3f" % (CLASSES[cl], left, top, right, bottom, score))
-                sys.stdout.flush()  # Ensure output is sent immediately
+            # Handle case where no objects are detected
+            if boxes is not None and len(boxes) > 0:
+                for box, score, cl in zip(boxes, scores, classes):
+                    # Clamp coordinates to valid range [0, 640]
+                    left = max(0, min(640, int(box[0])))
+                    top = max(0, min(640, int(box[1])))
+                    right = max(0, min(640, int(box[2])))
+                    bottom = max(0, min(640, int(box[3])))
+                    print("%s @ (%d %d %d %d) %.3f" % (CLASSES[cl], left, top, right, bottom, score))
+                    sys.stdout.flush()  # Ensure output is sent immediately
             
             if args.img_show or args.img_save:
                 print('\n\nIMG: {}'.format(img_name))

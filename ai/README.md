@@ -56,11 +56,22 @@ If your model outputs class confidences differently, you may need to adjust the 
 
 
 ## Run to develop
+```shell
+
+# Upgrade pip to ensure it supports pyproject.toml only projects
+python3 -m pip install --upgrade pip
+
+
+cd ai
+
+# install package in, reads pyproject.toml to get metadata and dependencies (doesnt create a virtual environment)
+python3 -m pip install  .
 
 python3 -m detector.detect --model_path ./yolo11n.onnx --target rk3588
+```
 
 
-## Build wheel to execute
+## Build wheel to execute (we don't need this!!)
 ```bash
 cd ai
 
@@ -74,8 +85,6 @@ python3 -m build
 python3 -m pip  install dist/open_source_nvr_detector-0.1.0-py3-none-any.whl
 
 ```
-
-## Execute
 
 ```bash
 nvr-detect --model_path ./model/yolo11.rknn --target rk3588
