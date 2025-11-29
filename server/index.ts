@@ -53,6 +53,7 @@ interface MLTag {
     tag: string;
     maxProbability: number;
     count: number;
+    maxProbabilityImage?: string; // Filename of the image with highest probability
 }
 
 interface MLData extends SpawnData {
@@ -122,7 +123,11 @@ var mlDetectionProcess: ChildProcessWithoutNullStreams | null = null;
 // Detection accumulator: Maps movement_key to accumulated detections
 interface DetectionAccumulator {
     [movement_key: number]: {
-        [objectType: string]: { maxProbability: number; count: number };
+        [objectType: string]: { 
+            maxProbability: number; 
+            count: number;
+            maxProbabilityImage: string; // Image filename with highest probability
+        };
     };
 }
 var detectionAccumulator: DetectionAccumulator = {};
@@ -162,12 +167,16 @@ const movementdb = sub(db, 'movements', {
 
 const re = new RegExp(`stream([\\d]+).ts`, 'g');
 
+// Map to track which image path we're currently processing results for
+var currentProcessingImage: string | null = null;
+
 // Function to send image path to ML detection process
 function sendImageToMLDetection(imagePath: string, movement_key: number): void {
     if (mlDetectionProcess && mlDetectionProcess.stdin && !mlDetectionProcess.killed) {
         try {
             // Track which movement this image belongs to
             imageToMovementMap.set(imagePath, movement_key);
+            currentProcessingImage = imagePath; // Track current image being processed
             mlDetectionProcess.stdin.write(`${imagePath}\n`);
             logger.debug('Image path written to ML stdin', { imagePath, movement: movement_key });
         } catch (error) {
@@ -191,24 +200,26 @@ function processDetectionResult(line: string): void {
     const objectType = match[1];
     const probability = parseFloat(match[2]);
     
-    // Find the movement_key from the most recent image path
-    // Since we can't directly correlate output to input, we use the most recent movement
-    const recentMovementKeys = Array.from(imageToMovementMap.values());
-    if (recentMovementKeys.length === 0) return;
+    // Get movement_key and image filename from current processing context
+    if (!currentProcessingImage) return;
     
-    const movement_key = recentMovementKeys[recentMovementKeys.length - 1];
+    const movement_key = imageToMovementMap.get(currentProcessingImage);
+    if (!movement_key) return;
+    
+    const imageName = currentProcessingImage.split('/').pop() || currentProcessingImage;
     
     // Initialize accumulator for this movement if needed
     if (!detectionAccumulator[movement_key]) {
         detectionAccumulator[movement_key] = {};
     }
     
-    // Update accumulator with max probability
+    // Update accumulator with max probability and track the image
     const current = detectionAccumulator[movement_key][objectType];
     if (!current || probability > current.maxProbability) {
         detectionAccumulator[movement_key][objectType] = {
             maxProbability: probability,
-            count: current ? current.count + 1 : 1
+            count: current ? current.count + 1 : 1,
+            maxProbabilityImage: imageName
         };
     } else {
         current.count++;
@@ -230,7 +241,8 @@ async function flushDetectionsToDatabase(movement_key: number): Promise<void> {
         const tags: MLTag[] = Object.entries(detections).map(([tag, data]) => ({
             tag,
             maxProbability: data.maxProbability,
-            count: data.count
+            count: data.count,
+            maxProbabilityImage: data.maxProbabilityImage
         })).sort((a, b) => b.maxProbability - a.maxProbability); // Sort by probability descending
         
         // Update movement with detection results
@@ -250,7 +262,7 @@ async function flushDetectionsToDatabase(movement_key: number): Promise<void> {
         logger.info('ML results saved', { 
             movement: movement_key, 
             objectTypes: tags.length,
-            detections: tags.map(t => ({ tag: t.tag, probability: `${(t.maxProbability*100).toFixed(1)}%`, count: t.count }))
+            detections: tags.map(t => ({ tag: t.tag, probability: `${(t.maxProbability*100).toFixed(1)}%`, count: t.count, image: t.maxProbabilityImage }))
         });
         
         // Clean up accumulator
@@ -703,6 +715,26 @@ async function init_web() {
                 ctx.throw(400, err.message)
             }
 
+        })
+        .get('/frame/:moment/:filename', async (ctx, _next) => {
+            const moment = ctx.params['moment']
+            const filename = ctx.params['filename']
+
+            try {
+                const m: MovementEntry = await movementdb.get(parseInt(moment))
+                const baseDir = settingsCache.settings.disk_base_dir || '';
+                const framesPath = settingsCache.settings.mlFramesPath 
+                    ? `${baseDir}/${settingsCache.settings.mlFramesPath}`.replace(/\/+/g, '/')
+                    : `${cameraCache[m.cameraKey].cameraEntry.disk}/${cameraCache[m.cameraKey].cameraEntry.folder}`;
+                
+                const serve = `${framesPath}/${filename}`;
+                const { size } = await fs.stat(serve);
+                ctx.set('content-type', 'image/jpeg');
+                ctx.body = createReadStream(serve, { encoding: undefined }).on('error', ctx.onerror);
+            } catch (e) {
+                const err : Error = e as Error;
+                ctx.throw(400, err.message);
+            }
         })
         .get('/video/live/:cameraKey/:file', async (ctx, _next) => {
             const cameraKey = ctx.params['cameraKey'],

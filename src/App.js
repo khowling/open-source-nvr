@@ -245,15 +245,20 @@ const onSelectionChange = (_, d) => {
           // Sort tags by maxProbability descending and format with percentage
           const sortedTags = [...ml.tags].sort((a, b) => b.maxProbability - a.maxProbability)
           return (
-            <a style={{ textDecoration: "none" }} target="_blank" href={img}>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "5px" }}>
-                {sortedTags.map((t, idx) => (
-                  <Badge key={idx} appearance="outline" color={idx === 0 ? "brand" : "informative"}>
-                    {t.tag} ({(t.maxProbability * 100).toFixed(1)}%) {t.count > 1 && `×${t.count}`}
-                  </Badge>
-                ))}
-              </div>
-            </a>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "5px" }}>
+              {sortedTags.map((t, idx) => {
+                const frameUrl = t.maxProbabilityImage 
+                  ? `/frame/${key}/${t.maxProbabilityImage}`
+                  : img;
+                return (
+                  <a key={idx} style={{ textDecoration: "none" }} target="_blank" href={frameUrl}>
+                    <Badge appearance="outline" color={idx === 0 ? "brand" : "informative"}>
+                      {t.tag} ({(t.maxProbability * 100).toFixed(1)}%) {t.count > 1 && `×${t.count}`}
+                    </Badge>
+                  </a>
+                );
+              })}
+            </div>
           )
         } else {
           return <a target="_blank" href={img}><Text variant="mediumPlus">ML Image</Text></a>
