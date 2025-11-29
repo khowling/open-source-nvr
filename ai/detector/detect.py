@@ -37,24 +37,6 @@ coco_id_list = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 2
          64, 65, 67, 70, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 84, 85, 86, 87, 88, 89, 90]
 
 
-
-def filter_boxes(boxes, box_confidences, box_class_probs):
-    """Filter boxes with object threshold.
-    """
-    box_confidences = box_confidences.reshape(-1)
-    candidate, class_num = box_class_probs.shape
-
-    class_max_score = np.max(box_class_probs, axis=-1)
-    classes = np.argmax(box_class_probs, axis=-1)
-
-    _class_pos = np.where(class_max_score* box_confidences >= OBJ_THRESH)
-    scores = (class_max_score* box_confidences)[_class_pos]
-
-    boxes = boxes[_class_pos]
-    classes = classes[_class_pos]
-
-    return boxes, classes, scores
-
 def nms_boxes(boxes, scores):
     """Suppress non-maximal boxes.
     # Returns
@@ -88,102 +70,79 @@ def nms_boxes(boxes, scores):
     keep = np.array(keep)
     return keep
 
-def dfl(position):
-    # Distribution Focal Loss (DFL)
-    import torch
-    x = torch.tensor(position)
-    n,c,h,w = x.shape
-    p_num = 4
-    mc = c//p_num
-    y = x.reshape(n,p_num,mc,h,w)
-    y = y.softmax(2)
-    acc_metrix = torch.tensor(range(mc)).float().reshape(1,1,mc,1,1)
-    y = (y*acc_metrix).sum(2)
-    return y.numpy()
-
-
-def box_process(position):
-    grid_h, grid_w = position.shape[2:4]
-    col, row = np.meshgrid(np.arange(0, grid_w), np.arange(0, grid_h))
-    col = col.reshape(1, 1, grid_h, grid_w)
-    row = row.reshape(1, 1, grid_h, grid_w)
-    grid = np.concatenate((col, row), axis=1)
-    stride = np.array([IMG_SIZE[1]//grid_h, IMG_SIZE[0]//grid_w]).reshape(1,2,1,1)
-
-    position = dfl(position)
-    box_xy  = grid +0.5 -position[:,0:2,:,:]
-    box_xy2 = grid +0.5 +position[:,2:4,:,:]
-    xyxy = np.concatenate((box_xy*stride, box_xy2*stride), axis=1)
-
-    return xyxy
-
 def post_process(input_data):
-    boxes, scores, classes_conf = [], [], []
-    defualt_branch = 3
-    # For YOLO11/YOLOv5 ONNX, output is (1, 84, N), N = h*w per branch
-    # You need to split N into 80*80, 40*40, 20*20 for 3 branches
-    branch_shapes = [(80, 80), (40, 40), (20, 20)]
-    start = 0
-    for i, (h, w) in enumerate(branch_shapes):
-        branch_len = h * w
-        # input_data[0] shape: (1, 84, 8400)
-        branch = input_data[0][:, :, start:start+branch_len]  # (1, 84, branch_len)
-        branch = branch.reshape(1, 84, h, w)  # (1, 84, h, w)
-        #print(f"DEBUG: branch {i} reshaped to {branch.shape}")
-        boxes.append(box_process(branch))
-        # For class conf, assume the next input_data element is class conf, or use branch itself if only one output
-        # If your model only outputs one array, use branch for both boxes and class conf
-        classes_conf.append(branch[0, 4:, :, :].reshape(1, -1, h, w))  # adjust as needed
-        scores.append(np.ones_like(branch[:, :1, :, :], dtype=np.float32))
-        start += branch_len
-
-    def sp_flatten(_in):
-        ch = _in.shape[1]
-        _in = _in.transpose(0,2,3,1)
-        return _in.reshape(-1, ch)
-
-    boxes = [sp_flatten(_v) for _v in boxes]
-    classes_conf = [sp_flatten(_v) for _v in classes_conf]
-    scores = [sp_flatten(_v) for _v in scores]
-
-    boxes = np.concatenate(boxes)
-    classes_conf = np.concatenate(classes_conf)
-    scores = np.concatenate(scores)
-
-    # filter according to threshold
-    boxes, classes, scores = filter_boxes(boxes, scores, classes_conf)
-
-    # nms
+    # YOLO11 ONNX output shape: (1, 84, 8400)
+    # 84 = 4 (xywh box coords) + 80 (class scores)
+    # 8400 = anchor points (80*80 + 40*40 + 20*20)
+    
+    output = input_data[0]  # (1, 84, 8400)
+    predictions = output[0].T  # (8400, 84) - transpose to get predictions per anchor
+    
+    # Split into boxes and class scores
+    boxes_xywh = predictions[:, :4]  # (8400, 4) - center_x, center_y, width, height
+    class_scores = predictions[:, 4:]  # (8400, 80) - class probabilities
+    
+    # Get max class score and class index for each prediction
+    class_max_scores = np.max(class_scores, axis=1)  # (8400,)
+    class_ids = np.argmax(class_scores, axis=1)  # (8400,)
+    
+    # Filter by confidence threshold
+    mask = class_max_scores >= OBJ_THRESH
+    boxes_xywh = boxes_xywh[mask]
+    class_max_scores = class_max_scores[mask]
+    class_ids = class_ids[mask]
+    
+    if len(boxes_xywh) == 0:
+        return None, None, None
+    
+    # Convert from xywh (center format) to xyxy (corner format)
+    boxes_xyxy = np.zeros_like(boxes_xywh)
+    boxes_xyxy[:, 0] = boxes_xywh[:, 0] - boxes_xywh[:, 2] / 2  # x1 = center_x - width/2
+    boxes_xyxy[:, 1] = boxes_xywh[:, 1] - boxes_xywh[:, 3] / 2  # y1 = center_y - height/2
+    boxes_xyxy[:, 2] = boxes_xywh[:, 0] + boxes_xywh[:, 2] / 2  # x2 = center_x + width/2
+    boxes_xyxy[:, 3] = boxes_xywh[:, 1] + boxes_xywh[:, 3] / 2  # y2 = center_y + height/2
+    
+    # Apply NMS per class
     nboxes, nclasses, nscores = [], [], []
-    for c in set(classes):
-        inds = np.where(classes == c)
-        b = boxes[inds]
-        c = classes[inds]
-        s = scores[inds]
+    for c in set(class_ids):
+        inds = np.where(class_ids == c)[0]
+        b = boxes_xyxy[inds]
+        s = class_max_scores[inds]
         keep = nms_boxes(b, s)
-
+        
         if len(keep) != 0:
             nboxes.append(b[keep])
-            nclasses.append(c[keep])
+            nclasses.append(np.full(len(keep), c))
             nscores.append(s[keep])
-
-    if not nclasses and not nscores:
+    
+    if not nboxes:
         return None, None, None
-
+    
     boxes = np.concatenate(nboxes)
     classes = np.concatenate(nclasses)
     scores = np.concatenate(nscores)
-
+    
     return boxes, classes, scores
 
 
 def draw(image, boxes, scores, classes):
+    img_h, img_w = image.shape[:2]
     for box, score, cl in zip(boxes, scores, classes):
         left, top, right, bottom = [int(_b) for _b in box]
-        print("%s @ (%d %d %d %d) %.3f" % (CLASSES[cl], left, top, right, bottom, score))
-        cv2.rectangle(image, (left, top), (right, bottom), (255, 0, 0), 2)
+        
+        # Clip coordinates to image boundaries for drawing (allow slight overflow)
+        left = max(0, left)
+        top = max(0, top)
+        right = min(img_w, right)
+        bottom = min(img_h, bottom)
+        
+        # Skip invalid boxes (empty after clipping)
+        if right <= left or bottom <= top:
+            continue
+        
+        cv2.rectangle(image, (left, top), (right, bottom), (0, 255, 0), 2)
         cv2.putText(image, '{0} {1:.2f}'.format(CLASSES[cl], score),
-                    (left, top - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                    (left, max(top - 6, 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
 def setup_model(args):
     model_path = args.model_path
@@ -253,9 +212,8 @@ def main():
                 continue
 
             # Image should already be 640x640 from ffmpeg letterboxing
-            # Just convert color space
+            img_h, img_w = img_src.shape[:2]
             img = cv2.cvtColor(img_src, cv2.COLOR_BGR2RGB)
-
 
             if platform in ['pytorch', 'onnx']:
                 input_data = img.transpose((2,0,1))
@@ -270,12 +228,21 @@ def main():
 
             # Handle case where no objects are detected
             if boxes is not None and len(boxes) > 0:
+                # Model outputs pixel coordinates in 640x640 space
+                # Clip to image bounds (should already be within bounds)
+                boxes[:, 0] = np.clip(boxes[:, 0], 0, img_w)  # left
+                boxes[:, 1] = np.clip(boxes[:, 1], 0, img_h)  # top
+                boxes[:, 2] = np.clip(boxes[:, 2], 0, img_w)  # right
+                boxes[:, 3] = np.clip(boxes[:, 3], 0, img_h)  # bottom
+                
+                # Draw boxes on the original image
+                img_annotated = img_src.copy()
+                draw(img_annotated, boxes, scores, classes)
+                # Overwrite the original image with annotated version
+                cv2.imwrite(img_path, img_annotated)
+                
                 for box, score, cl in zip(boxes, scores, classes):
-                    # Clamp coordinates to valid range [0, 640]
-                    left = max(0, min(640, int(box[0])))
-                    top = max(0, min(640, int(box[1])))
-                    right = max(0, min(640, int(box[2])))
-                    bottom = max(0, min(640, int(box[3])))
+                    left, top, right, bottom = [int(_b) for _b in box]
                     print("%s @ (%d %d %d %d) %.3f" % (CLASSES[cl], left, top, right, bottom, score))
                     sys.stdout.flush()  # Ensure output is sent immediately
             
