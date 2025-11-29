@@ -3,7 +3,7 @@ import './App.css';
 import React, { useEffect }  from 'react';
 import videojs from 'video.js'
 import { PanelSettings } from './PanelSettings.js'
-import { ToolbarGroup, Badge, Text, Button, Portal, Toolbar, Menu, MenuTrigger, Tooltip, SplitButton, MenuPopover, MenuList, MenuItem, ToolbarButton, ToolbarDivider, createTableColumn, TableCellLayout } from "@fluentui/react-components";
+import { ToolbarGroup, Badge, Text, Button, Portal, Toolbar, Menu, MenuTrigger, Tooltip, SplitButton, MenuPopover, MenuList, MenuItem, ToolbarButton, ToolbarDivider, createTableColumn, TableCellLayout, Spinner } from "@fluentui/react-components";
 import {
   DataGridBody,
   DataGrid,
@@ -11,7 +11,7 @@ import {
   DataGridHeader,
   DataGridCell,
   DataGridHeaderCell,
-} from "@fluentui/react-data-grid-react-window";
+} from "@fluentui-contrib/react-data-grid-react-window";
 import { ArrowMove20Regular, AccessibilityCheckmark20Regular, AccessTime20Regular, Settings16Regular, ArrowDownload16Regular, DataUsageSettings20Regular, Tv16Regular, Video20Regular, VideoAdd20Regular, ArrowRepeatAll20Regular, Filter20Regular } from "@fluentui/react-icons";
 
 
@@ -40,6 +40,11 @@ export const VideoJS = ({options, onReady, play}) => {
 
       const { cKey, mKey, mStartSegment, mSeconds, segments_prior_to_movement, segments_post_movement} = play
       const player = playerRef.current;
+
+      if (!player) {
+        console.warn('VideoJS: player not ready yet');
+        return;
+      }
 
       player.src({
         src: `/video/${mKey ? `${mStartSegment}/${mSeconds}` : 'live' }/${cKey}/stream.m3u8${(mKey && segments_prior_to_movement) ? `?preseq=${segments_prior_to_movement}&postseq=${segments_post_movement}` : ''}`,
@@ -221,20 +226,40 @@ const onSelectionChange = (_, d) => {
   }
 
   function renderTags(selectedList, idx) {
-
-    const { key, cameraKey, ml, ffmpeg} = selectedList
+    const { key, cameraKey, ml, mlProcessing, ffmpeg } = selectedList
     const img = `/image/${key}`
+
+    // Show spinner if ML processing is ongoing
+    if (mlProcessing) {
+      return (
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <Spinner size="tiny" />
+          <Text variant="mediumPlus">Detecting...</Text>
+        </div>
+      )
+    }
 
     if (ml) {
       if (ml.success) {
-        //const filteredTags = filterIgnoreTags(cameraKey, ml)
         if (ml.tags.length > 0) {
-          return <a style={{"textDecoration": "none"}} target="_blank" href={img}><div style={{"display": "flex", "flexWrap": "wrap", "gap": "5px"}}>{ml.tags.map((t, idx) => <Badge key={idx} appearance="outline">{t.tag}({t.probability})</Badge>)}</div></a>
+          // Sort tags by maxProbability descending and format with percentage
+          const sortedTags = [...ml.tags].sort((a, b) => b.maxProbability - a.maxProbability)
+          return (
+            <a style={{ textDecoration: "none" }} target="_blank" href={img}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "5px" }}>
+                {sortedTags.map((t, idx) => (
+                  <Badge key={idx} appearance="outline" color={idx === 0 ? "brand" : "informative"}>
+                    {t.tag} ({(t.maxProbability * 100).toFixed(1)}%) {t.count > 1 && `×${t.count}`}
+                  </Badge>
+                ))}
+              </div>
+            </a>
+          )
         } else {
-          return <a target="_blank" href={img}><Text variant="mediumPlus" >ML Image</Text></a>
+          return <a target="_blank" href={img}><Text variant="mediumPlus">ML Image</Text></a>
         }
       } else {
-        return <Text styles={{ root: {color: 'red'}}} variant="mediumPlus">{ml.code}: {ml.stderr} {ml.error}</Text>
+        return <Text styles={{ root: { color: 'red' } }} variant="mediumPlus">{ml.code}: {ml.stderr} {ml.error}</Text>
       }
     } else if (ffmpeg) {
       if (ffmpeg.success) {

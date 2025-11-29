@@ -3,6 +3,7 @@ import React  from 'react';
 import {
   Text, 
   Select,
+  Dropdown,
   Divider,
   Input,
   Checkbox,
@@ -172,6 +173,26 @@ export const MySplitButton = ({label, items}) => (
 export function PanelSettings({panel, setPanel, data, getServerData}) {
 
     const [error, setError] = React.useState(null)
+    const [models, setModels] = React.useState([]);
+    const [modelsLoading, setModelsLoading] = React.useState(false);
+
+    // Fetch available ML models when panel opens
+    React.useEffect(() => {
+        if (panel.open && panel.key === 'settings' && !modelsLoading && models.length === 0) {
+            setModelsLoading(true);
+            fetch('/api/ml-models')
+                .then(res => res.json())
+                .then(data => {
+                    setModels(data.models || []);
+                    setModelsLoading(false);
+                })
+                .catch(err => {
+                    console.error('Failed to fetch ML models:', err);
+                    setModelsLoading(false);
+                });
+        }
+    }, [panel.open, panel.key, models.length, modelsLoading]);
+
     const styles = useStyles();
 
     function updatePanelValues(field, value) {
@@ -212,10 +233,10 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
         if (panel.key === 'settings') {
           invalidFn('disk_base_dir', !panel.values.disk_base_dir || panel.values.disk_base_dir.endsWith('/') || !panel.values.disk_base_dir.startsWith('/'),
             <Text>Must be abosolute path (cannot end with '/')</Text>)
-          invalidFn('mlDir', panel.values.enable_ml && (!panel.values.mlDir || panel.values.mlDir.endsWith('/') || !panel.values.mlDir.startsWith('/')),
-            <Text>Must be abosolute path (cannot end with '/')</Text>)
-          invalidFn('labels', panel.values.enable_ml && (!panel.values.labels),
-            <Text>Must have labels defined for ML model</Text>)
+          invalidFn('mlModel', panel.values.enable_ml && (!panel.values.mlModel),
+            <Text>Must select a model for object detection</Text>)
+          invalidFn('mlFramesPath', panel.values.enable_ml && panel.values.mlFramesPath && (panel.values.mlFramesPath.endsWith('/')),
+            <Text>Frames path cannot end with '/'</Text>)
         } else {
           invalidFn('name', !panel.values.name || panel.values.name.match(/^[a-z0-9][_\-a-z0-9]+[a-z0-9]$/i) === null || panel.values.name.length > 19,
             <Text>Enter valid camera name</Text>)
@@ -301,26 +322,42 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
                     
                     <Checkbox label="Enable Object Detection" checked={panel.values.enable_ml} onChange={(_,data) => updatePanelValues('enable_ml', data.checked)} />
                     
-
                     <Field
-                      label="Object Detection Run Folder"
-                      validationState={getError('mlDir') ? "error" : "none"}
-                      validationMessage={getError('mlDir')}>
-                      <Input style={{"width": "100%"}} disabled={!panel.values.enable_ml} contentBefore={<Folder16Regular/>}  required value={panel.values.mlDir} onChange={(_, data) => updatePanelValues('mlDir', data.value)} />
+                      label="YOLO Model"
+                      validationState={getError('mlModel') ? "error" : "none"}
+                      validationMessage={getError('mlModel')}>
+                      <Dropdown 
+                        style={{"width": "100%"}} 
+                        disabled={!panel.values.enable_ml || modelsLoading}
+                        placeholder={modelsLoading ? "Loading models..." : "Select a model"}
+                        value={panel.values.mlModel || ''}
+                        selectedOptions={panel.values.mlModel ? [panel.values.mlModel] : []}
+                        onOptionSelect={(_, data) => updatePanelValues('mlModel', data.optionValue)}>
+                        {models.map(model => (
+                          <Option key={model} value={model}>{model}</Option>
+                        ))}
+                      </Dropdown>
                     </Field>
 
                     <Field
-                      label="Object Detection Command (use in and out for images)"
-                      validationState={getError('mlCmd') ? "error" : "none"}
-                      validationMessage={getError('mlCmd')}>
-                      <Input style={{"width": "100%"}} disabled={!panel.values.enable_ml} contentBefore={<KeyCommand16Regular/>}  required value={panel.values.mlCmd} onChange={(_, data) => updatePanelValues('mlCmd', data.value)} />
+                      label="Frames Output Path (relative or absolute, leave empty to use camera folder)"
+                      validationState={getError('mlFramesPath') ? "error" : "none"}
+                      validationMessage={getError('mlFramesPath')}>
+                      <Input 
+                        style={{"width": "100%"}} 
+                        disabled={!panel.values.enable_ml} 
+                        contentBefore={<Folder16Regular/>}  
+                        placeholder="./frames or leave empty"
+                        value={panel.values.mlFramesPath || ''} 
+                        onChange={(_, data) => updatePanelValues('mlFramesPath', data.value)} />
                     </Field>
 
 
-                    <div className={styles.root}>
-                      <Label >Model Labels</Label>
-                      <Textarea resize="vertical" disabled={!panel.values.enable_ml}  value={panel.values.labels} onChange={(ev, val) => updatePanelValues('labels', val.value)}/>
-                    </div>
+                    <Field
+                      label="Model Labels (COCO dataset - optional)"
+                      hint="Comma-separated list of object classes. Defaults to COCO 80 classes.">
+                      <Textarea resize="vertical" disabled={!panel.values.enable_ml} rows={3} value={panel.values.labels} onChange={(ev, val) => updatePanelValues('labels', val.value)}/>
+                    </Field>
 
                     { data.config && data.config.status  &&  Object.keys(data.config.status).length > 0 && 
                       <div className={styles.root}>

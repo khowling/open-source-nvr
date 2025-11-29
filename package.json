@@ -31,8 +31,8 @@
     ]
   },
   "devDependencies": {
+    "@fluentui-contrib/react-data-grid-react-window": "^1.4.2",
     "@fluentui/react-components": "^9.17.1",
-    "@fluentui/react-data-grid-react-window": "^9.0.0-beta.12",
     "@tsconfig/node16": "^1.0.2",
     "@types/koa__router": "^8.0.11",
     "@types/koa-bodyparser": "^4.3.5",
@@ -54,6 +54,7 @@
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-scripts": "5.0.1",
-    "subleveldown": "^6.0.1"
+    "subleveldown": "^6.0.1",
+    "winston": "^3.18.3"
   }
 }

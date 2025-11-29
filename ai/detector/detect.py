@@ -235,68 +235,71 @@ def main():
 
     # run test
     img_counter = 0
-    for line in sys.stdin:
-        img_path = line.strip()
-        if not img_path:
-            continue
+    try:
+        for line in sys.stdin:
+            img_path = line.strip()
+            if not img_path:
+                continue
+            
+            img_name = os.path.basename(img_path)
+            img_counter += 1
 
-        if hasattr(co_helper, "letter_box_info_list") and co_helper.letter_box_info_list is not None:
-            co_helper.letter_box_info_list.clear()
-        
-        img_name = os.path.basename(img_path)
-        img_counter += 1
+            if not os.path.exists(img_path):
+                print("{} is not found", img_name)
+                continue
 
-        if not os.path.exists(img_path):
-            print("{} is not found", img_name)
-            continue
+            img_src = cv2.imread(img_path)
+            if img_src is None:
+                continue
 
-        img_src = cv2.imread(img_path)
-        if img_src is None:
-            continue
-
-        pad_color = (0,0,0)
-        img = co_helper.letter_box(im= img_src.copy(), new_shape=(IMG_SIZE[1], IMG_SIZE[0]), pad_color=(0,0,0))
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            # Image should already be 640x640 from ffmpeg letterboxing
+            # Just convert color space
+            img = cv2.cvtColor(img_src, cv2.COLOR_BGR2RGB)
 
 
-        if platform in ['pytorch', 'onnx']:
-            input_data = img.transpose((2,0,1))
-            input_data = input_data.reshape(1,*input_data.shape).astype(np.float32)
-            input_data = input_data/255.
-        else:
-            input_data = img
+            if platform in ['pytorch', 'onnx']:
+                input_data = img.transpose((2,0,1))
+                input_data = input_data.reshape(1,*input_data.shape).astype(np.float32)
+                input_data = input_data/255.
+            else:
+                input_data = img
 
-        outputs = model.run([input_data])
+            outputs = model.run([input_data])
 
-        boxes, classes, scores = post_process(outputs)
+            boxes, classes, scores = post_process(outputs)
 
-        for box, score, cl in zip(boxes, scores, classes):
-            left, top, right, bottom = [int(_b) for _b in box]
-            print("%s @ (%d %d %d %d) %.3f" % (CLASSES[cl], left, top, right, bottom, score))
-        
-        if args.img_show or args.img_save:
-            print('\n\nIMG: {}'.format(img_name))
-            img_p = img_src.copy()
-            if boxes is not None:
-                print("Original image shape:", img_src.shape)
-                print("Letterboxed image shape:", img.shape)
-                print("First 5 boxes before mapping:", boxes[:5])
-                real_boxes = co_helper.get_real_box(boxes)
-                print("First 5 boxes after mapping:", real_boxes[:5])
-                draw(img_p, real_boxes, scores, classes)
+            for box, score, cl in zip(boxes, scores, classes):
+                left, top, right, bottom = [int(_b) for _b in box]
+                print("%s @ (%d %d %d %d) %.3f" % (CLASSES[cl], left, top, right, bottom, score))
+                sys.stdout.flush()  # Ensure output is sent immediately
+            
+            if args.img_show or args.img_save:
+                print('\n\nIMG: {}'.format(img_name))
+                img_p = img_src.copy()
+                if boxes is not None:
+                    print("Image shape:", img_src.shape)
+                    print("Detected boxes:", boxes[:5] if len(boxes) > 5 else boxes)
+                    # No need to map boxes - they're already in correct coordinates
+                    draw(img_p, boxes, scores, classes)
 
-            if args.img_save:
-                if not os.path.exists('./result'):
-                    os.mkdir('./result')
-                result_path = os.path.join('./result', img_name)
-                cv2.imwrite(result_path, img_p)
-                print('Detection result save to {}'.format(result_path))
-                        
-            if args.img_show:
-                cv2.imshow("full post process result", img_p)
-                cv2.waitKeyEx(0)
- 
-    model.release()
+                if args.img_save:
+                    if not os.path.exists('./result'):
+                        os.mkdir('./result')
+                    result_path = os.path.join('./result', img_name)
+                    cv2.imwrite(result_path, img_p)
+                    print('Detection result save to {}'.format(result_path))
+                            
+                if args.img_show:
+                    cv2.imshow("full post process result", img_p)
+                    cv2.waitKeyEx(0)
+    
+    except KeyboardInterrupt:
+        print("\nExiting gracefully...")
+    except EOFError:
+        print("\nEnd of input reached.")
+    finally:
+        model.release()
+        cv2.destroyAllWindows()
 
 if __name__ == '__main__':
     main()

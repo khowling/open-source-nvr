@@ -71,6 +71,11 @@ export default async function (url: string, opts = {} as http.RequestOptions, bo
             req.destroy()
         })
 
+        // Set timeout if specified in options
+        if (options.timeout) {
+            req.setTimeout(options.timeout);
+        }
+
         if (options.method === 'POST' || options.method === 'PUT') {
             // Write data to request body
             req.end(bodystr)

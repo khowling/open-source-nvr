@@ -51,21 +51,30 @@ If your model outputs class confidences differently, you may need to adjust the 
 
 ## Run to develop
 
-python3 -m detector.detect --model_path ./yolo11n.onnx
+python3 -m detector.detect --model_path ./yolo11n.onnx --target rk3588
 
 
 ## Build wheel to execute
 ```bash
 cd ai
-python3 -m pip install build wheel setuptools
+
+#  We just require 'build', the rest will be installed in the venv
+python3 -m pip install build 
+
+#  This creates its own virtual environment! and creates the whl
 python3 -m build
 
-# Install the built wheel
-python3 -m pip  uninstall open-source-nvr-detector
+# Install the wheel, this will create the ~/.local/bin/nvr-detect script
 python3 -m pip  install dist/open_source_nvr_detector-0.1.0-py3-none-any.whl
 
-# Run using the console script
+```
+
+## Execute
+
+```bash
 nvr-detect --model_path ./model/yolo11.rknn --target rk3588
+# or
+nvr-detect --model_path ./model/yolo11.onnx 
 ```
 
 
