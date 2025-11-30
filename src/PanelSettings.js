@@ -12,6 +12,7 @@ import {
   tokens,
   useId,
   Label,
+  Badge,
   Textarea,
   TextareaProps,
   shorthands,
@@ -374,6 +375,51 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
                       <Textarea resize="vertical" disabled={!panel.values.enable_ml} rows={3} value={panel.values.labels} onChange={(ev, val) => updatePanelValues('labels', val.value)}/>
                     </Field>
 
+                    <Divider><b>Tag Filters (Filtered Mode)</b></Divider>
+                    
+                    <Field
+                      label="Minimum Probability Filters"
+                      hint="Only show tags that meet or exceed their minimum probability threshold">
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '10px' }}>
+                        {(panel.values.tag_filters || []).map((filter, idx) => (
+                          <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px', border: '1px solid #e0e0e0', borderRadius: '4px' }}>
+                            <Badge appearance="outline" style={{ minWidth: '80px' }}>{filter.tag}</Badge>
+                            <div style={{ flex: 1 }}>
+                              <Slider 
+                                min={0} 
+                                max={1} 
+                                step={0.05} 
+                                value={filter.minProbability}
+                                disabled={!panel.values.enable_ml}
+                                onChange={(_, data) => {
+                                  const newFilters = [...panel.values.tag_filters];
+                                  newFilters[idx] = { ...filter, minProbability: data.value };
+                                  updatePanelValues('tag_filters', newFilters);
+                                }} />
+                            </div>
+                            <Text style={{ minWidth: '45px', textAlign: 'right' }}>
+                              ≥{Math.round(filter.minProbability * 100)}%
+                            </Text>
+                            <Button 
+                              size="small" 
+                              appearance="subtle"
+                              disabled={!panel.values.enable_ml}
+                              onClick={() => {
+                                const newFilters = panel.values.tag_filters.filter((_, i) => i !== idx);
+                                updatePanelValues('tag_filters', newFilters);
+                              }}>
+                              Remove
+                            </Button>
+                          </div>
+                        ))}
+                        {(!panel.values.tag_filters || panel.values.tag_filters.length === 0) && (
+                          <Text style={{ fontStyle: 'italic', color: '#666' }}>
+                            No filters configured. Right-click any badge to add a filter.
+                          </Text>
+                        )}
+                      </div>
+                    </Field>
+
                     { data.config && data.config.status  &&  Object.keys(data.config.status).length > 0 && 
                       <div className={styles.root}>
                         <Alert intent="info">{JSON.stringify(data.config.status, null, 2)}</Alert>
@@ -425,12 +471,6 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
                       </div>
                     </Field>
 
-                    <MultiselectWithTags 
-                      label="Filter Tags (Requires Object Detection)" 
-                      options={data.config.settings.labels ? data.config.settings.labels.split(/[;,\n]/): []}
-                      selectedOptions={panel.values.ignore_tags}
-                      setSelectedOptions={val => { updatePanelValues('ignore_tags', val)}} />
-
                     
                     <Divider><b>Playback</b></Divider>
 
@@ -462,8 +502,8 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
                     </div>
 
                     <div className={styles.root}>
-                      <label>End movement after {panel.values.pollsWithoutMovement} poll(s) without movement</label>
-                      <Slider style={{"width": "100%"}} disabled={!panel.values.enable_movement}  min={1} max={10} step={1} defaultValue={panel.values.pollsWithoutMovement}  onChange={(_,data) => updatePanelValues('pollsWithoutMovement', data.value)} />
+                      <label>Extend capturing movement after camera reports no movement for {panel.values.pollsWithoutMovement} poll(s) (0 = stop immediately)</label>
+                      <Slider style={{"width": "100%"}} disabled={!panel.values.enable_movement}  min={0} max={10} step={1} defaultValue={panel.values.pollsWithoutMovement}  onChange={(_,data) => updatePanelValues('pollsWithoutMovement', data.value)} />
                     </div>
                     
                     <div className={styles.root}>

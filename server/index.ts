@@ -23,6 +23,12 @@ interface Settings {
     mlTarget: string;
     mlFramesPath: string;
     labels: string;
+    tag_filters: TagFilter[];
+}
+
+interface TagFilter {
+    tag: string;
+    minProbability: number;
 }
 interface MovementEntry {
     cameraKey: string;
@@ -76,7 +82,6 @@ interface CameraEntry {
     mSPollFrequency: number;
     segments_prior_to_movement: number;
     segments_post_movement: number;
-    ignore_tags: string[];
 }
 /* 
 interface ProcessInfo {
@@ -541,14 +546,30 @@ async function processMovement(cameraKey: string) : Promise<void> {
                     ff_stderr += data;
                     const output = data.toString();
                     
-                    // Log all stderr but with different levels based on content
-                    if (output.includes('frame=') || output.includes('fps=') || output.includes('time=')) {
+                    // Filter out informational messages - only log actual errors/warnings
+                    const isProgressInfo = output.includes('frame=') || output.includes('fps=') || output.includes('time=');
+                    const isInfoMessage = output.includes('Input #0') || 
+                                         output.includes('Output #0') || 
+                                         output.includes('Stream mapping:') ||
+                                         output.includes('Press [q] to stop') ||
+                                         output.includes('Opening \'') ||
+                                         output.includes('Duration:') ||
+                                         output.includes('Stream #') ||
+                                         output.includes('Metadata:') ||
+                                         output.includes('encoder         :') ||
+                                         output.includes('variant_bitrate') ||
+                                         output.includes('Side data:') ||
+                                         output.includes('cpb: bitrate') ||
+                                         output.includes('Skip (\'#EXT');
+                    
+                    if (isProgressInfo) {
                         logger.debug('ffmpeg progress info', { 
                             camera: cameraEntry.name,
                             movement: movement_key,
                             output: output.trim().substring(0, 150) 
                         });
-                    } else {
+                    } else if (!isInfoMessage) {
+                        // Only log if it's not a known informational message
                         logger.warn('ffmpeg image stderr', { 
                             camera: cameraEntry.name,
                             movement: movement_key,
@@ -564,13 +585,17 @@ async function processMovement(cameraKey: string) : Promise<void> {
                 })
 
                 ffmpeg.on('exit', (code: number, signal: string) => {
-                    logger.info('ffmpeg frame extraction exited', { 
+                    const isGracefulStop = code === 255 || signal === 'SIGTERM' || signal === 'SIGKILL';
+                    const logLevel = isGracefulStop ? 'info' : 'warn';
+                    
+                    logger[logLevel]('ffmpeg frame extraction exited', { 
                         camera: cameraEntry.name, 
                         movement: movement_key, 
                         exitCode: code, 
                         signal: signal,
                         pid: ffmpeg.pid,
-                        totalFrames: lastFrameNumber
+                        totalFrames: lastFrameNumber,
+                        graceful: isGracefulStop
                     });
                 });
 
@@ -625,7 +650,22 @@ async function processMovement(cameraKey: string) : Promise<void> {
                     logger.info('Movement ended - max duration', { camera: cameraEntry.name, duration: `${secMaxSingleMovement}s` })
                     if (current_taskid && current_taskid.exitCode === null) {
                         logger.info('Terminating ffmpeg frame extraction', { camera: cameraEntry.name, movement: current_key, reason: 'max duration exceeded', pid: current_taskid.pid });
-                        current_taskid.kill();
+                        
+                        // Wait for ffmpeg to fully terminate
+                        await new Promise<void>((resolve) => {
+                            const timeout = setTimeout(() => {
+                                logger.warn('ffmpeg termination timeout - forcing', { camera: cameraEntry.name, movement: current_key });
+                                resolve();
+                            }, 5000); // 5 second timeout
+                            
+                            current_taskid.once('close', () => {
+                                clearTimeout(timeout);
+                                logger.debug('ffmpeg terminated successfully', { camera: cameraEntry.name, movement: current_key });
+                                resolve();
+                            });
+                            
+                            current_taskid.kill();
+                        });
                     }
                     
                     // Flush ML detections if enabled
@@ -654,13 +694,36 @@ async function processMovement(cameraKey: string) : Promise<void> {
                 const consecutivePolls = m.consecutivePollsWithoutMovement + 1;
                 const elapsedSeconds = Math.floor((Date.now() - m.startDate) / 1000);
                 
-                if (consecutivePolls >= (pollsWithoutMovement || 1) || elapsedSeconds > (secMaxSingleMovement || 600)) {
+                // pollsWithoutMovement of 0 means stop immediately when camera reports no movement
+                // Otherwise, wait for the specified number of consecutive polls
+                const shouldEndMovement = pollsWithoutMovement === 0 || consecutivePolls > pollsWithoutMovement;
+                
+                if (shouldEndMovement || elapsedSeconds > (secMaxSingleMovement || 600)) {
 
-                    logger.info('Movement complete', { camera: cameraEntry.name, duration: `${elapsedSeconds}s`, pollsWithoutMovement: consecutivePolls })
+                    logger.info('Movement complete', { camera: cameraEntry.name, duration: `${elapsedSeconds}s`, pollsWithoutMovement: consecutivePolls, extendSetting: pollsWithoutMovement })
                     if (current_taskid && current_taskid.exitCode === null) {
-                        const reason = consecutivePolls >= (pollsWithoutMovement || 1) ? `${consecutivePolls} polls without movement` : 'max duration exceeded';
+                        const reason = shouldEndMovement 
+                            ? (pollsWithoutMovement === 0 
+                                ? 'camera reports no movement (immediate stop)' 
+                                : `${consecutivePolls} polls without movement (extended ${pollsWithoutMovement} polls)`)
+                            : 'max duration exceeded';
                         logger.info('Terminating ffmpeg frame extraction', { camera: cameraEntry.name, movement: current_key, reason, pid: current_taskid.pid });
-                        current_taskid.kill();
+                        
+                        // Wait for ffmpeg to fully terminate
+                        await new Promise<void>((resolve) => {
+                            const timeout = setTimeout(() => {
+                                logger.warn('ffmpeg termination timeout - forcing', { camera: cameraEntry.name, movement: current_key });
+                                resolve();
+                            }, 5000); // 5 second timeout
+                            
+                            current_taskid.once('close', () => {
+                                clearTimeout(timeout);
+                                logger.debug('ffmpeg terminated successfully', { camera: cameraEntry.name, movement: current_key });
+                                resolve();
+                            });
+                            
+                            current_taskid.kill();
+                        });
                     }
                     
                     // Flush ML detections if enabled
@@ -786,15 +849,22 @@ async function processController(
        })
 
         childProcess.on('close', async (code: number) => {
-            if (code !== 0) {
-                logger.error('Process exited', { 
+            // Exit code 255 is normal for ffmpeg when gracefully terminated
+            const isGracefulExit = code === 0 || code === 255;
+            
+            if (!isGracefulExit) {
+                logger.error('Process exited abnormally', { 
                     name, 
                     code, 
                     stderr: stderrBuffer.slice(-500),  // Last 500 chars of stderr
                     stdout: stdoutBuffer.slice(-200)   // Last 200 chars of stdout
                 });
             } else {
-                logger.info('Process closed normally', { name, code });
+                logger.info('Process closed', { 
+                    name, 
+                    code,
+                    graceful: code === 0 || code === 255
+                });
             }
         });
   
@@ -1042,23 +1112,65 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n"
                             await ensureDir(folder)
                         }
 
-                        // stop old camera definition movements and ffmpeg
-                        //if (old_cc.ffmpeg_task.exitCode) {
+                        // Stop old camera definition movements and ffmpeg gracefully
+                        logger.info('Stopping existing camera processes', { 
+                            camera: old_cc.cameraEntry.name, 
+                            cameraKey,
+                            hasFFmpegTask: !!old_cc.ffmpeg_task 
+                        });
+                        
+                        // Disable streaming to prevent restarts
                         cameraCache[cameraKey] = { 
                             ...cameraCache[cameraKey],
                             cameraEntry: {...old_cc.cameraEntry, enable_streaming: false},
                         }
-                        // kill the ffmpeg process if its running
-                        await processController ( old_cc.cameraEntry.name,false, null,  [], [0,''], old_cc.ffmpeg_task, null )
                         
-                        // Wait for process to fully terminate before updating
-                        await new Promise(resolve => setTimeout(resolve, 1000));
-
+                        // Gracefully terminate ffmpeg if running
+                        if (old_cc.ffmpeg_task && old_cc.ffmpeg_task.exitCode === null) {
+                            logger.info('Terminating ffmpeg streaming process', {
+                                camera: old_cc.cameraEntry.name,
+                                pid: old_cc.ffmpeg_task.pid
+                            });
+                            
+                            await new Promise<void>((resolve) => {
+                                const timeout = setTimeout(() => {
+                                    logger.warn('ffmpeg termination timeout - forcing', { 
+                                        camera: old_cc.cameraEntry.name,
+                                        cameraKey 
+                                    });
+                                    resolve();
+                                }, 5000); // 5 second timeout
+                                
+                                old_cc.ffmpeg_task.once('close', () => {
+                                    clearTimeout(timeout);
+                                    logger.info('ffmpeg streaming process terminated', { 
+                                        camera: old_cc.cameraEntry.name,
+                                        cameraKey 
+                                    });
+                                    resolve();
+                                });
+                                
+                                old_cc.ffmpeg_task.kill();
+                            });
+                        } else {
+                            logger.debug('No running ffmpeg process to terminate', {
+                                camera: old_cc.cameraEntry.name,
+                                cameraKey
+                            });
+                        }
 
                         if (!deleteOption) {
                             const new_vals: CameraEntry = {...old_cc.cameraEntry, ...new_ce}
                             await cameradb.put(cameraKey, new_vals) 
                             cameraCache[cameraKey] = { cameraEntry: new_vals }
+                            
+                            logger.info('Camera configuration updated', {
+                                camera: new_vals.name,
+                                cameraKey,
+                                streaming: new_vals.enable_streaming,
+                                movement: new_vals.enable_movement
+                            });
+                            
                             ctx.status = 201
                         } else {
                             if (deleteOption === 'delall') {
@@ -1134,14 +1246,22 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n"
 
                             let tags = ml?.success ? ml.tags : null
                             if (mode === 'Filtered') {
-                                if (tags && Array.isArray(tags) && tags.length > 0) {
-                                    const { ignore_tags } = cameraCache[cameraKey]?.cameraEntry || {}
-                                    if (ignore_tags && Array.isArray(ignore_tags) && ignore_tags.length > 0) {
-                                        tags = tags.reduce((a, c) => ignore_tags.includes(c.tag) ? a : a.concat(c), [])
-                                    } 
+                                const { tag_filters } = settingsCache.settings || {}
+                                if (!tag_filters || tag_filters.length === 0) {
+                                    // No filters configured - hide all movements in filtered mode
+                                    tags = []
+                                } else if (tags && Array.isArray(tags) && tags.length > 0) {
+                                    // Only show tags that meet their minimum probability threshold
+                                    tags = tags.filter(t => {
+                                        const filter = tag_filters.find(f => f.tag === t.tag)
+                                        return filter ? t.maxProbability >= filter.minProbability : false
+                                    })
+                                } else {
+                                    // No tags on this movement - don't show in filtered mode
+                                    tags = []
                                 }
                             }
-                            if (mode === 'Movement' || (mode === 'Filtered' && tags?.length >0)) {
+                            if (mode === 'Movement' || (mode === 'Filtered' && tags && tags.length > 0)) {
                                 const startDate = new Date(value.startDate)
                                 movements.push({
                                     key,
@@ -1236,7 +1356,7 @@ async function main() {
 
     // Populate settingsCache with default COCO labels
     const defaultLabels = "person,bicycle,car,motorbike,aeroplane,bus,train,truck,boat,traffic light,fire hydrant,stop sign,parking meter,bench,bird,cat,dog,horse,sheep,cow,elephant,bear,zebra,giraffe,backpack,umbrella,handbag,tie,suitcase,frisbee,skis,snowboard,sports ball,kite,baseball bat,baseball glove,skateboard,surfboard,tennis racket,bottle,wine glass,cup,fork,knife,spoon,bowl,banana,apple,sandwich,orange,broccoli,carrot,hot dog,pizza,donut,cake,chair,sofa,pottedplant,bed,diningtable,toilet,tvmonitor,laptop,mouse,remote,keyboard,cell phone,microwave,oven,toaster,sink,refrigerator,book,clock,vase,scissors,teddy bear,hair drier,toothbrush";
-    settingsCache = {settings: { disk_base_dir: '', mlModel:'', mlTarget:'', mlFramesPath:'', enable_ml: false, labels: defaultLabels, cleanup_interval: 0, cleanup_capacity: 90}, status: { fail: false, nextCheckInMinutes: 0}}
+    settingsCache = {settings: { disk_base_dir: '', mlModel:'', mlTarget:'', mlFramesPath:'', enable_ml: false, labels: defaultLabels, tag_filters: [], cleanup_interval: 0, cleanup_capacity: 90}, status: { fail: false, nextCheckInMinutes: 0}}
     try {
         settingsCache = {...settingsCache, settings : await db.get('settings') as Settings}
     } catch (e) {

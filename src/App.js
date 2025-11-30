@@ -251,11 +251,43 @@ const onSelectionChange = (_, d) => {
                   ? `/frame/${key}/${t.maxProbabilityImage}`
                   : img;
                 return (
-                  <a key={idx} style={{ textDecoration: "none" }} target="_blank" href={frameUrl}>
-                    <Badge appearance="outline" color={idx === 0 ? "brand" : "informative"}>
-                      {t.tag} ({(t.maxProbability * 100).toFixed(1)}%) {t.count > 1 && `×${t.count}`}
-                    </Badge>
-                  </a>
+                  <Menu key={idx} positioning="below-start">
+                    <MenuTrigger disableButtonEnhancement>
+                      <Badge appearance="outline" color={idx === 0 ? "brand" : "informative"} style={{ cursor: "pointer" }}>
+                        {t.tag} {Math.round(t.maxProbability * 100)}%
+                      </Badge>
+                    </MenuTrigger>
+                    <MenuPopover>
+                      <MenuList>
+                        <MenuItem onClick={(e) => {
+                          e.stopPropagation();
+                          window.open(frameUrl, '_blank');
+                        }}>
+                          Open image in new tab
+                        </MenuItem>
+                        <MenuItem onClick={(e) => {
+                          e.stopPropagation();
+                          const currentFilters = data.config.settings.tag_filters || [];
+                          const existingFilter = currentFilters.find(f => f.tag === t.tag);
+                          
+                          if (!existingFilter) {
+                            // Add new filter with current probability as minimum
+                            const newFilters = [...currentFilters, { tag: t.tag, minProbability: t.maxProbability }];
+                            setPanel({...panel, open: true, key: 'settings', invalidArray:[], heading: 'General Settings', 
+                              values: { ...data.config.settings, tag_filters: newFilters }})
+                          } else {
+                            // Open settings to edit existing filter
+                            setPanel({...panel, open: true, key: 'settings', invalidArray:[], heading: 'General Settings', 
+                              values: { ...data.config.settings }})
+                          }
+                        }}>
+                          {(data.config.settings.tag_filters || []).find(f => f.tag === t.tag) 
+                            ? 'Edit filter...' 
+                            : `Add to filter (≥${Math.round(t.maxProbability * 100)}%)`}
+                        </MenuItem>
+                      </MenuList>
+                    </MenuPopover>
+                  </Menu>
                 );
               })}
             </div>
@@ -352,7 +384,6 @@ const onSelectionChange = (_, d) => {
                       mSPollFrequency: c.mSPollFrequency,
                       segments_prior_to_movement: c.segments_prior_to_movement,
                       segments_post_movement: c.segments_post_movement,
-                      ignore_tags: c.ignore_tags,
                       enable_streaming: c.enable_streaming,
                       enable_movement: c.enable_movement,
                     }})
@@ -361,13 +392,12 @@ const onSelectionChange = (_, d) => {
 
                 <MenuItem key="add" icon={<VideoAdd20Regular />}  onClick={() => {
                       setPanel({...panel, open: true, key: 'new', invalidArray: [], heading: 'Add New Camera', values: {
-                        pollsWithoutMovement: 1,
+                        pollsWithoutMovement: 0,
                         secMaxSingleMovement: 600,
                         mSPollFrequency: 1000,
                         disk: data.config.settings.disk_base_dir,
                         segments_prior_to_movement: 10, // 20 seconds (2second segments)
                         segments_post_movement: 10, // 20 seconds (2second segments)
-                        ignore_tags: ['car'],
                         enable_streaming: true,
                         enable_movement: true,
                       }})
