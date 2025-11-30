@@ -3,7 +3,7 @@ import './App.css';
 import React, { useEffect }  from 'react';
 import videojs from 'video.js'
 import { PanelSettings } from './PanelSettings.js'
-import { ToolbarGroup, Badge, Text, Button, Portal, Toolbar, Menu, MenuTrigger, Tooltip, SplitButton, MenuPopover, MenuList, MenuItem, ToolbarButton, ToolbarDivider, createTableColumn, TableCellLayout, Spinner } from "@fluentui/react-components";
+import { ToolbarGroup, Badge, Text, Button, Portal, Toolbar, Menu, MenuTrigger, Tooltip, SplitButton, MenuPopover, MenuList, MenuItem, ToolbarButton, ToolbarDivider, createTableColumn, TableCellLayout, Spinner, tokens } from "@fluentui/react-components";
 import {
   DataGridBody,
   DataGrid,
@@ -12,7 +12,7 @@ import {
   DataGridCell,
   DataGridHeaderCell,
 } from "@fluentui-contrib/react-data-grid-react-window";
-import { ArrowMove20Regular, AccessibilityCheckmark20Regular, AccessTime20Regular, Settings16Regular, ArrowDownload16Regular, DataUsageSettings20Regular, Tv16Regular, Video20Regular, VideoAdd20Regular, ArrowRepeatAll20Regular, Filter20Regular } from "@fluentui/react-icons";
+import { ArrowMove20Regular, AccessibilityCheckmark20Regular, AccessTime20Regular, Settings16Regular, ArrowDownload16Regular, DataUsageSettings20Regular, Tv16Regular, Video20Regular, VideoAdd20Regular, ArrowRepeatAll20Regular, Filter20Regular, MoreVertical20Regular } from "@fluentui/react-icons";
 
 
 export const VideoJS = ({options, onReady, play}) => {
@@ -251,43 +251,9 @@ const onSelectionChange = (_, d) => {
                   ? `/frame/${key}/${t.maxProbabilityImage}`
                   : img;
                 return (
-                  <Menu key={idx} positioning="below-start">
-                    <MenuTrigger disableButtonEnhancement>
-                      <Badge appearance="outline" color={idx === 0 ? "brand" : "informative"} style={{ cursor: "pointer" }}>
-                        {t.tag} {Math.round(t.maxProbability * 100)}%
-                      </Badge>
-                    </MenuTrigger>
-                    <MenuPopover>
-                      <MenuList>
-                        <MenuItem onClick={(e) => {
-                          e.stopPropagation();
-                          window.open(frameUrl, '_blank');
-                        }}>
-                          Open image in new tab
-                        </MenuItem>
-                        <MenuItem onClick={(e) => {
-                          e.stopPropagation();
-                          const currentFilters = data.config.settings.tag_filters || [];
-                          const existingFilter = currentFilters.find(f => f.tag === t.tag);
-                          
-                          if (!existingFilter) {
-                            // Add new filter with current probability as minimum
-                            const newFilters = [...currentFilters, { tag: t.tag, minProbability: t.maxProbability }];
-                            setPanel({...panel, open: true, key: 'settings', invalidArray:[], heading: 'General Settings', 
-                              values: { ...data.config.settings, tag_filters: newFilters }})
-                          } else {
-                            // Open settings to edit existing filter
-                            setPanel({...panel, open: true, key: 'settings', invalidArray:[], heading: 'General Settings', 
-                              values: { ...data.config.settings }})
-                          }
-                        }}>
-                          {(data.config.settings.tag_filters || []).find(f => f.tag === t.tag) 
-                            ? 'Edit filter...' 
-                            : `Add to filter (≥${Math.round(t.maxProbability * 100)}%)`}
-                        </MenuItem>
-                      </MenuList>
-                    </MenuPopover>
-                  </Menu>
+                  <Badge key={idx} appearance="outline" color={idx === 0 ? "brand" : "informative"} style={{ whiteSpace: 'nowrap' }}>
+                    {t.tag} {Math.round(t.maxProbability * 100)}%
+                  </Badge>
                 );
               })}
             </div>
@@ -326,7 +292,14 @@ const onSelectionChange = (_, d) => {
 
           <Menu positioning="below-end">
             <MenuTrigger disableButtonEnhancement>
-              <Button  icon={<Tv16Regular />}>{currentPlaying ? data.cameras.find(c => c.key === currentPlaying.cKey)?.name : 'Live'}</Button>
+              <Button 
+                icon={<Tv16Regular />}
+                style={{
+                  ...(currentPlaying && !currentPlaying.mKey && { backgroundColor: tokens.colorNeutralBackground1Selected })
+                }}
+              >
+                {currentPlaying ? data.cameras.find(c => c.key === currentPlaying.cKey)?.name : 'Live'}
+              </Button>
             </MenuTrigger>
 
             <MenuPopover>
@@ -414,15 +387,13 @@ const onSelectionChange = (_, d) => {
 
       <DataGrid
         size="small"
-        selectionMode="single"
-        onSelectionChange={onSelectionChange}
         getRowId={(item) => item.key}
         columns={[
           createTableColumn({
             columnId: "startDate_en_GB",
             renderCell: (item) => {
               return (
-                <TableCellLayout>{item.startDate_en_GB} ({item.seconds}s)</TableCellLayout>
+                <TableCellLayout>{item.startDate_en_GB}</TableCellLayout>
               )
             }
 
@@ -437,6 +408,15 @@ const onSelectionChange = (_, d) => {
 
           }),
           createTableColumn({
+            columnId: "seconds",
+            renderCell: (item) => {
+              return (
+                <TableCellLayout>{item.seconds}s</TableCellLayout>
+              )
+            }
+
+          }),
+          createTableColumn({
             columnId: "tags",
             renderCell: (item) => {
               return (
@@ -444,6 +424,61 @@ const onSelectionChange = (_, d) => {
               )
             }
 
+          }),
+          createTableColumn({
+            columnId: "actions",
+            renderCell: (item) => {
+              const { key, ml } = item;
+              const img = `/image/${key}`;
+              const sortedTags = ml?.success && ml.tags ? [...ml.tags].sort((a, b) => b.maxProbability - a.maxProbability) : [];
+              
+              return (
+                <TableCellLayout style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                  <Menu positioning="below-end">
+                    <div onClick={(e) => e.stopPropagation()}>
+                      <MenuTrigger disableButtonEnhancement>
+                        <Button appearance="subtle" icon={<MoreVertical20Regular />} />
+                      </MenuTrigger>
+                    </div>
+                    <MenuPopover>
+                      <MenuList>
+                        {sortedTags.length > 0 && sortedTags.map((t, idx) => {
+                          const frameUrl = t.maxProbabilityImage 
+                            ? `/frame/${key}/${t.maxProbabilityImage}`
+                            : img;
+                          const currentFilters = data.config.settings.tag_filters || [];
+                          const existingFilter = currentFilters.find(f => f.tag === t.tag);
+                          
+                          return (
+                            <React.Fragment key={idx}>
+                              <MenuItem onClick={(e) => {
+                                e.stopPropagation();
+                                window.open(frameUrl, '_blank');
+                              }}>
+                                Open {t.tag} image
+                              </MenuItem>
+                              <MenuItem onClick={(e) => {
+                                e.stopPropagation();
+                                if (!existingFilter) {
+                                  const newFilters = [...currentFilters, { tag: t.tag, minProbability: t.maxProbability }];
+                                  setPanel({...panel, open: true, key: 'settings', invalidArray:[], heading: 'General Settings', 
+                                    values: { ...data.config.settings, tag_filters: newFilters }})
+                                } else {
+                                  setPanel({...panel, open: true, key: 'settings', invalidArray:[], heading: 'General Settings', 
+                                    values: { ...data.config.settings }})
+                                }
+                              }}>
+                                {existingFilter ? `Edit ${t.tag} filter...` : `Add ${t.tag} to filter (≥${Math.round(t.maxProbability * 100)}%)`}
+                              </MenuItem>
+                            </React.Fragment>
+                          );
+                        })}
+                      </MenuList>
+                    </MenuPopover>
+                  </Menu>
+                </TableCellLayout>
+              )
+            }
           })
         ]}
         items={data.movements.map(m => { 
@@ -460,7 +495,21 @@ const onSelectionChange = (_, d) => {
 
           <DataGridBody itemSize={50} height={700}>
             {({ item, rowId }, style) => (
-              <DataGridRow key={rowId} style={style}>
+              <DataGridRow 
+                key={rowId} 
+                style={{ 
+                  ...style, 
+                  cursor: 'pointer',
+                  ...(currentPlaying?.mKey === item.key && { backgroundColor: tokens.colorNeutralBackground1Selected })
+                }}
+                onClick={() => {
+                  const { cameraKey, startSegment, seconds } = item;
+                  const camera = data.cameras.find(c => c.key === cameraKey);
+                  if (camera) {
+                    playVideo(cameraKey, item.key, startSegment, seconds, camera.segments_prior_to_movement, camera.segments_post_movement);
+                  }
+                }}
+              >
                 {({ renderCell }) => (
                   <DataGridCell>{renderCell(item)}</DataGridCell>
                 )}

@@ -172,6 +172,154 @@ const movementdb = sub(db, 'movements', {
     }
 })
 
+// Track if shutdown is in progress
+let isShuttingDown = false;
+
+// Gracefully stop all spawned processes
+async function gracefulShutdown(signal: string): Promise<void> {
+    if (isShuttingDown) {
+        logger.warn('Shutdown already in progress');
+        return;
+    }
+    
+    isShuttingDown = true;
+    logger.info('Graceful shutdown initiated', { signal });
+    
+    const shutdownPromises: Promise<void>[] = [];
+    
+    // Stop all camera ffmpeg processes
+    for (const cameraKey of Object.keys(cameraCache)) {
+        const { ffmpeg_task, cameraEntry, movementStatus } = cameraCache[cameraKey];
+        
+        if (ffmpeg_task && ffmpeg_task.exitCode === null) {
+            logger.info('Stopping ffmpeg process', { camera: cameraEntry.name, pid: ffmpeg_task.pid });
+            
+            const promise = new Promise<void>((resolve) => {
+                const timeout = setTimeout(() => {
+                    logger.warn('ffmpeg process did not terminate in time - forcing', { 
+                        camera: cameraEntry.name, 
+                        pid: ffmpeg_task.pid 
+                    });
+                    try {
+                        ffmpeg_task.kill('SIGKILL');
+                    } catch (e) {
+                        logger.error('Failed to force kill ffmpeg', { error: String(e) });
+                    }
+                    resolve();
+                }, 5000);
+                
+                ffmpeg_task.once('close', () => {
+                    clearTimeout(timeout);
+                    logger.info('ffmpeg process terminated', { camera: cameraEntry.name });
+                    resolve();
+                });
+                
+                try {
+                    ffmpeg_task.kill();
+                } catch (e) {
+                    logger.error('Failed to kill ffmpeg process', { error: String(e) });
+                    clearTimeout(timeout);
+                    resolve();
+                }
+            });
+            
+            shutdownPromises.push(promise);
+        }
+        
+        // Stop any ongoing movement detection ffmpeg processes
+        if (movementStatus?.current_taskid && movementStatus.current_taskid.exitCode === null) {
+            logger.info('Stopping movement detection process', { 
+                camera: cameraEntry.name, 
+                pid: movementStatus.current_taskid.pid 
+            });
+            
+            const promise = new Promise<void>((resolve) => {
+                const timeout = setTimeout(() => {
+                    logger.warn('Movement process did not terminate in time - forcing', { 
+                        camera: cameraEntry.name, 
+                        pid: movementStatus.current_taskid.pid 
+                    });
+                    try {
+                        movementStatus.current_taskid.kill('SIGKILL');
+                    } catch (e) {
+                        logger.error('Failed to force kill movement process', { error: String(e) });
+                    }
+                    resolve();
+                }, 5000);
+                
+                movementStatus.current_taskid.once('close', () => {
+                    clearTimeout(timeout);
+                    logger.info('Movement process terminated', { camera: cameraEntry.name });
+                    resolve();
+                });
+                
+                try {
+                    movementStatus.current_taskid.kill();
+                } catch (e) {
+                    logger.error('Failed to kill movement process', { error: String(e) });
+                    clearTimeout(timeout);
+                    resolve();
+                }
+            });
+            
+            shutdownPromises.push(promise);
+        }
+    }
+    
+    // Stop ML detection process
+    if (mlDetectionProcess && mlDetectionProcess.exitCode === null) {
+        logger.info('Stopping ML detection process', { pid: mlDetectionProcess.pid });
+        
+        const promise = new Promise<void>((resolve) => {
+            const timeout = setTimeout(() => {
+                logger.warn('ML detection process did not terminate in time - forcing', { 
+                    pid: mlDetectionProcess.pid 
+                });
+                try {
+                    mlDetectionProcess.kill('SIGKILL');
+                } catch (e) {
+                    logger.error('Failed to force kill ML process', { error: String(e) });
+                }
+                resolve();
+            }, 5000);
+            
+            mlDetectionProcess.once('close', () => {
+                clearTimeout(timeout);
+                logger.info('ML detection process terminated');
+                resolve();
+            });
+            
+            try {
+                mlDetectionProcess.kill();
+            } catch (e) {
+                logger.error('Failed to kill ML detection process', { error: String(e) });
+                clearTimeout(timeout);
+                resolve();
+            }
+        });
+        
+        shutdownPromises.push(promise);
+    }
+    
+    // Wait for all processes to terminate
+    await Promise.all(shutdownPromises);
+    
+    logger.info('All processes terminated - exiting', { 
+        signal, 
+        processCount: shutdownPromises.length 
+    });
+    
+    // Close database
+    try {
+        await db.close();
+        logger.info('Database closed');
+    } catch (e) {
+        logger.error('Failed to close database', { error: String(e) });
+    }
+    
+    process.exit(0);
+}
+
 const re = new RegExp(`stream([\\d]+).ts`, 'g');
 
 // Map to track which image path we're currently processing results for
@@ -848,9 +996,10 @@ async function processController(
             logger.error('Process error', { name, error: error.message });
        })
 
-        childProcess.on('close', async (code: number) => {
+        childProcess.on('close', async (code: number | null) => {
             // Exit code 255 is normal for ffmpeg when gracefully terminated
-            const isGracefulExit = code === 0 || code === 255;
+            // null code means process was terminated by signal (SIGTERM/SIGKILL)
+            const isGracefulExit = code === 0 || code === 255 || code === null || isShuttingDown;
             
             if (!isGracefulExit) {
                 logger.error('Process exited abnormally', { 
@@ -863,7 +1012,7 @@ async function processController(
                 logger.info('Process closed', { 
                     name, 
                     code,
-                    graceful: code === 0 || code === 255
+                    graceful: true
                 });
             }
         });
@@ -990,10 +1139,24 @@ async function init_web() {
                     const preseq: number = ctx.query['preseq'] ? parseInt(ctx.query['preseq'] as any) : 0
                     const postseq: number = ctx.query['postseq'] ? parseInt(ctx.query['postseq'] as any) : 0
 
+                    // Calculate number of segments (minimum 1 for very short movements)
+                    const numSegments = Math.max(1, Math.round(secondsInt / 2) + preseq + postseq);
+                    
+                    logger.debug('Generating playlist', {
+                        cameraKey,
+                        startSegment: segmentInt,
+                        seconds: secondsInt,
+                        preseq,
+                        postseq,
+                        numSegments,
+                        firstSegment: segmentInt - preseq,
+                        lastSegment: segmentInt + numSegments - preseq - 1
+                    });
+
                     const body = `#EXTM3U
 #EXT-X-VERSION:3
 #EXT-X-TARGETDURATION:2
-` + [...Array(Math.round(secondsInt / 2) + preseq + postseq).keys()].map(n => `#EXTINF:2.000000,
+` + [...Array(numSegments).keys()].map(n => `#EXTINF:2.000000,
 stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n"
     
                     ctx.set('content-type', 'application/x-mpegURL')
@@ -1001,14 +1164,19 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n"
                 }
             } else if (file.endsWith('.ts')) {
                 const serve = `${cameraEntry.disk}/${cameraEntry.folder}/${file}`
-                //console.log(`serving : ${serve}`)
                 try {
                     const { size } = await fs.stat(serve)
                     ctx.set('content-type', 'video/MP2T')
                     ctx.body = createReadStream(serve).on('error', ctx.onerror)
                 } catch (e) {
                     const err : Error = e as Error
-                    ctx.throw(400, `message=${err.message}`)
+                    logger.warn('Video segment not found', { 
+                        file, 
+                        path: serve, 
+                        cameraKey, 
+                        error: err.message 
+                    });
+                    ctx.throw(404, `Segment not found: ${file}`)
                 }
             } else {
                 ctx.throw(400, `unknown file=${file}`)
@@ -1419,11 +1587,19 @@ async function main() {
                     });
                 });
                 
-                mlTask.on('close', (code: number) => {
-                    logger.error('ML detection process exited', { 
-                        code,
-                        model: settings.mlModel
-                    });
+                mlTask.on('close', (code: number | null) => {
+                    // Don't log error if we're shutting down or process exited gracefully
+                    if (!isShuttingDown && code !== 0 && code !== null) {
+                        logger.error('ML detection process exited unexpectedly', { 
+                            code,
+                            model: settings.mlModel
+                        });
+                    } else {
+                        logger.info('ML detection process closed', { 
+                            code,
+                            graceful: true
+                        });
+                    }
                     mlDetectionProcess = null;
                 });
             } else if (mlTask) {
@@ -1502,6 +1678,15 @@ async function main() {
     }, 60000)
 
     init_web()
+
+    // Register graceful shutdown handlers
+    process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+    process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+    process.on('SIGUSR2', () => gracefulShutdown('SIGUSR2')); // For nodemon
+    
+    logger.info('Shutdown handlers registered', { 
+        signals: ['SIGTERM', 'SIGINT', 'SIGUSR2'] 
+    });
 
     //db.close()
 }
