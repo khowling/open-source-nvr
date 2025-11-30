@@ -454,7 +454,8 @@ async function processMovement(cameraKey: string) : Promise<void> {
                 await ensureDir(framesPath);
 
                 const ffmpegArgs = [
-                    '-hide_banner', '-loglevel', 'error',
+                    '-hide_banner', '-loglevel', 'info',
+                    '-progress', 'pipe:1',
                     '-i', filepath,
                     '-vf', 'fps=1/2,scale=640:640:force_original_aspect_ratio=decrease,pad=640:640:(ow-iw)/2:(oh-ih)/2',
                     `${framesPath}/mov${movement_key}_%04d.jpg`
@@ -472,15 +473,91 @@ async function processMovement(cameraKey: string) : Promise<void> {
                 var ffmpeg = spawn('/usr/bin/ffmpeg', ffmpegArgs)
                 
                 let ff_stdout = '', ff_stderr = '', ff_error = ''
+                let lastFrameNumber = 0;
 
                 ffmpeg.stdout.on('data', (data: string) => { 
-                    logger.debug('ffmpeg image stdout', { camera: cameraEntry.name, data: data.toString() });
-                    ff_stdout += data
-                 })
-                ffmpeg.stderr.on('data', (data: string) => { 
-                    logger.warn('ffmpeg image stderr', { camera: cameraEntry.name, data: data.toString() });
-                    ff_stderr += data 
+                    ff_stdout += data;
+                    const output = data.toString();
+                    const lines = output.split('\n');
+                    
+                    logger.debug('ffmpeg stdout received', { 
+                        camera: cameraEntry.name, 
+                        movement: movement_key,
+                        dataLength: output.length,
+                        lineCount: lines.length,
+                        preview: output.substring(0, 200)
+                    });
+                    
+                    for (const line of lines) {
+                        // Look for frame= output which indicates a new frame was written
+                        const frameMatch = line.match(/frame=\s*(\d+)/);
+                        if (frameMatch) {
+                            const frameNum = parseInt(frameMatch[1]);
+                            
+                            logger.debug('Frame number detected in ffmpeg output', {
+                                camera: cameraEntry.name,
+                                movement: movement_key,
+                                frameNum,
+                                lastFrameNumber,
+                                isNewFrame: frameNum > lastFrameNumber,
+                                line: line.trim()
+                            });
+                            
+                            // Check if this is a new frame
+                            if (frameNum > lastFrameNumber) {
+                                lastFrameNumber = frameNum;
+                                
+                                // Send the newly created image to ML detection
+                                if (settingsCache.settings.enable_ml && mlDetectionProcess) {
+                                    const paddedFrameNum = frameNum.toString().padStart(4, '0');
+                                    const imageName = `mov${movement_key}_${paddedFrameNum}.jpg`;
+                                    const fullImagePath = `${framesPath}/${imageName}`;
+                                    
+                                    logger.info('New frame detected - sending to ML', { 
+                                        camera: cameraEntry.name,
+                                        movement: movement_key,
+                                        frame: imageName, 
+                                        frameNumber: frameNum,
+                                        path: fullImagePath
+                                    });
+                                    
+                                    sendImageToMLDetection(fullImagePath, movement_key);
+                                } else {
+                                    logger.warn('Frame detected but ML not available', {
+                                        camera: cameraEntry.name,
+                                        movement: movement_key,
+                                        frameNum,
+                                        mlEnabled: settingsCache.settings.enable_ml,
+                                        mlProcessExists: mlDetectionProcess !== null,
+                                        mlProcessKilled: mlDetectionProcess?.killed
+                                    });
+                                }
+                            }
+                        }
+                    }
                 })
+                
+                ffmpeg.stderr.on('data', (data: string) => { 
+                    ff_stderr += data;
+                    const output = data.toString();
+                    
+                    // Log all stderr but with different levels based on content
+                    if (output.includes('frame=') || output.includes('fps=') || output.includes('time=')) {
+                        logger.debug('ffmpeg progress info', { 
+                            camera: cameraEntry.name,
+                            movement: movement_key,
+                            output: output.trim().substring(0, 150) 
+                        });
+                    } else {
+                        logger.warn('ffmpeg image stderr', { 
+                            camera: cameraEntry.name,
+                            movement: movement_key,
+                            length: output.length,
+                            data: output.trim() 
+                        });
+                    }
+                })
+                
                 ffmpeg.on('error', async (error: Error) => { 
                     logger.error('ffmpeg image error', { camera: cameraEntry.name, error: error.message });
                     ff_error = `${error.name}: ${error.message}` 
@@ -492,71 +569,34 @@ async function processMovement(cameraKey: string) : Promise<void> {
                         movement: movement_key, 
                         exitCode: code, 
                         signal: signal,
-                        pid: ffmpeg.pid 
+                        pid: ffmpeg.pid,
+                        totalFrames: lastFrameNumber
                     });
                 });
 
-                // Monitor for new JPG files and send them to ML detection immediately
-                let lastImageCount = 0;
-                const imageMonitor = setInterval(async () => {
-                    if (settingsCache.settings.enable_ml && mlDetectionProcess) {
-                        try {
-                            const files = await fs.readdir(framesPath);
-                            const movImages = files.filter(f => f.startsWith(`mov${movement_key}_`) && f.endsWith('.jpg')).sort();
-                            
-                            logger.debug('Frame monitor check', {
-                                camera: cameraEntry.name,
-                                movement: movement_key,
-                                totalImages: movImages.length,
-                                newImages: movImages.length - lastImageCount,
-                                mlProcessRunning: mlDetectionProcess !== null && !mlDetectionProcess.killed
-                            });
-                            
-                            // Send only new images since last check
-                            for (let i = lastImageCount; i < movImages.length; i++) {
-                                const fullImagePath = `${framesPath}/${movImages[i]}`;
-                                logger.debug('Frame sent to ML', { frame: movImages[i], movement: movement_key });
-                                sendImageToMLDetection(fullImagePath, movement_key);
-                            }
-                            lastImageCount = movImages.length;
-                        } catch (error) {
-                            logger.warn('Failed to monitor images', { movement: movement_key, error: String(error) });
-                        }
-                    } else {
-                        logger.debug('Frame monitor check skipped', {
-                            camera: cameraEntry.name,
-                            mlEnabled: settingsCache.settings.enable_ml,
-                            mlProcessRunning: mlDetectionProcess !== null && !mlDetectionProcess?.killed
-                        });
-                    }
-                }, 2000); // Check every 2 seconds for new images
-
                 ffmpeg.on('close', async (ff_code: number) => {
-                    logger.info('ffmpeg image closed', { camera: cameraEntry.name, code: ff_code, stdout: ff_stdout.slice(-200), stderr: ff_stderr.slice(-200), error: ff_error });
+                    logger.info('ffmpeg image closed', { 
+                        camera: cameraEntry.name,
+                        movement: movement_key,
+                        code: ff_code, 
+                        totalFrames: lastFrameNumber,
+                        stdoutLength: ff_stdout.length,
+                        stderrLength: ff_stderr.length,
+                        stderrPreview: ff_stderr.slice(-200), 
+                        error: ff_error,
+                        mlEnabled: settingsCache.settings.enable_ml
+                    });
                     
-                    // Stop monitoring for new images
-                    clearInterval(imageMonitor);
-                    
-                    // Send any remaining images to ML detection
-                    if (settingsCache.settings.enable_ml && mlDetectionProcess) {
-                        try {
-                            const files = await fs.readdir(framesPath);
-                            const movImages = files.filter(f => f.startsWith(`mov${movement_key}_`) && f.endsWith('.jpg')).sort();
-                            
-                            // Send any remaining images
-                            for (let i = lastImageCount; i < movImages.length; i++) {
-                                const fullImagePath = `${framesPath}/${movImages[i]}`;
-                                logger.debug('Final frame sent to ML', { frame: movImages[i], movement: movement_key });
-                                sendImageToMLDetection(fullImagePath, movement_key);
-                            }
-                            
-                            // Wait a bit for detections to complete, then flush to database
-                            setTimeout(async () => {
-                                await flushDetectionsToDatabase(movement_key);
-                            }, 3000); // Wait 3 seconds for remaining detections
-                        } catch (error) {
-                            logger.warn('Failed to process final ML detection', { movement: movement_key, error: String(error) });
-                        }
+                    // Wait a bit for detections to complete, then flush to database
+                    if (settingsCache.settings.enable_ml) {
+                        logger.debug('Scheduling ML detection flush', {
+                            camera: cameraEntry.name,
+                            movement: movement_key,
+                            delayMs: 3000
+                        });
+                        setTimeout(async () => {
+                            await flushDetectionsToDatabase(movement_key);
+                        }, 3000); // Wait 3 seconds for remaining detections
                     }
                 });
 
