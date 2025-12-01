@@ -122,6 +122,8 @@ After=network-online.target
 User=<user>
 Group=<user>
 Type=simple
+Environment="PATH=/usr/local/bin:/usr/bin"
+WorkingDirectory=/home/<user>
 ExecStart=/home/<user>/open-source-nvr/web.sh
 
 [Install]
