@@ -2,7 +2,7 @@
 import './App.css';
 import React, { useEffect }  from 'react';
 import videojs from 'video.js'
-import { PanelSettings } from './PanelSettings.js'
+import { PanelSettings } from './PanelSettings.jsx'
 import { ToolbarGroup, Badge, Text, Button, Portal, Toolbar, Menu, MenuTrigger, Tooltip, SplitButton, MenuPopover, MenuList, MenuItem, ToolbarButton, ToolbarDivider, createTableColumn, TableCellLayout, Spinner, tokens } from "@fluentui/react-components";
 import {
   DataGridBody,
@@ -166,6 +166,7 @@ function CCTVControl({currentPlaying, playVideo}) {
   
   const [mode, setMode] = React.useState('Filtered')
   const [showPlayer, setShowPlayer] = React.useState(true)
+  const [highlightedKeys, setHighlightedKeys] = React.useState(new Set())
 
   function getServerData() {
     console.log ('getServerData, mode=', mode)
@@ -210,28 +211,108 @@ function CCTVControl({currentPlaying, playVideo}) {
     
     eventSource.onmessage = (event) => {
       try {
-        const data = JSON.parse(event.data);
-        console.log('SSE event received', data);
+        const eventData = JSON.parse(event.data);
+        console.log('SSE event received', eventData);
         
         // Skip non-movement events (like 'connected')
-        if (!data.type || data.type === 'connected') {
+        if (!eventData.type || eventData.type === 'connected') {
           return;
         }
         
-        if (data.type === 'movement_new') {
-          // Add new movement to the list
-          setData(prevData => ({
-            ...prevData,
-            movements: [data.movement, ...prevData.movements]
-          }));
-        } else if (data.type === 'movement_update' || data.type === 'movement_complete') {
-          // Update existing movement
-          setData(prevData => ({
-            ...prevData,
-            movements: prevData.movements.map(m => 
-              m.key === data.movement.key ? data.movement : m
-            )
-          }));
+        // Helper function to check if movement should be displayed based on current mode
+        const shouldDisplayMovement = (movement) => {
+          if (mode === 'Movement') {
+            // Show all movements in Movement mode
+            return true;
+          } else if (mode === 'Filtered') {
+            // In Filtered mode, only show movements with tags that meet filter criteria
+            const tags = movement.movement?.detection_output?.tags;
+            if (!tags || tags.length === 0) {
+              return false;
+            }
+            
+            const tagFilters = data.config?.settings?.tag_filters;
+            if (!tagFilters || tagFilters.length === 0) {
+              // No filters configured - hide all movements in filtered mode
+              return false;
+            }
+            
+            // Check if any tag meets its filter threshold
+            return tags.some(tag => {
+              const filter = tagFilters.find(f => f.tag === tag.tag);
+              return filter && tag.maxProbability >= filter.minProbability;
+            });
+          }
+          // For Time mode or any other mode, don't process SSE updates
+          return false;
+        };
+        
+        if (eventData.type === 'movement_new') {
+          // Only add new movement if it should be displayed
+          if (shouldDisplayMovement(eventData)) {
+            setData(prevData => ({
+              ...prevData,
+              movements: [eventData.movement, ...prevData.movements]
+            }));
+            
+            // Highlight the new movement
+            setHighlightedKeys(prev => new Set(prev).add(eventData.movement.key));
+            setTimeout(() => {
+              setHighlightedKeys(prev => {
+                const next = new Set(prev);
+                next.delete(eventData.movement.key);
+                return next;
+              });
+            }, 2000);
+          }
+        } else if (eventData.type === 'movement_update' || eventData.type === 'movement_complete') {
+          setData(prevData => {
+            const existingIndex = prevData.movements.findIndex(m => m.key === eventData.movement.key);
+            
+            if (existingIndex >= 0) {
+              // Movement exists - update it if it should still be displayed
+              if (shouldDisplayMovement(eventData)) {
+                const updatedMovements = prevData.movements.map(m => 
+                  m.key === eventData.movement.key ? eventData.movement : m
+                );
+                
+                // Highlight the updated movement
+                setHighlightedKeys(prev => new Set(prev).add(eventData.movement.key));
+                setTimeout(() => {
+                  setHighlightedKeys(prev => {
+                    const next = new Set(prev);
+                    next.delete(eventData.movement.key);
+                    return next;
+                  });
+                }, 2000);
+                
+                return { ...prevData, movements: updatedMovements };
+              } else {
+                // Movement no longer meets filter criteria - remove it
+                const filteredMovements = prevData.movements.filter(m => m.key !== eventData.movement.key);
+                return { ...prevData, movements: filteredMovements };
+              }
+            } else {
+              // Movement doesn't exist yet - add it if it should be displayed
+              if (shouldDisplayMovement(eventData)) {
+                // Highlight the new movement
+                setHighlightedKeys(prev => new Set(prev).add(eventData.movement.key));
+                setTimeout(() => {
+                  setHighlightedKeys(prev => {
+                    const next = new Set(prev);
+                    next.delete(eventData.movement.key);
+                    return next;
+                  });
+                }, 2000);
+                
+                return {
+                  ...prevData,
+                  movements: [eventData.movement, ...prevData.movements]
+                };
+              }
+              return prevData;
+            }
+          });
         }
       } catch (err) {
         console.error('Error parsing SSE message:', err, event.data);
@@ -248,7 +329,7 @@ function CCTVControl({currentPlaying, playVideo}) {
       console.log('Closing SSE connection');
       eventSource.close();
     };
-  }, []); // Empty dependency array - only setup once
+  }, [mode, data.config]); // Depend on mode and config to re-evaluate filtering
 
   
 const onSelectionChange = (_, d) => {
@@ -450,6 +531,7 @@ const onSelectionChange = (_, d) => {
       <DataGrid
         size="small"
         getRowId={(item) => item.key}
+        rowClassName={(item) => highlightedKeys.has(item.key) ? 'highlighted-row' : ''}
         columns={[
           createTableColumn({
             columnId: "startDate_en_GB",
@@ -559,6 +641,7 @@ const onSelectionChange = (_, d) => {
             {({ item, rowId }, style) => (
               <DataGridRow 
                 key={rowId} 
+                className={highlightedKeys.has(item.key) ? 'highlighted-row' : ''}
                 style={{ 
                   ...style, 
                   cursor: 'pointer',

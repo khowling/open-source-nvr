@@ -14,7 +14,6 @@ import {
   Label,
   Badge,
   Textarea,
-  TextareaProps,
   shorthands,
   Combobox,
   Option,

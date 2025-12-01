@@ -45,6 +45,26 @@
   color: #61dafb;
 }
 
+@keyframes highlight-pulse {
+  0%, 100% {
+    background-color: transparent;
+  }
+  10%, 30%, 50% {
+    background-color: rgba(0, 120, 212, 0.6);
+  }
+  20%, 40% {
+    background-color: rgba(0, 200, 255, 0.3);
+  }
+}
+
+.highlighted-row {
+  animation: highlight-pulse 2s ease-in-out;
+}
+
+.highlighted-row:hover {
+  animation: highlight-pulse 2s ease-in-out;
+}
+
 @keyframes App-logo-spin {
   from {
     transform: rotate(0deg);

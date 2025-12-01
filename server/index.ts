@@ -22,9 +22,11 @@ import {
     setDependencies,
     ProcessSpawnOptions
 } from './process-utils.js'
+import { sseManager, formatMovementForSSE, setLogger as setSSELogger } from './sse-manager.js'
 
 // Initialize utilities with logger
 setLogger(logger);
+setSSELogger(logger);
 
 
 interface Settings {
@@ -308,6 +310,9 @@ async function gracefulShutdown(signal: string): Promise<void> {
         processCount: shutdownPromises.length 
     });
     
+    // Close SSE connections
+    sseManager.closeAll();
+    
     // Close database
     try {
         await db.close();
@@ -420,13 +425,24 @@ async function processDetectionResult(line: string): Promise<void> {
                 .sort((a, b) => b.maxProbability - a.maxProbability);
             
             // Write immediately to database
-            await movementdb.put(movement_key, {
+            const updatedMovement = {
                 ...movement,
                 detection_status: undefined,  // Clear status once we have results to show
                 detection_output: {
                     tags: updatedTags
                 }
-            });
+            };
+            
+            await movementdb.put(movement_key, updatedMovement);
+            
+            // Broadcast ML update via SSE
+            if (sseManager.getClientCount() > 0) {
+                const formattedMovement = formatMovementForSSE(movement_key, updatedMovement);
+                sseManager.broadcastMovementUpdate({
+                    type: 'movement_update',
+                    movement: formattedMovement
+                });
+            }
             
             logger.debug('ML results updated in database', { 
                 movement: movement_key, 
@@ -643,7 +659,7 @@ async function processMovement(cameraKey: string) : Promise<void> {
                     }
                 });
 
-                await movementdb.put(movement_key, {
+                const newMovement = {
                     cameraKey,
                     startDate,
                     startSegment,
@@ -652,7 +668,18 @@ async function processMovement(cameraKey: string) : Promise<void> {
                     pollCount: 1,
                     consecutivePollsWithoutMovement: 0,
                     detection_status: settingsCache.settings.enable_ml ? 'starting' : undefined
-                })
+                };
+                
+                await movementdb.put(movement_key, newMovement);
+                
+                // Broadcast new movement via SSE
+                if (sseManager.getClientCount() > 0) {
+                    const formattedMovement = formatMovementForSSE(movement_key, newMovement);
+                    sseManager.broadcastMovementUpdate({
+                        type: 'movement_new',
+                        movement: formattedMovement
+                    });
+                }
 
                 cameraCache[cameraKey] = {...cameraCache[cameraKey], movementStatus: {current_key: movement_key, current_taskid: ffmpeg, status: "New movement detected", control: {...control, fn_not_finished: false}}}
 
@@ -697,7 +724,18 @@ async function processMovement(cameraKey: string) : Promise<void> {
                     
                 } else {
                     logger.debug('Movement continuation', { camera: cameraEntry.name, duration: `${durationSeconds}s` });
-                    await movementdb.put(current_key, {...m, seconds: durationSeconds, pollCount: updatedPollCount, consecutivePollsWithoutMovement: 0})
+                    const updatedMovement = {...m, seconds: durationSeconds, pollCount: updatedPollCount, consecutivePollsWithoutMovement: 0};
+                    await movementdb.put(current_key, updatedMovement);
+                    
+                    // Broadcast update via SSE
+                    if (sseManager.getClientCount() > 0) {
+                        const formattedMovement = formatMovementForSSE(current_key, updatedMovement);
+                        sseManager.broadcastMovementUpdate({
+                            type: 'movement_update',
+                            movement: formattedMovement
+                        });
+                    }
+                    
                     cameraCache[cameraKey] = {...cameraCache[cameraKey],  movementStatus: {...movementStatus, status: "Movement Continuation", control: {...control, fn_not_finished: false}}}
                 }
 
@@ -854,6 +892,10 @@ async function processController(
         
         logger.info('Starting streaming process', { name, pid: 'pending' });
         
+        // Track recent log messages to prevent spam
+        const recentLogs = new Map<string, { count: number; lastLogged: number }>();
+        const LOG_THROTTLE_MS = 30000; // Log similar messages max once per 30 seconds
+        
         const childProcess = spawnProcess({
             name,
             cmd,
@@ -861,28 +903,45 @@ async function processController(
             cwd: workingDir,
             captureOutput: true,
             onStderr: (data: string) => {
-                const output = data.toString();
+                const output = data.toString().trim();
+                if (!output) return;
                 
-                // Filter out common RTSP startup warnings that are harmless
-                const isRTSPStartupWarning = output.includes('RTP: PT=') && output.includes('bad cseq');
-                const isH264DecodeWarning = output.includes('[h264 @') && 
-                                           (output.includes('error while decoding MB') || 
-                                            output.includes('left block unavailable'));
+                // Create a simplified key for grouping similar messages
+                const logKey = output
+                    .replace(/stream\d+\.ts/g, 'streamXXX.ts')  // Normalize segment numbers
+                    .replace(/0x[0-9a-f]+/g, '0xXXX')           // Normalize hex addresses
+                    .replace(/packet \d+/g, 'packet XXX')       // Normalize packet numbers
+                    .substring(0, 200);                          // Limit key length
                 
-                // Check for critical errors
+                const now = Date.now();
+                const existing = recentLogs.get(logKey);
+                
+                // Check for critical errors (always log immediately)
                 const isCriticalError = output.includes('Connection refused') || 
                                        output.includes('Connection timed out') ||
                                        output.includes('Server returned 4') ||
                                        output.includes('Invalid data found');
                 
-                // Only log if it's not a known harmless startup warning
                 if (isCriticalError) {
-                    logger.error('Process critical error', { name, data: output.trim() });
-                } else if (!isRTSPStartupWarning && !isH264DecodeWarning) {
-                    logger.warn('Process stderr', { name, data: output.trim() });
+                    logger.error('Process critical error', { name, data: output });
+                    recentLogs.set(logKey, { count: 1, lastLogged: now });
+                } else if (!existing || (now - existing.lastLogged) > LOG_THROTTLE_MS) {
+                    // Log if we haven't seen this message recently
+                    const suffix = existing ? ` (repeated ${existing.count + 1} times)` : '';
+                    logger.warn('Process stderr' + suffix, { name, data: output });
+                    recentLogs.set(logKey, { count: 1, lastLogged: now });
                 } else {
-                    // Log at debug level for filtered warnings
-                    logger.debug('Process stderr (filtered)', { name, data: output.trim() });
+                    // Just increment the counter
+                    existing.count++;
+                }
+                
+                // Cleanup old entries (keep map from growing unbounded)
+                if (recentLogs.size > 100) {
+                    for (const [key, value] of recentLogs.entries()) {
+                        if (now - value.lastLogged > LOG_THROTTLE_MS * 2) {
+                            recentLogs.delete(key);
+                        }
+                    }
                 }
             },
             onClose: (code: number | null, signal: string | null) => {
@@ -909,9 +968,68 @@ async function processController(
                 checkIntervalMs: 1000
             });
             
-            if (!verification.ready && childProcess.exitCode !== null) {
-                // Process died during startup
-                logger.error('Stream startup failed', { name, verification });
+            if (!verification.ready) {
+                // Stream verification failed
+                logger.error('Stream startup failed - killing process', { 
+                    name, 
+                    verification,
+                    processRunning: childProcess.exitCode === null 
+                });
+                
+                // Kill the process if it's still running
+                if (childProcess.exitCode === null) {
+                    try {
+                        childProcess.kill();
+                        // Wait a bit for graceful shutdown
+                        await new Promise((res) => setTimeout(res, 2000));
+                        if (childProcess.exitCode === null) {
+                            childProcess.kill('SIGKILL');
+                        }
+                    } catch (e) {
+                        logger.error('Failed to kill failed stream process', { name, error: String(e) });
+                    }
+                }
+                
+                processController_inprogress[name] = {...processController_inprogress[name], inprogress: false };
+                return undefined;
+            }
+            
+            // Additional verification: check file is still fresh after startup
+            await new Promise((res) => setTimeout(res, 2000));
+            try {
+                const {mtimeMs} = await fs.stat(checkFilePath);
+                const fileAge = Date.now() - mtimeMs;
+                
+                if (fileAge > 10000) {
+                    logger.error('Stream startup succeeded but file is now stale', { 
+                        name, 
+                        fileAge: `${fileAge}ms`,
+                        willKill: true
+                    });
+                    
+                    if (childProcess.exitCode === null) {
+                        childProcess.kill();
+                    }
+                    
+                    processController_inprogress[name] = {...processController_inprogress[name], inprogress: false };
+                    return undefined;
+                }
+                
+                logger.info('Stream startup confirmed healthy', { 
+                    name, 
+                    pid: childProcess.pid,
+                    fileAge: `${fileAge}ms`
+                });
+            } catch (e) {
+                logger.error('Stream output file disappeared after startup', { 
+                    name, 
+                    error: String(e)
+                });
+                
+                if (childProcess.exitCode === null) {
+                    childProcess.kill();
+                }
+                
                 processController_inprogress[name] = {...processController_inprogress[name], inprogress: false };
                 return undefined;
             }
@@ -1269,6 +1387,9 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n"
             } else {
                 ctx.status = 500
             }
+        }).get('/movements/stream', (ctx, _next) => {
+            // SSE endpoint for real-time movement updates
+            sseManager.addClient(ctx);
         }).get('/movements', async (ctx, _next) => {
             const mode = ctx.query['mode'] 
             const cameras: CameraEntryClient[] = Object.entries(cameraCache).filter(([_, value]) => !value.cameraEntry.delete).map(([key, value]) => {
@@ -1527,12 +1648,12 @@ async function main() {
                         '-max_delay', '500000',         // 500ms max delay for reordering (in microseconds)
                         '-i', `rtsp://admin:${cameraEntry.passwd}@${cameraEntry.ip}:554/h264Preview_01_main`,
                         '-hide_banner',
-                        '-loglevel', 'error',
+                        '-loglevel', 'warning',  // Changed from 'error' to 'warning' to see RTSP issues
                         '-vcodec', 'copy',
                         '-start_number', ((Date.now() / 1000 | 0) - MOVEMENT_KEY_EPOCH).toString(),
                         streamFile
                     ],
-                    [ 60, streamFile ],
+                    [ 10, streamFile ],  // Check health every 10 seconds instead of 60
                     ffmpeg_task,
                     null
                 )
@@ -1574,6 +1695,13 @@ async function main() {
             }
         }
     }, 1000)
+
+    // Keep-alive for SSE connections (every 30 seconds)
+    setInterval(() => {
+        if (sseManager.getClientCount() > 0) {
+            sseManager.sendKeepAlive();
+        }
+    }, 30000);
 
     // Start the Disk controll loop, checking space and cleaning up disk and movements db
     setInterval(async () => {
