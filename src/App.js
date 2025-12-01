@@ -226,13 +226,13 @@ const onSelectionChange = (_, d) => {
   }
 
   function renderTags(selectedList, idx) {
-    const { key, cameraKey, ml, mlProcessing, mlStatus, ffmpeg } = selectedList
+    const { key, cameraKey, detection_output, detection_status, ffmpeg } = selectedList
     const img = `/image/${key}`
 
     // Show results if we have them, even if still processing
-    if (ml && ml.success && ml.tags && ml.tags.length > 0) {
+    if (detection_output && detection_output.tags && detection_output.tags.length > 0) {
       // Sort tags by maxProbability descending and format with percentage
-      const sortedTags = [...ml.tags].sort((a, b) => b.maxProbability - a.maxProbability)
+      const sortedTags = [...detection_output.tags].sort((a, b) => b.maxProbability - a.maxProbability)
       return (
         <div style={{ display: "flex", flexWrap: "wrap", gap: "5px" }}>
           {sortedTags.map((t, idx) => (
@@ -250,13 +250,13 @@ const onSelectionChange = (_, d) => {
     }
 
     // Show precise status if ML processing is ongoing and no results yet
-    if (mlProcessing || mlStatus) {
+    if (detection_status) {
       const statusMessages = {
         'starting': 'Starting frame extraction...',
         'extracting': 'Processing frames...',
         'analyzing': 'Analyzing frame...'
       };
-      const message = mlStatus ? statusMessages[mlStatus] : 'Detecting...';
+      const message = detection_status ? statusMessages[detection_status] : 'Detecting...';
       
       return (
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
@@ -266,18 +266,17 @@ const onSelectionChange = (_, d) => {
       )
     }
 
-    if (ml) {
-      if (ml.success) {
-        if (ml.tags.length > 0) {
-          // Already handled above
-          return null;
-        } else {
-          return <a target="_blank" href={img}><Text variant="mediumPlus">ML Image</Text></a>
-        }
-      } else {
-        return <Text styles={{ root: { color: 'red' } }} variant="mediumPlus">{ml.code}: {ml.stderr} {ml.error}</Text>
+    // If we have detection_output but no tags, show link to image
+    if (detection_output && detection_output.tags) {
+      if (detection_output.tags.length === 0) {
+        return <a target="_blank" href={img}><Text variant="mediumPlus">Detection Image (no objects)</Text></a>
       }
-    } else if (ffmpeg) {
+      // Non-zero tags already handled above
+      return null;
+    }
+    
+    // Legacy fallback for old ffmpeg data structure (if any exists)
+    if (ffmpeg) {
       if (ffmpeg.success) {
         return <a key={idx} target="_blank" href={img}><Text variant="mediumPlus">Image</Text></a>
       } else {
@@ -441,9 +440,9 @@ const onSelectionChange = (_, d) => {
           createTableColumn({
             columnId: "actions",
             renderCell: (item) => {
-              const { key, ml } = item;
+              const { key, detection_output } = item;
               const img = `/image/${key}`;
-              const sortedTags = ml?.success && ml.tags ? [...ml.tags].sort((a, b) => b.maxProbability - a.maxProbability) : [];
+              const sortedTags = detection_output?.tags ? [...detection_output.tags].sort((a, b) => b.maxProbability - a.maxProbability) : [];
               
               return (
                 <TableCellLayout style={{ display: 'flex', justifyContent: 'flex-end' }}>

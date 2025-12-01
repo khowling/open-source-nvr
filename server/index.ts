@@ -11,6 +11,20 @@ import level from 'level'
 import sub from 'subleveldown'
 import { catalogVideo, diskCheck, DiskCheckReturn } from './diskcheck.js'
 import { logger } from './logger.js'
+import { 
+    spawnProcess, 
+    runProcess,
+    createFFmpegFrameProcessor, 
+    createMLResultProcessor,
+    verifyStreamStartup,
+    isStreamCurrent,
+    setLogger,
+    setDependencies,
+    ProcessSpawnOptions
+} from './process-utils.js'
+
+// Initialize utilities with logger
+setLogger(logger);
 
 
 interface Settings {
@@ -37,35 +51,32 @@ interface MovementEntry {
     seconds: number;
     pollCount: number;
     consecutivePollsWithoutMovement: number;
-    mlProcessing?: boolean;
-    mlStatus?: string;  // Precise status: 'starting', 'extracting', 'analyzing', or undefined when complete
-    ml?: MLData;
-    ml_movejpg?: SpawnData;
+    detection_status?: string;  // 'starting', 'extracting', 'analyzing', or undefined when complete
+    detection_output?: DetectionOutput;
 }
 
 interface MovementToClient {
     key: number;
-    movement: MovementEntry;
+    movement: {
+        cameraKey: string;
+        startDate: number;
+        startSegment: number;
+        seconds: number;
+        detection_status?: string;
+        detection_output?: DetectionOutput;
+    };
     startDate_en_GB: string;
 }
 
-interface SpawnData {
-    taskid?: SpawnData;
-    success: boolean;
-    code: number;
-    stdout: string;
-    stderr: string;
-    error: string;
+interface DetectionOutput {
+    tags: MLTag[];
 }
+
 interface MLTag {
     tag: string;
     maxProbability: number;
     count: number;
-    maxProbabilityImage?: string; // Filename of the image with highest probability
-}
-
-interface MLData extends SpawnData {
-    tags: MLTag[];
+    maxProbabilityImage?: string;
 }
 
 interface CameraEntry {
@@ -101,7 +112,7 @@ interface MovementStatus {
 }
 
 interface ExecuteControl {
-    fn_not_finnished : boolean;
+    fn_not_finished : boolean;
     fail: boolean;
     check_after?: number;
 }
@@ -127,9 +138,6 @@ var cameraCache: CameraCache = {}
 // Global ML detection process
 var mlDetectionProcess: ChildProcessWithoutNullStreams | null = null;
 
-// Track which movement_key is associated with each image being processed
-var imageToMovementMap: Map<string, number> = new Map();
-
 interface SettingsCache {
     settings: Settings;
     status: SettingsStatus;
@@ -145,7 +153,7 @@ interface SettingsStatus {
 var settingsCache: SettingsCache 
 
 
-import { ChildProcessWithoutNullStreams, spawn} from 'child_process'
+import { ChildProcessWithoutNullStreams } from 'child_process'
 import { clearScreenDown } from 'readline'
 
 const db = level(process.env['DBPATH'] || './mydb',  { valueEncoding : 'json' })
@@ -159,6 +167,9 @@ const movementdb = sub(db, 'movements', {
         buffer: false
     }
 })
+
+// Epoch offset for movement keys (Sept 13, 2020)
+const MOVEMENT_KEY_EPOCH = 1600000000;
 
 // Track if shutdown is in progress
 let isShuttingDown = false;
@@ -310,16 +321,10 @@ async function gracefulShutdown(signal: string): Promise<void> {
 
 const re = new RegExp(`stream([\\d]+).ts`, 'g');
 
-// Map to track which image path we're currently processing results for
-var currentProcessingImage: string | null = null;
-
 // Function to send image path to ML detection process
 function sendImageToMLDetection(imagePath: string, movement_key: number): void {
     if (mlDetectionProcess && mlDetectionProcess.stdin && !mlDetectionProcess.killed) {
         try {
-            // Track which movement this image belongs to
-            imageToMovementMap.set(imagePath, movement_key);
-            // Don't set currentProcessingImage here - Python will tell us via IMAGE: line
             const imageName = imagePath.split('/').pop() || imagePath;
             mlDetectionProcess.stdin.write(`${imagePath}\n`);
             logger.info('Frame sent to ML detector', { frame: imageName, movement: movement_key, path: imagePath });
@@ -350,14 +355,16 @@ async function processDetectionResult(line: string): Promise<void> {
         }
         
         const imagePath = result.image;
-        const movement_key = imageToMovementMap.get(imagePath);
         
-        if (!movement_key) {
-            logger.warn('Detection received for unknown image', { image: imagePath });
+        // Extract movement_key from filename pattern: mov{movement_key}_0001.jpg
+        const imageName = imagePath.split('/').pop() || imagePath;
+        const movementKeyMatch = imageName.match(/^mov(\d+)_/);
+        if (!movementKeyMatch) {
+            logger.warn('Detection received for image with invalid filename format', { image: imageName });
             return;
         }
         
-        const imageName = imagePath.split('/').pop() || imagePath;
+        const movement_key = parseInt(movementKeyMatch[1]);
         
         // Skip if update already in progress for this movement
         if (pendingUpdates.has(movement_key)) {
@@ -374,7 +381,7 @@ async function processDetectionResult(line: string): Promise<void> {
             const movement: MovementEntry = await movementdb.get(movement_key);
             
             // Get existing tags or initialize empty
-            const existingTags = movement.ml?.tags || [];
+            const existingTags = movement.detection_output?.tags || [];
             
             // Convert existing tags to a map for easy lookup
             const tagsMap: { [key: string]: MLTag } = {};
@@ -399,7 +406,7 @@ async function processDetectionResult(line: string): Promise<void> {
                 if (!existing || probability > existing.maxProbability) {
                     tagsMap[objectType] = {
                         tag: objectType,
-                        maxProbability: probability,
+                        maxProbability: Math.round(probability * 100) / 100,  // Round to 2 decimal places
                         count: existing ? existing.count + 1 : 1,
                         maxProbabilityImage: imageName
                     };
@@ -415,14 +422,8 @@ async function processDetectionResult(line: string): Promise<void> {
             // Write immediately to database
             await movementdb.put(movement_key, {
                 ...movement,
-                mlProcessing: true,
-                mlStatus: undefined,  // Clear status once we have results to show
-                ml: {
-                    success: true,
-                    code: 0,
-                    stdout: '',
-                    stderr: '',
-                    error: '',
+                detection_status: undefined,  // Clear status once we have results to show
+                detection_output: {
                     tags: updatedTags
                 }
             });
@@ -454,11 +455,10 @@ async function flushDetectionsToDatabase(movement_key: number): Promise<void> {
         // Mark ML processing as complete (results already in database from processDetectionResult)
         await movementdb.put(movement_key, {
             ...movement,
-            mlProcessing: false,
-            mlStatus: undefined
+            detection_status: undefined
         });
         
-        const tags = movement.ml?.tags || [];
+        const tags = movement.detection_output?.tags || [];
         logger.info('ML processing complete', { 
             movement: movement_key, 
             objectTypes: tags.length,
@@ -469,37 +469,30 @@ async function flushDetectionsToDatabase(movement_key: number): Promise<void> {
                 image: t.maxProbabilityImage 
             }))
         });
-        
-        // Clean up image mappings for this movement
-        for (const [imagePath, mvKey] of imageToMovementMap.entries()) {
-            if (mvKey === movement_key) {
-                imageToMovementMap.delete(imagePath);
-            }
-        }
     } catch (error) {
         logger.warn('Failed to finalize detections', { movement: movement_key, error: String(error) });
     }
 }
 
- // Called every seond for each camera, to process movement
+ // Called every second for each camera, to process movement
 
 async function processMovement(cameraKey: string) : Promise<void> {
 
     const { movementStatus, cameraEntry } = cameraCache[cameraKey]
 
     // --------- Circuit breaker
-    // curcuit breaker, if movement error recorded from API, dont try again, until after check_after!
-    const control = { fn_not_finnished: false, fail: false, check_after: 0 }
-    const { fn_not_finnished, fail, check_after } = movementStatus?.control || control
+    // circuit breaker, if movement error recorded from API, don't try again, until after check_after!
+    const control = { fn_not_finished: false, fail: false, check_after: 0 }
+    const { fn_not_finished, fail, check_after } = movementStatus?.control || control
     
     // Check and set the flag atomically - if already running, exit immediately
-    if (fn_not_finnished  || (fail && ( (!check_after) || check_after > Date.now())) ) {
-            logger.debug('processMovement skipped - already in progress or in failure backoff', { camera: cameraEntry.name, cameraKey, fn_not_finnished, fail });
+    if (fn_not_finished  || (fail && ( (!check_after) || check_after > Date.now())) ) {
+            logger.debug('processMovement skipped - already in progress or in failure backoff', { camera: cameraEntry.name, cameraKey, fn_not_finished, fail });
             return
     }
     
     // Set flag to prevent concurrent execution
-    cameraCache[cameraKey] = {...cameraCache[cameraKey],  movementStatus: {...movementStatus, control: { fail, check_after, fn_not_finnished : true}}}
+    cameraCache[cameraKey] = {...cameraCache[cameraKey],  movementStatus: {...movementStatus, control: { fail, check_after, fn_not_finished : true}}}
     logger.debug('processMovement started', { camera: cameraEntry.name, cameraKey });
     // ---------- end Circuit breaker
 
@@ -549,7 +542,7 @@ async function processMovement(cameraKey: string) : Promise<void> {
         //console.log(body[0].value)
         if (body[0].error) {
             logger.error('Camera API error', { camera: cameraEntry.name, error: body[0].error });
-            cameraCache[cameraKey] = {...cameraCache[cameraKey],  movementStatus: {...movementStatus, status: `fetch movement error: ${JSON.stringify(body)}`, control: {fail: true, fn_not_finnished : false, check_after: Date.now() + (30 * 1000)}}}
+            cameraCache[cameraKey] = {...cameraCache[cameraKey],  movementStatus: {...movementStatus, status: `fetch movement error: ${JSON.stringify(body)}`, control: {fail: true, fn_not_finished : false, check_after: Date.now() + (30 * 1000)}}}
         } else if (body[0].value.state === 1) {
             // Got movement (state ===1)
             if (!current_key) {
@@ -570,14 +563,10 @@ async function processMovement(cameraKey: string) : Promise<void> {
                 const segmentsToLookBack = Math.ceil(cameraEntry.mSPollFrequency / (lhs_seg_duration_seq * 1000));
 
                 const startDate = Date.now(),
-                      movement_key = (startDate / 1000 | 0) - 1600000000,
+                      movement_key = (startDate / 1000 | 0) - MOVEMENT_KEY_EPOCH,
                       startSegment = parseInt(hls_segments[hls_segments.length - 1]) - segmentsToLookBack + 1
 
-                // Determine frame output path - relative to disk_base_dir if provided, otherwise per-camera folder
-                const baseDir = settingsCache.settings.disk_base_dir || disk;
-                const framesPath = settingsCache.settings.mlFramesPath 
-                    ? `${baseDir}/${settingsCache.settings.mlFramesPath}`.replace(/\/+/g, '/') // Normalize slashes
-                    : `${disk}/${folder}`;
+                const framesPath = getFramesPath(disk, folder);
                 await ensureDir(framesPath);
 
                 const ffmpegArgs = [
@@ -596,12 +585,6 @@ async function processMovement(cameraKey: string) : Promise<void> {
                     mlEnabled: settingsCache.settings.enable_ml
                 });
 
-                // START FFMPEG!
-                var ffmpeg = spawn('/usr/bin/ffmpeg', ffmpegArgs)
-                
-                let ff_stdout = '', ff_stderr = '', ff_error = ''
-                let lastFrameNumber = 0;
-
                 // Update status to 'extracting' after a short delay to ensure ffmpeg has started
                 setTimeout(async () => {
                     if (settingsCache.settings.enable_ml) {
@@ -609,7 +592,7 @@ async function processMovement(cameraKey: string) : Promise<void> {
                             const m = await movementdb.get(movement_key);
                             await movementdb.put(movement_key, {
                                 ...m,
-                                mlStatus: 'extracting'
+                                detection_status: 'extracting'
                             });
                         } catch (e) {
                             logger.warn('Failed to update status to extracting', { movement: movement_key, error: String(e) });
@@ -617,161 +600,46 @@ async function processMovement(cameraKey: string) : Promise<void> {
                     }
                 }, 100);
 
-                ffmpeg.stdout.on('data', async (data: string) => { 
-                    ff_stdout += data;
-                    const output = data.toString();
-                    const lines = output.split('\n');
-                    
-                    logger.debug('ffmpeg stdout received', { 
-                        camera: cameraEntry.name, 
-                        movement: movement_key,
-                        dataLength: output.length,
-                        lineCount: lines.length,
-                        preview: output.substring(0, 200)
-                    });
-                    
-                    for (const line of lines) {
-                        // Look for frame= output which indicates a new frame was written
-                        const frameMatch = line.match(/frame=\s*(\d+)/);
-                        if (frameMatch) {
-                            const frameNum = parseInt(frameMatch[1]);
-                            
-                            logger.debug('Frame number detected in ffmpeg output', {
+                // Create stream processor for ffmpeg output
+                const frameProcessor = createFFmpegFrameProcessor(movement_key, framesPath, cameraEntry.name);
+
+                // Spawn ffmpeg with pipeline processors
+                var ffmpeg = spawnProcess({
+                    name: `ffmpeg-${cameraEntry.name}-mov${movement_key}`,
+                    cmd: '/usr/bin/ffmpeg',
+                    args: ffmpegArgs,
+                    onStdout: frameProcessor.processStdout,
+                    onStderr: frameProcessor.processStderr,
+                    onError: (error: Error) => {
+                        logger.error('ffmpeg frame extraction error', { 
+                            camera: cameraEntry.name, 
+                            movement: movement_key,
+                            error: error.message 
+                        });
+                    },
+                    onClose: async (code: number | null, signal: string | null) => {
+                        const isGraceful = code === 0 || code === 255 || signal === 'SIGTERM' || signal === 'SIGKILL' || isShuttingDown;
+                        
+                        logger.info('ffmpeg frame extraction complete', { 
+                            camera: cameraEntry.name, 
+                            movement: movement_key, 
+                            exitCode: code, 
+                            signal,
+                            totalFrames: frameProcessor.getLastFrameNumber(),
+                            graceful: isGraceful
+                        });
+                        
+                        // Wait for remaining ML detections to complete, then flush
+                        if (settingsCache.settings.enable_ml) {
+                            logger.debug('Scheduling ML detection flush', {
                                 camera: cameraEntry.name,
                                 movement: movement_key,
-                                frameNum,
-                                lastFrameNumber,
-                                isNewFrame: frameNum > lastFrameNumber,
-                                line: line.trim()
+                                delayMs: 3000
                             });
-                            
-                            // Check if this is a new frame
-                            if (frameNum > lastFrameNumber) {
-                                lastFrameNumber = frameNum;
-                                
-                                // Send the newly created image to ML detection
-                                if (settingsCache.settings.enable_ml && mlDetectionProcess) {
-                                    const paddedFrameNum = frameNum.toString().padStart(4, '0');
-                                    const imageName = `mov${movement_key}_${paddedFrameNum}.jpg`;
-                                    const fullImagePath = `${framesPath}/${imageName}`;
-                                    
-                                    logger.info('New frame detected - sending to ML', { 
-                                        camera: cameraEntry.name,
-                                        movement: movement_key,
-                                        frame: imageName, 
-                                        frameNumber: frameNum,
-                                        path: fullImagePath
-                                    });
-                                    
-                                    // Update status to 'analyzing' on first frame
-                                    if (frameNum === 1) {
-                                        try {
-                                            const m = await movementdb.get(movement_key);
-                                            await movementdb.put(movement_key, {
-                                                ...m,
-                                                mlStatus: 'analyzing'
-                                            });
-                                        } catch (e) {
-                                            logger.warn('Failed to update status to analyzing', { movement: movement_key, error: String(e) });
-                                        }
-                                    }
-                                    
-                                    sendImageToMLDetection(fullImagePath, movement_key);
-                                } else {
-                                    logger.warn('Frame detected but ML not available', {
-                                        camera: cameraEntry.name,
-                                        movement: movement_key,
-                                        frameNum,
-                                        mlEnabled: settingsCache.settings.enable_ml,
-                                        mlProcessExists: mlDetectionProcess !== null,
-                                        mlProcessKilled: mlDetectionProcess?.killed
-                                    });
-                                }
-                            }
+                            setTimeout(async () => {
+                                await flushDetectionsToDatabase(movement_key);
+                            }, 3000);
                         }
-                    }
-                })
-                
-                ffmpeg.stderr.on('data', (data: string) => { 
-                    ff_stderr += data;
-                    const output = data.toString();
-                    
-                    // Filter out informational messages - only log actual errors/warnings
-                    const isProgressInfo = output.includes('frame=') || output.includes('fps=') || output.includes('time=');
-                    const isInfoMessage = output.includes('Input #0') || 
-                                         output.includes('Output #0') || 
-                                         output.includes('Stream mapping:') ||
-                                         output.includes('Press [q] to stop') ||
-                                         output.includes('Opening \'') ||
-                                         output.includes('Duration:') ||
-                                         output.includes('Stream #') ||
-                                         output.includes('Metadata:') ||
-                                         output.includes('encoder         :') ||
-                                         output.includes('variant_bitrate') ||
-                                         output.includes('Side data:') ||
-                                         output.includes('cpb: bitrate') ||
-                                         output.includes('Skip (\'#EXT');
-                    
-                    if (isProgressInfo) {
-                        logger.debug('ffmpeg progress info', { 
-                            camera: cameraEntry.name,
-                            movement: movement_key,
-                            output: output.trim().substring(0, 150) 
-                        });
-                    } else if (!isInfoMessage) {
-                        // Only log if it's not a known informational message
-                        logger.warn('ffmpeg image stderr', { 
-                            camera: cameraEntry.name,
-                            movement: movement_key,
-                            length: output.length,
-                            data: output.trim() 
-                        });
-                    }
-                })
-                
-                ffmpeg.on('error', async (error: Error) => { 
-                    logger.error('ffmpeg image error', { camera: cameraEntry.name, error: error.message });
-                    ff_error = `${error.name}: ${error.message}` 
-                })
-
-                ffmpeg.on('exit', (code: number, signal: string) => {
-                    const isGracefulStop = code === 255 || signal === 'SIGTERM' || signal === 'SIGKILL';
-                    const logLevel = isGracefulStop ? 'info' : 'warn';
-                    
-                    logger[logLevel]('ffmpeg frame extraction exited', { 
-                        camera: cameraEntry.name, 
-                        movement: movement_key, 
-                        exitCode: code, 
-                        signal: signal,
-                        pid: ffmpeg.pid,
-                        totalFrames: lastFrameNumber,
-                        graceful: isGracefulStop
-                    });
-                });
-
-                ffmpeg.on('close', async (ff_code: number) => {
-                    logger.info('ffmpeg image closed', { 
-                        camera: cameraEntry.name,
-                        movement: movement_key,
-                        code: ff_code, 
-                        totalFrames: lastFrameNumber,
-                        stdoutLength: ff_stdout.length,
-                        stderrLength: ff_stderr.length,
-                        stderrPreview: ff_stderr.slice(-200), 
-                        error: ff_error,
-                        mlEnabled: settingsCache.settings.enable_ml
-                    });
-                    
-                    // Wait a bit for detections to complete, then flush to database
-                    if (settingsCache.settings.enable_ml) {
-                        logger.debug('Scheduling ML detection flush', {
-                            camera: cameraEntry.name,
-                            movement: movement_key,
-                            delayMs: 3000
-                        });
-                        setTimeout(async () => {
-                            await flushDetectionsToDatabase(movement_key);
-                        }, 3000); // Wait 3 seconds for remaining detections
                     }
                 });
 
@@ -783,11 +651,10 @@ async function processMovement(cameraKey: string) : Promise<void> {
                     seconds: 0,
                     pollCount: 1,
                     consecutivePollsWithoutMovement: 0,
-                    mlProcessing: settingsCache.settings.enable_ml,
-                    mlStatus: settingsCache.settings.enable_ml ? 'starting' : undefined
+                    detection_status: settingsCache.settings.enable_ml ? 'starting' : undefined
                 })
 
-                cameraCache[cameraKey] = {...cameraCache[cameraKey], movementStatus: {current_key: movement_key, current_taskid: ffmpeg, status: "New movement detected", control: {...control, fn_not_finnished: false}}}
+                cameraCache[cameraKey] = {...cameraCache[cameraKey], movementStatus: {current_key: movement_key, current_taskid: ffmpeg, status: "New movement detected", control: {...control, fn_not_finished: false}}}
 
             } else {
                 // continuatation of same movment event
@@ -826,12 +693,12 @@ async function processMovement(cameraKey: string) : Promise<void> {
                         }, 3000);
                     }
                     
-                    cameraCache[cameraKey] = {...cameraCache[cameraKey],  movementStatus: {current_key: null, status: `Movement ended, recorded to database key=${current_key}`, control: {...control, fn_not_finnished: false}}}
+                    cameraCache[cameraKey] = {...cameraCache[cameraKey],  movementStatus: {current_key: null, status: `Movement ended, recorded to database key=${current_key}`, control: {...control, fn_not_finished: false}}}
                     
                 } else {
                     logger.debug('Movement continuation', { camera: cameraEntry.name, duration: `${durationSeconds}s` });
                     await movementdb.put(current_key, {...m, seconds: durationSeconds, pollCount: updatedPollCount, consecutivePollsWithoutMovement: 0})
-                    cameraCache[cameraKey] = {...cameraCache[cameraKey],  movementStatus: {...movementStatus, status: "Movement Continuation", control: {...control, fn_not_finnished: false}}}
+                    cameraCache[cameraKey] = {...cameraCache[cameraKey],  movementStatus: {...movementStatus, status: "Movement Continuation", control: {...control, fn_not_finished: false}}}
                 }
 
             }
@@ -884,17 +751,17 @@ async function processMovement(cameraKey: string) : Promise<void> {
                         }, 3000);
                     }
                     
-                    cameraCache[cameraKey] = {...cameraCache[cameraKey],  movementStatus: {current_key: null, status: `Movement ended, recorded to database key=${current_key}`, control: {...control, fn_not_finnished: false}}}
+                    cameraCache[cameraKey] = {...cameraCache[cameraKey],  movementStatus: {current_key: null, status: `Movement ended, recorded to database key=${current_key}`, control: {...control, fn_not_finished: false}}}
                     
 
                 } else {
                     // still same movement, update elapsed time and consecutive polls without movement
                     await movementdb.put(current_key, {...m, seconds: elapsedSeconds, consecutivePollsWithoutMovement: consecutivePolls})
-                    cameraCache[cameraKey] = {...cameraCache[cameraKey],  movementStatus: {...movementStatus, status: "Movement Continuation (withoutmovement)", control: {...control, fn_not_finnished: false}}}
+                    cameraCache[cameraKey] = {...cameraCache[cameraKey],  movementStatus: {...movementStatus, status: "Movement Continuation (withoutmovement)", control: {...control, fn_not_finished: false}}}
                 }
             } else {
                 // no current movement, camera is not reporting movement
-                cameraCache[cameraKey] = {...cameraCache[cameraKey],  movementStatus: {...movementStatus, status: "No current movement", control: {...control, fn_not_finnished: false}}}
+                cameraCache[cameraKey] = {...cameraCache[cameraKey],  movementStatus: {...movementStatus, status: "No current movement", control: {...control, fn_not_finished: false}}}
             }
         }
     } catch (e) {
@@ -906,7 +773,7 @@ async function processMovement(cameraKey: string) : Promise<void> {
         });
         cameraCache[cameraKey] = { ...cameraCache[cameraKey],  movementStatus: {...movementStatus, status: `processMovement failed error: ${filtersensitive}`, control: {
             fail: true, 
-            fn_not_finnished : false,
+            fn_not_finished : false,
             check_after: Date.now() + (30 * 1000)
         }}}
     }
@@ -930,7 +797,13 @@ async function processController(
         logger.debug('processController already in progress', { name });
         return task
     }
-    processController_inprogress[name] = {...processController_inprogress[name], inprogress: true}
+    
+    // Initialize or update progress tracking
+    if (!processController_inprogress[name]) {
+        processController_inprogress[name] = { inprogress: true, checkFrom: Date.now() };
+    } else {
+        processController_inprogress[name].inprogress = true;
+    }
 
 
     // No streaming enabled, and processes is running then kill it
@@ -977,72 +850,84 @@ async function processController(
     }
 
     try {
-
-        const workingDir = cwd || process.env['PWD'] ;
-        logger.info('Starting process', { name, cmd, args: cmdArgs.slice(0, 3) + '...', cwd: workingDir });
-        var childProcess : ChildProcessWithoutNullStreams = spawn(cmd, cmdArgs, {
-            cwd: workingDir
-        })
-
-        let stdoutBuffer = '';
-        let stderrBuffer = '';
-
-        childProcess.stdout.on('data', (data: string) => {
-            stdoutBuffer += data;
-            logger.debug('Process stdout', { name, data: data.toString().trim() });
-        })
-        childProcess.stderr.on('data', (data: string) => {
-            stderrBuffer += data;
-            const output = data.toString();
-            
-            // Filter out common RTSP startup warnings that are harmless
-            const isRTSPStartupWarning = output.includes('RTP: PT=') && output.includes('bad cseq');
-            const isH264DecodeWarning = output.includes('[h264 @') && 
-                                       (output.includes('error while decoding MB') || 
-                                        output.includes('left block unavailable'));
-            
-            // Only log if it's not a known harmless startup warning
-            if (!isRTSPStartupWarning && !isH264DecodeWarning) {
-                logger.warn('Process stderr', { name, data: output.trim() });
-            } else {
-                // Log at debug level for filtered warnings
-                logger.debug('Process stderr (filtered)', { name, data: output.trim() });
-            }
-        })
-        childProcess.on('error', async (error: Error) => { 
-            logger.error('Process error', { name, error: error.message });
-       })
-
-        childProcess.on('close', async (code: number | null) => {
-            // Exit code 255 is normal for ffmpeg when gracefully terminated
-            // null code means process was terminated by signal (SIGTERM/SIGKILL)
-            const isGracefulExit = code === 0 || code === 255 || code === null || isShuttingDown;
-            
-            if (!isGracefulExit) {
-                logger.error('Process exited abnormally', { 
-                    name, 
-                    code, 
-                    stderr: stderrBuffer.slice(-500),  // Last 500 chars of stderr
-                    stdout: stdoutBuffer.slice(-200)   // Last 200 chars of stdout
-                });
-            } else {
-                logger.info('Process closed', { 
-                    name, 
-                    code,
-                    graceful: true
-                });
+        const workingDir = cwd || process.env['PWD'];
+        
+        logger.info('Starting streaming process', { name, pid: 'pending' });
+        
+        const childProcess = spawnProcess({
+            name,
+            cmd,
+            args: cmdArgs,
+            cwd: workingDir,
+            captureOutput: true,
+            onStderr: (data: string) => {
+                const output = data.toString();
+                
+                // Filter out common RTSP startup warnings that are harmless
+                const isRTSPStartupWarning = output.includes('RTP: PT=') && output.includes('bad cseq');
+                const isH264DecodeWarning = output.includes('[h264 @') && 
+                                           (output.includes('error while decoding MB') || 
+                                            output.includes('left block unavailable'));
+                
+                // Check for critical errors
+                const isCriticalError = output.includes('Connection refused') || 
+                                       output.includes('Connection timed out') ||
+                                       output.includes('Server returned 4') ||
+                                       output.includes('Invalid data found');
+                
+                // Only log if it's not a known harmless startup warning
+                if (isCriticalError) {
+                    logger.error('Process critical error', { name, data: output.trim() });
+                } else if (!isRTSPStartupWarning && !isH264DecodeWarning) {
+                    logger.warn('Process stderr', { name, data: output.trim() });
+                } else {
+                    // Log at debug level for filtered warnings
+                    logger.debug('Process stderr (filtered)', { name, data: output.trim() });
+                }
+            },
+            onClose: (code: number | null, signal: string | null) => {
+                if (code !== 0 && code !== null && signal === null) {
+                    logger.error('Streaming process exited unexpectedly', { 
+                        name, 
+                        exitCode: code,
+                        willRestart: 'on next cycle'
+                    });
+                } else if (signal) {
+                    logger.info('Streaming process terminated by signal', { name, signal });
+                }
             }
         });
   
-        // sleep for 5 second to allow ffmpeg to start
-        await new Promise((res) => setTimeout(res, 4000))
-        processController_inprogress[name] = {...processController_inprogress[name], inprogress: false }
+        // Verify stream startup if we have a file to check
+        if (checkFilePath) {
+            const verification = await verifyStreamStartup({
+                processName: name,
+                process: childProcess,
+                outputFilePath: checkFilePath,
+                maxWaitTimeMs: 10000,
+                maxFileAgeMs: 5000,
+                checkIntervalMs: 1000
+            });
+            
+            if (!verification.ready && childProcess.exitCode !== null) {
+                // Process died during startup
+                logger.error('Stream startup failed', { name, verification });
+                processController_inprogress[name] = {...processController_inprogress[name], inprogress: false };
+                return undefined;
+            }
+        } else {
+            // No output file to check, just wait a bit
+            logger.info('Streaming process started (no verification)', { name, pid: childProcess.pid });
+            await new Promise((res) => setTimeout(res, 2000));
+        }
+        
+        processController_inprogress[name] = {...processController_inprogress[name], inprogress: false };
         return childProcess
 
     } catch (e) {
         logger.error('processController error', { name, error: String(e) });
-        processController_inprogress[name] = {...processController_inprogress[name], inprogress: false }
-        return childProcess
+        processController_inprogress[name] = {...processController_inprogress[name], inprogress: false };
+        return undefined;
     }
 
 
@@ -1051,6 +936,15 @@ async function processController(
 
 const PORT = process.env['PORT'] || 8080
 
+/**
+ * Get the frames output path based on settings
+ */
+function getFramesPath(disk: string, folder: string): string {
+    const baseDir = settingsCache.settings.disk_base_dir || disk;
+    return settingsCache.settings.mlFramesPath 
+        ? `${baseDir}/${settingsCache.settings.mlFramesPath}`.replace(/\/+/g, '/')
+        : `${disk}/${folder}`;
+}
 
 async function ensureDir(folder: string): Promise<boolean> {
     try {
@@ -1082,7 +976,8 @@ async function init_web() {
             try {
                 const m: MovementEntry = await movementdb.get(parseInt(moment))
                 const c: CameraEntry = await cameradb.get(m.cameraKey)
-                const serve = `${c.disk}/${c.folder}/${m.ml && m.ml.success ? 'mlimage' : 'image'}${moment}.jpg`
+                const hasDetections = m.detection_output?.tags && m.detection_output.tags.length > 0;
+                const serve = `${c.disk}/${c.folder}/${hasDetections ? 'mlimage' : 'image'}${moment}.jpg`
                 const { size } = await fs.stat(serve)
                 ctx.set('content-type', 'image/jpeg')
                 ctx.body = createReadStream(serve, { encoding: undefined }).on('error', ctx.onerror)
@@ -1098,10 +993,8 @@ async function init_web() {
 
             try {
                 const m: MovementEntry = await movementdb.get(parseInt(moment))
-                const baseDir = settingsCache.settings.disk_base_dir || '';
-                const framesPath = settingsCache.settings.mlFramesPath 
-                    ? `${baseDir}/${settingsCache.settings.mlFramesPath}`.replace(/\/+/g, '/')
-                    : `${cameraCache[m.cameraKey].cameraEntry.disk}/${cameraCache[m.cameraKey].cameraEntry.folder}`;
+                const { disk, folder } = cameraCache[m.cameraKey].cameraEntry;
+                const framesPath = getFramesPath(disk, folder);
                 
                 const serve = `${framesPath}/${filename}`;
                 const { size } = await fs.stat(serve);
@@ -1213,21 +1106,16 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n"
                 const postseq: number = ctx.query['postseq'] ? parseInt(ctx.query['postseq'] as any) : 0
                 const serve = `${cameraEntry.disk}/${cameraEntry.folder}/save${startSegment}-${seconds}.mp4`
 
-                await new Promise(async (res, rej) => {
-                    const mv_task = spawn('/usr/bin/ffmpeg', ['-y', '-i', `http://localhost:${PORT}/video/${startSegment}/${seconds}/${cameraKey}/stream.m3u8${preseq > 0 || postseq > 0 ? `?preseq=${preseq}&postseq=${postseq}` : ''}`, '-c', 'copy', serve], { timeout: 50000 })
-                    let stdout = '', stderr = '', myerror = ''
-                    mv_task.stdout.on('data', (data: string) => { stdout += data })
-                    mv_task.stderr.on('data', (data: string) => { stderr += data })
-                    mv_task.on('error', async (error: Error) => { myerror = `${error.name}: ${error.message}` })
+                const result = await runProcess({
+                    name: `mp4-gen-${cameraKey}-${startSegment}`,
+                    cmd: '/usr/bin/ffmpeg',
+                    args: ['-y', '-i', `http://localhost:${PORT}/video/${startSegment}/${seconds}/${cameraKey}/stream.m3u8${preseq > 0 || postseq > 0 ? `?preseq=${preseq}&postseq=${postseq}` : ''}`, '-c', 'copy', serve],
+                    timeout: 50000
+                });
 
-                    mv_task.on('close', async (code: number) => {
-                        if (code === 0) {
-                            res(0)
-                        } else {
-                            rej(new Error(`ffmpeg stderr=${stderr} error=${myerror}`))
-                        }
-                    })
-                })
+                if (result.code !== 0) {
+                    throw new Error(`ffmpeg failed with code ${result.code}: ${result.stderr}`);
+                }
 
                 ctx.set('Content-Type', 'video/mp4')
                 ctx.body = createReadStream(serve, { encoding: undefined }).on('error', ctx.onerror)
@@ -1278,7 +1166,7 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n"
                     // creating new entry
                     try {
                         await ensureDir(folder)
-                        const new_key = "C" + ((Date.now() / 1000 | 0) - 1600000000)
+                        const new_key = "C" + ((Date.now() / 1000 | 0) - MOVEMENT_KEY_EPOCH)
                         await cameradb.put(new_key, {delete: false, ...new_ce} as CameraEntry)
                         cameraCache[new_key] = {cameraEntry: new_ce }
                         ctx.status = 201
@@ -1412,9 +1300,7 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n"
                                     cameraKey: c.key,
                                     startDate: segs.ctimeMs,
                                     startSegment: segs.segmentStart,
-                                    seconds: segs.seconds,
-                                    pollCount: 1,
-                                    consecutivePollsWithoutMovement: 0
+                                    seconds: segs.seconds
                                 }
                             })
                         }
@@ -1427,9 +1313,9 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n"
                     const feed = movementdb.createReadStream({ reverse: true /*, limit: 100*/ /*, gt: oldestctimeMs > 0 ? (oldestctimeMs / 1000 | 0) - 1600000000 : 0 */})
                         .on('data', (data) => {
                             const { key, value } = data as {key: number, value: MovementEntry}
-                            const { ml, cameraKey } = value
+                            const { detection_output, cameraKey } = value
 
-                            let tags = ml?.success ? ml.tags : null
+                            let tags = detection_output?.tags || null
                             if (mode === 'Filtered') {
                                 const { tag_filters } = settingsCache.settings || {}
                                 if (!tag_filters || tag_filters.length === 0) {
@@ -1451,7 +1337,14 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n"
                                 movements.push({
                                     key,
                                     startDate_en_GB: new Intl.DateTimeFormat('en-GB', { ...(startDate.toDateString() !== (new Date()).toDateString() && {weekday: "short"}), minute: "2-digit", hour: "2-digit",  hour12: true }).format(startDate),
-                                    movement: {...value, ...(tags &&  { ml: { ...value.ml, tags}})}
+                                    movement: {
+                                        cameraKey: value.cameraKey,
+                                        startDate: value.startDate,
+                                        startSegment: value.startSegment,
+                                        seconds: value.seconds,
+                                        detection_status: value.detection_status || 'complete',  // Always include status
+                                        ...(tags && tags.length > 0 && { detection_output: { tags } })
+                                    }
                                 })
                             }
                         }).on('end', () => {
@@ -1498,7 +1391,7 @@ async function clearDownDisk(diskDir: string, cameraKeys : Array<string>, cleanu
     if (diskres.revmovedMBTotal > 0) {
         const mostRecentctimMs = Object.keys(diskres.folderStats).reduce((acc, cur) => diskres.folderStats[cur].lastRemovedctimeMs ? (  diskres.folderStats[cur].lastRemovedctimeMs > acc? diskres.folderStats[cur].lastRemovedctimeMs : acc ) : acc ,0)
         if (mostRecentctimMs > 0 || cleanupCapacity === -1) {
-            const keytoDeleteTo =  cleanupCapacity === -1 ? null : (mostRecentctimMs / 1000 | 0) - 1600000000
+            const keytoDeleteTo =  cleanupCapacity === -1 ? null : (mostRecentctimMs / 1000 | 0) - MOVEMENT_KEY_EPOCH
             const deleteKeys : Array<number> = await new Promise((res, _rej) => {
                 let keys : Array<number> = []
                 movementdb.createReadStream(keytoDeleteTo && {lte: keytoDeleteTo})
@@ -1514,7 +1407,7 @@ async function clearDownDisk(diskDir: string, cameraKeys : Array<string>, cleanu
 
             if (deleteKeys.length > 0) {
                 logger.info('Deleting old movements', { count: deleteKeys.length });
-                await movementdb.batch([...deleteKeys.map(k => { return {type: 'del', key: k} })] as any)
+                await movementdb.batch(deleteKeys.map(k => ({ type: 'del', key: k })) as any)
             }
 
         }
@@ -1548,6 +1441,14 @@ async function main() {
         logger.warn('No settings defined yet');
     }
 
+    // Initialize process utilities with dependencies
+    setDependencies({
+        settingsCache,
+        movementdb,
+        sendImageToMLDetection,
+        getShuttingDown: () => isShuttingDown
+    });
+
     // Start the Camera controll loop (ensuring ffmpeg is running, and checking movement) ()
     setInterval(async () => {
         // Start ML detection process if enabled
@@ -1563,72 +1464,40 @@ async function main() {
                 cmdArgs.push('--target', settings.mlTarget);
             }
             
-            const mlTask = await processController(
-                'ML-Detection',
-                true,
-                'python3',
-                cmdArgs,
-                [0, ''], // No file check for ML process
-                mlDetectionProcess,
-                aiDir
-            );
-            
-            // Set up stdout handler if this is a new process
-            if (mlTask && mlTask !== mlDetectionProcess) {
-                mlDetectionProcess = mlTask;
-                logger.info('ML detection process started', { 
-                    pid: mlTask.pid,
-                    model: settings.mlModel 
-                });
+            // Check if ML process needs to be started
+            if (!mlDetectionProcess || mlDetectionProcess.exitCode !== null) {
+                const mlProcessor = createMLResultProcessor(processDetectionResult);
                 
-                mlTask.stdout.on('data', (data: string) => {
-                    const lines = data.toString().split('\n').filter(line => line.trim());
-                    logger.debug('ML detection stdout', { 
-                        lineCount: lines.length,
-                        lines: lines 
-                    });
-                    
-                    for (const line of lines) {
-                        // Try to parse as JSON (new format)
-                        try {
-                            const result = JSON.parse(line);
-                            if (result.image && result.detections) {
-                                logger.info('ML detection result', { 
-                                    image: result.image.split('/').pop(), 
-                                    detectionCount: result.detections.length 
-                                });
-                                processDetectionResult(line);
-                            }
-                        } catch (e) {
-                            // Not JSON, might be startup messages or other output
-                            logger.debug('ML detection non-JSON output', { line });
+                mlDetectionProcess = spawnProcess({
+                    name: 'ML-Detection',
+                    cmd: 'python3',
+                    args: cmdArgs,
+                    cwd: aiDir,
+                    onStdout: mlProcessor.processStdout,
+                    onStderr: mlProcessor.processStderr,
+                    onError: (error: Error) => {
+                        logger.error('ML detection process error', { error: error.message });
+                    },
+                    onClose: (code: number | null, signal: string | null) => {
+                        const isGraceful = code === 0 || code === null || isShuttingDown;
+                        if (!isGraceful) {
+                            logger.error('ML detection process exited unexpectedly', { 
+                                code, 
+                                signal,
+                                willRestart: 'on next interval' 
+                            });
+                        } else {
+                            logger.info('ML detection process closed gracefully', { code, signal });
                         }
+                        mlDetectionProcess = null;
                     }
                 });
                 
-                mlTask.stderr.on('data', (data: string) => {
-                    logger.warn('ML detection stderr', { 
-                        output: data.toString()
-                    });
+                logger.info('ML detection pipeline initialized', { 
+                    pid: mlDetectionProcess.pid,
+                    model: settings.mlModel,
+                    target: settings.mlTarget || 'default'
                 });
-                
-                mlTask.on('close', (code: number | null) => {
-                    // Don't log error if we're shutting down or process exited gracefully
-                    if (!isShuttingDown && code !== 0 && code !== null) {
-                        logger.error('ML detection process exited unexpectedly', { 
-                            code,
-                            model: settings.mlModel
-                        });
-                    } else {
-                        logger.info('ML detection process closed', { 
-                            code,
-                            graceful: true
-                        });
-                    }
-                    mlDetectionProcess = null;
-                });
-            } else if (mlTask) {
-                mlDetectionProcess = mlTask;
             }
         }
 
@@ -1660,7 +1529,7 @@ async function main() {
                         '-hide_banner',
                         '-loglevel', 'error',
                         '-vcodec', 'copy',
-                        '-start_number', ((Date.now() / 1000 | 0) - 1600000000).toString(),
+                        '-start_number', ((Date.now() / 1000 | 0) - MOVEMENT_KEY_EPOCH).toString(),
                         streamFile
                     ],
                     [ 60, streamFile ],
@@ -1672,14 +1541,28 @@ async function main() {
                     
                 // Process movement detection if streaming is active and movement detection is enabled
                 if (cameraEntry.enable_movement && cameraCache[cKey].ffmpeg_task && cameraCache[cKey].ffmpeg_task.exitCode === null) {
-                    // Check if enough time has passed since last movement check
-                    const now = Date.now();
-                    const lastCheck = cameraCache[cKey].lastMovementCheck || 0;
-                    const pollInterval = cameraEntry.mSPollFrequency || 1000; // Default 1 second if not set
+                    // Verify stream is current before processing movement
+                    const streamIsReady = await isStreamCurrent(streamFile, 10000);
                     
-                    if (now - lastCheck >= pollInterval) {
-                        cameraCache[cKey] = {...cameraCache[cKey], lastMovementCheck: now};
-                        await processMovement(cKey);
+                    if (streamIsReady) {
+                        // Check if enough time has passed since last movement check
+                        const now = Date.now();
+                        const lastCheck = cameraCache[cKey].lastMovementCheck || 0;
+                        const pollInterval = cameraEntry.mSPollFrequency || 1000; // Default 1 second if not set
+                        
+                        if (now - lastCheck >= pollInterval) {
+                            cameraCache[cKey] = {...cameraCache[cKey], lastMovementCheck: now};
+                            await processMovement(cKey);
+                        }
+                    } else {
+                        // Stream not ready - log periodically
+                        if (!global[`lastStreamNotReadyLog_${cKey}`] || Date.now() - global[`lastStreamNotReadyLog_${cKey}`] > 60000) {
+                            logger.warn('Stream not ready for movement detection', { 
+                                camera: cameraEntry.name,
+                                streamFile 
+                            });
+                            global[`lastStreamNotReadyLog_${cKey}`] = Date.now();
+                        }
                     }
                 } else if (!cameraEntry.enable_movement) {
                     // Only log once per minute to avoid spam
