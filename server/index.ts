@@ -12,7 +12,6 @@ import sub from 'subleveldown'
 import { catalogVideo, diskCheck, DiskCheckReturn } from './diskcheck.js'
 import { logger } from './logger.js'
 
-import { JobManager, JobStatus, JobReturn, JobData, JobTask } from './jobmanager.js'
 
 interface Settings {
     disk_base_dir: string;
