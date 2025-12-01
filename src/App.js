@@ -226,15 +226,42 @@ const onSelectionChange = (_, d) => {
   }
 
   function renderTags(selectedList, idx) {
-    const { key, cameraKey, ml, mlProcessing, ffmpeg } = selectedList
+    const { key, cameraKey, ml, mlProcessing, mlStatus, ffmpeg } = selectedList
     const img = `/image/${key}`
 
-    // Show spinner if ML processing is ongoing
-    if (mlProcessing) {
+    // Show results if we have them, even if still processing
+    if (ml && ml.success && ml.tags && ml.tags.length > 0) {
+      // Sort tags by maxProbability descending and format with percentage
+      const sortedTags = [...ml.tags].sort((a, b) => b.maxProbability - a.maxProbability)
+      return (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "5px" }}>
+          {sortedTags.map((t, idx) => (
+            <Badge 
+              key={idx}
+              appearance="filled"
+              color="informative"
+              style={{ whiteSpace: 'nowrap' }}
+            >
+              {t.tag} {(t.maxProbability * 100).toFixed(0)}% ({t.count})
+            </Badge>
+          ))}
+        </div>
+      );
+    }
+
+    // Show precise status if ML processing is ongoing and no results yet
+    if (mlProcessing || mlStatus) {
+      const statusMessages = {
+        'starting': 'Starting frame extraction...',
+        'extracting': 'Processing frames...',
+        'analyzing': 'Analyzing frame...'
+      };
+      const message = mlStatus ? statusMessages[mlStatus] : 'Detecting...';
+      
       return (
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           <Spinner size="tiny" />
-          <Text variant="mediumPlus">Detecting...</Text>
+          <Text variant="mediumPlus">{message}</Text>
         </div>
       )
     }
@@ -242,22 +269,8 @@ const onSelectionChange = (_, d) => {
     if (ml) {
       if (ml.success) {
         if (ml.tags.length > 0) {
-          // Sort tags by maxProbability descending and format with percentage
-          const sortedTags = [...ml.tags].sort((a, b) => b.maxProbability - a.maxProbability)
-          return (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "5px" }}>
-              {sortedTags.map((t, idx) => {
-                const frameUrl = t.maxProbabilityImage 
-                  ? `/frame/${key}/${t.maxProbabilityImage}`
-                  : img;
-                return (
-                  <Badge key={idx} appearance="outline" color={idx === 0 ? "brand" : "informative"} style={{ whiteSpace: 'nowrap' }}>
-                    {t.tag} {Math.round(t.maxProbability * 100)}%
-                  </Badge>
-                );
-              })}
-            </div>
-          )
+          // Already handled above
+          return null;
         } else {
           return <a target="_blank" href={img}><Text variant="mediumPlus">ML Image</Text></a>
         }

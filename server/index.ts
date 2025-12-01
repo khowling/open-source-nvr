@@ -39,6 +39,7 @@ interface MovementEntry {
     pollCount: number;
     consecutivePollsWithoutMovement: number;
     mlProcessing?: boolean;
+    mlStatus?: string;  // Precise status: 'starting', 'extracting', 'analyzing', or undefined when complete
     ml?: MLData;
     ml_movejpg?: SpawnData;
 }
@@ -126,18 +127,6 @@ var cameraCache: CameraCache = {}
 
 // Global ML detection process
 var mlDetectionProcess: ChildProcessWithoutNullStreams | null = null;
-
-// Detection accumulator: Maps movement_key to accumulated detections
-interface DetectionAccumulator {
-    [movement_key: number]: {
-        [objectType: string]: { 
-            maxProbability: number; 
-            count: number;
-            maxProbabilityImage: string; // Image filename with highest probability
-        };
-    };
-}
-var detectionAccumulator: DetectionAccumulator = {};
 
 // Track which movement_key is associated with each image being processed
 var imageToMovementMap: Map<string, number> = new Map();
@@ -331,7 +320,7 @@ function sendImageToMLDetection(imagePath: string, movement_key: number): void {
         try {
             // Track which movement this image belongs to
             imageToMovementMap.set(imagePath, movement_key);
-            currentProcessingImage = imagePath; // Track current image being processed
+            // Don't set currentProcessingImage here - Python will tell us via IMAGE: line
             const imageName = imagePath.split('/').pop() || imagePath;
             mlDetectionProcess.stdin.write(`${imagePath}\n`);
             logger.info('Frame sent to ML detector', { frame: imageName, movement: movement_key, path: imagePath });
@@ -350,153 +339,139 @@ function sendImageToMLDetection(imagePath: string, movement_key: number): void {
 // Track pending updates per movement to avoid concurrent DB writes
 var pendingUpdates: Set<number> = new Set();
 
-// Function to parse detection output and accumulate results
-function processDetectionResult(line: string): void {
-    // Parse format: "person @ (392 72 552 391) 0.648"
-    const match = line.match(/^(\w+)\s+@\s+\([\d\s]+\)\s+([\d.]+)$/);
-    if (!match) return;
-    
-    const objectType = match[1];
-    const probability = parseFloat(match[2]);
-    
-    // Get movement_key and image filename from current processing context
-    if (!currentProcessingImage) return;
-    
-    const movement_key = imageToMovementMap.get(currentProcessingImage);
-    if (!movement_key) return;
-    
-    const imageName = currentProcessingImage.split('/').pop() || currentProcessingImage;
-    
-    logger.info('Detection received from ML', { 
-        frame: imageName, 
-        movement: movement_key, 
-        object: objectType, 
-        probability: `${(probability * 100).toFixed(1)}%` 
-    });
-    
-    // Initialize accumulator for this movement if needed
-    if (!detectionAccumulator[movement_key]) {
-        detectionAccumulator[movement_key] = {};
-    }
-    
-    // Update accumulator with max probability and track the image
-    const current = detectionAccumulator[movement_key][objectType];
-    if (!current || probability > current.maxProbability) {
-        detectionAccumulator[movement_key][objectType] = {
-            maxProbability: probability,
-            count: current ? current.count + 1 : 1,
-            maxProbabilityImage: imageName
-        };
-    } else {
-        current.count++;
-    }
-    
-    // Update database immediately (debounced per movement)
-    updateDetectionsInDatabase(movement_key);
-}
-
-// Update database with current detection state (debounced to avoid excessive writes)
-async function updateDetectionsInDatabase(movement_key: number): Promise<void> {
-    // Skip if update already pending for this movement
-    if (pendingUpdates.has(movement_key)) return;
-    
-    pendingUpdates.add(movement_key);
-    
-    // Small delay to batch multiple detections from same frame
-    setTimeout(async () => {
+// Function to parse detection output and update database directly
+async function processDetectionResult(line: string): Promise<void> {
+    try {
+        // Parse JSON format: {"image": "/path/image.jpg", "detections": [{"object": "person", "box": [x1,y1,x2,y2], "probability": 0.85}, ...]}
+        const result = JSON.parse(line);
+        
+        if (!result.image || !result.detections) {
+            logger.warn('Invalid detection result format', { line });
+            return;
+        }
+        
+        const imagePath = result.image;
+        const movement_key = imageToMovementMap.get(imagePath);
+        
+        if (!movement_key) {
+            logger.warn('Detection received for unknown image', { image: imagePath });
+            return;
+        }
+        
+        const imageName = imagePath.split('/').pop() || imagePath;
+        
+        // Skip if update already in progress for this movement
+        if (pendingUpdates.has(movement_key)) {
+            logger.debug('Detection update already pending', { movement: movement_key, frame: imageName });
+            // Store for next batch
+            setTimeout(() => processDetectionResult(line), 50);
+            return;
+        }
+        
+        pendingUpdates.add(movement_key);
+        
         try {
-            const detections = detectionAccumulator[movement_key];
-            if (!detections || Object.keys(detections).length === 0) {
-                pendingUpdates.delete(movement_key);
-                return;
-            }
-            
+            // Read current movement state from database
             const movement: MovementEntry = await movementdb.get(movement_key);
             
-            // Convert accumulator to MLTag array
-            const tags: MLTag[] = Object.entries(detections).map(([tag, data]) => ({
-                tag,
-                maxProbability: data.maxProbability,
-                count: data.count,
-                maxProbabilityImage: data.maxProbabilityImage
-            })).sort((a, b) => b.maxProbability - a.maxProbability);
+            // Get existing tags or initialize empty
+            const existingTags = movement.ml?.tags || [];
             
-            // Update movement with current detection results (still processing)
+            // Convert existing tags to a map for easy lookup
+            const tagsMap: { [key: string]: MLTag } = {};
+            existingTags.forEach(tag => {
+                tagsMap[tag.tag] = tag;
+            });
+            
+            // Process all detections for this image
+            for (const detection of result.detections) {
+                const objectType = detection.object;
+                const probability = detection.probability;
+                
+                logger.info('Detection received from ML', { 
+                    frame: imageName, 
+                    movement: movement_key, 
+                    object: objectType, 
+                    probability: `${(probability * 100).toFixed(1)}%` 
+                });
+                
+                // Update or add tag
+                const existing = tagsMap[objectType];
+                if (!existing || probability > existing.maxProbability) {
+                    tagsMap[objectType] = {
+                        tag: objectType,
+                        maxProbability: probability,
+                        count: existing ? existing.count + 1 : 1,
+                        maxProbabilityImage: imageName
+                    };
+                } else {
+                    existing.count++;
+                }
+            }
+            
+            // Convert map back to sorted array
+            const updatedTags: MLTag[] = Object.values(tagsMap)
+                .sort((a, b) => b.maxProbability - a.maxProbability);
+            
+            // Write immediately to database
             await movementdb.put(movement_key, {
                 ...movement,
                 mlProcessing: true,
+                mlStatus: undefined,  // Clear status once we have results to show
                 ml: {
                     success: true,
                     code: 0,
                     stdout: '',
                     stderr: '',
                     error: '',
-                    tags
+                    tags: updatedTags
                 }
             });
             
-            logger.debug('ML results updated', { 
+            logger.debug('ML results updated in database', { 
                 movement: movement_key, 
-                objectTypes: tags.length,
-                detections: tags.map(t => ({ tag: t.tag, probability: `${(t.maxProbability*100).toFixed(1)}%`, count: t.count }))
+                objectTypes: updatedTags.length,
+                detections: updatedTags.map(t => ({ 
+                    tag: t.tag, 
+                    probability: `${(t.maxProbability*100).toFixed(1)}%`, 
+                    count: t.count 
+                }))
             });
         } catch (error) {
-            logger.warn('Failed to update detections', { movement: movement_key, error: String(error) });
+            logger.warn('Failed to process detection', { movement: movement_key, error: String(error) });
         } finally {
             pendingUpdates.delete(movement_key);
         }
-    }, 100); // 100ms debounce
+    } catch (error) {
+        logger.debug('Non-JSON line or parse error', { line, error: String(error) });
+    }
 }
 
 // Function to finalize detection results when movement ends
 async function flushDetectionsToDatabase(movement_key: number): Promise<void> {
-    const detections = detectionAccumulator[movement_key];
-    
     try {
         const movement: MovementEntry = await movementdb.get(movement_key);
         
-        if (!detections || Object.keys(detections).length === 0) {
-            // No detections found, mark as complete with empty results
-            await movementdb.put(movement_key, {
-                ...movement,
-                mlProcessing: false
-            });
-            logger.debug('No detections for movement', { movement: movement_key });
-            return;
-        }
-        
-        // Convert accumulator to MLTag array
-        const tags: MLTag[] = Object.entries(detections).map(([tag, data]) => ({
-            tag,
-            maxProbability: data.maxProbability,
-            count: data.count,
-            maxProbabilityImage: data.maxProbabilityImage
-        })).sort((a, b) => b.maxProbability - a.maxProbability);
-        
-        // Final update: mark processing as complete
+        // Mark ML processing as complete (results already in database from processDetectionResult)
         await movementdb.put(movement_key, {
             ...movement,
             mlProcessing: false,
-            ml: {
-                success: true,
-                code: 0,
-                stdout: '',
-                stderr: '',
-                error: '',
-                tags
-            }
+            mlStatus: undefined
         });
         
+        const tags = movement.ml?.tags || [];
         logger.info('ML processing complete', { 
             movement: movement_key, 
             objectTypes: tags.length,
-            detections: tags.map(t => ({ tag: t.tag, probability: `${(t.maxProbability*100).toFixed(1)}%`, count: t.count, image: t.maxProbabilityImage }))
+            detections: tags.map(t => ({ 
+                tag: t.tag, 
+                probability: `${(t.maxProbability*100).toFixed(1)}%`, 
+                count: t.count, 
+                image: t.maxProbabilityImage 
+            }))
         });
         
-        // Clean up accumulator
-        delete detectionAccumulator[movement_key];
-        
-        // Clean up old image mappings for this movement
+        // Clean up image mappings for this movement
         for (const [imagePath, mvKey] of imageToMovementMap.entries()) {
             if (mvKey === movement_key) {
                 imageToMovementMap.delete(imagePath);
@@ -610,7 +585,7 @@ async function processMovement(cameraKey: string) : Promise<void> {
                     '-hide_banner', '-loglevel', 'info',
                     '-progress', 'pipe:1',
                     '-i', filepath,
-                    '-vf', 'fps=1/2,scale=640:640:force_original_aspect_ratio=decrease,pad=640:640:(ow-iw)/2:(oh-ih)/2',
+                    '-vf', 'fps=1,scale=640:640:force_original_aspect_ratio=decrease,pad=640:640:(ow-iw)/2:(oh-ih)/2',
                     `${framesPath}/mov${movement_key}_%04d.jpg`
                 ];
 
@@ -628,7 +603,22 @@ async function processMovement(cameraKey: string) : Promise<void> {
                 let ff_stdout = '', ff_stderr = '', ff_error = ''
                 let lastFrameNumber = 0;
 
-                ffmpeg.stdout.on('data', (data: string) => { 
+                // Update status to 'extracting' after a short delay to ensure ffmpeg has started
+                setTimeout(async () => {
+                    if (settingsCache.settings.enable_ml) {
+                        try {
+                            const m = await movementdb.get(movement_key);
+                            await movementdb.put(movement_key, {
+                                ...m,
+                                mlStatus: 'extracting'
+                            });
+                        } catch (e) {
+                            logger.warn('Failed to update status to extracting', { movement: movement_key, error: String(e) });
+                        }
+                    }
+                }, 100);
+
+                ffmpeg.stdout.on('data', async (data: string) => { 
                     ff_stdout += data;
                     const output = data.toString();
                     const lines = output.split('\n');
@@ -673,6 +663,19 @@ async function processMovement(cameraKey: string) : Promise<void> {
                                         frameNumber: frameNum,
                                         path: fullImagePath
                                     });
+                                    
+                                    // Update status to 'analyzing' on first frame
+                                    if (frameNum === 1) {
+                                        try {
+                                            const m = await movementdb.get(movement_key);
+                                            await movementdb.put(movement_key, {
+                                                ...m,
+                                                mlStatus: 'analyzing'
+                                            });
+                                        } catch (e) {
+                                            logger.warn('Failed to update status to analyzing', { movement: movement_key, error: String(e) });
+                                        }
+                                    }
                                     
                                     sendImageToMLDetection(fullImagePath, movement_key);
                                 } else {
@@ -781,7 +784,8 @@ async function processMovement(cameraKey: string) : Promise<void> {
                     seconds: 0,
                     pollCount: 1,
                     consecutivePollsWithoutMovement: 0,
-                    mlProcessing: settingsCache.settings.enable_ml
+                    mlProcessing: settingsCache.settings.enable_ml,
+                    mlStatus: settingsCache.settings.enable_ml ? 'starting' : undefined
                 })
 
                 cameraCache[cameraKey] = {...cameraCache[cameraKey], movementStatus: {current_key: movement_key, current_taskid: ffmpeg, status: "New movement detected", control: {...control, fn_not_finnished: false}}}
@@ -990,7 +994,21 @@ async function processController(
         })
         childProcess.stderr.on('data', (data: string) => {
             stderrBuffer += data;
-            logger.warn('Process stderr', { name, data: data.toString().trim() });
+            const output = data.toString();
+            
+            // Filter out common RTSP startup warnings that are harmless
+            const isRTSPStartupWarning = output.includes('RTP: PT=') && output.includes('bad cseq');
+            const isH264DecodeWarning = output.includes('[h264 @') && 
+                                       (output.includes('error while decoding MB') || 
+                                        output.includes('left block unavailable'));
+            
+            // Only log if it's not a known harmless startup warning
+            if (!isRTSPStartupWarning && !isH264DecodeWarning) {
+                logger.warn('Process stderr', { name, data: output.trim() });
+            } else {
+                // Log at debug level for filtered warnings
+                logger.debug('Process stderr (filtered)', { name, data: output.trim() });
+            }
         })
         childProcess.on('error', async (error: Error) => { 
             logger.error('Process error', { name, error: error.message });
@@ -1572,11 +1590,19 @@ async function main() {
                     });
                     
                     for (const line of lines) {
-                        if (line.includes('@')) {
-                            logger.info('ML detection', { result: line });
-                            processDetectionResult(line);
-                        } else {
-                            logger.debug('ML detection output (no @ symbol)', { line });
+                        // Try to parse as JSON (new format)
+                        try {
+                            const result = JSON.parse(line);
+                            if (result.image && result.detections) {
+                                logger.info('ML detection result', { 
+                                    image: result.image.split('/').pop(), 
+                                    detectionCount: result.detections.length 
+                                });
+                                processDetectionResult(line);
+                            }
+                        } catch (e) {
+                            // Not JSON, might be startup messages or other output
+                            logger.debug('ML detection non-JSON output', { line });
                         }
                     }
                 });
@@ -1627,7 +1653,17 @@ async function main() {
                     cameraEntry.name, 
                     cameraEntry.enable_streaming, 
                     '/usr/bin/ffmpeg', 
-                    ['-rtsp_transport', 'tcp', '-i', `rtsp://admin:${cameraEntry.passwd}@${cameraEntry.ip}:554/h264Preview_01_main`, '-hide_banner', '-loglevel', 'error', '-vcodec', 'copy', '-start_number', ((Date.now() / 1000 | 0) - 1600000000).toString(), streamFile ],
+                    [
+                        '-rtsp_transport', 'tcp',
+                        '-reorder_queue_size', '500',  // Buffer for packet reordering
+                        '-max_delay', '500000',         // 500ms max delay for reordering (in microseconds)
+                        '-i', `rtsp://admin:${cameraEntry.passwd}@${cameraEntry.ip}:554/h264Preview_01_main`,
+                        '-hide_banner',
+                        '-loglevel', 'error',
+                        '-vcodec', 'copy',
+                        '-start_number', ((Date.now() / 1000 | 0) - 1600000000).toString(),
+                        streamFile
+                    ],
                     [ 60, streamFile ],
                     ffmpeg_task,
                     null

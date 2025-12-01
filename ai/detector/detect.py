@@ -2,6 +2,7 @@ import os
 import cv2
 import sys
 import argparse
+import json
 
 # add path
 #realpath = os.path.abspath(__file__)
@@ -241,10 +242,22 @@ def main():
                 # Overwrite the original image with annotated version
                 cv2.imwrite(img_path, img_annotated)
                 
+                # Output single JSON line with image path and all detections
+                detections = []
                 for box, score, cl in zip(boxes, scores, classes):
                     left, top, right, bottom = [int(_b) for _b in box]
-                    print("%s @ (%d %d %d %d) %.3f" % (CLASSES[cl], left, top, right, bottom, score))
-                    sys.stdout.flush()  # Ensure output is sent immediately
+                    detections.append({
+                        "object": CLASSES[cl],
+                        "box": [left, top, right, bottom],
+                        "probability": float(score)
+                    })
+                
+                result = {
+                    "image": img_path,
+                    "detections": detections
+                }
+                print(json.dumps(result))
+                sys.stdout.flush()  # Ensure output is sent immediately
             
             if args.img_show or args.img_save:
                 print('\n\nIMG: {}'.format(img_name))
