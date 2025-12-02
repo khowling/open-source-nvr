@@ -571,6 +571,7 @@ const onSelectionChange = (_, d) => {
             columnId: "seconds",
             renderCell: (item) => {
               const isProcessing = item.processing_state === 'processing' || item.processing_state === 'pending';
+              const isFailed = item.processing_state === 'failed';
               return (
                 <TableCellLayout>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
@@ -580,6 +581,15 @@ const onSelectionChange = (_, d) => {
                         size="extra-tiny" 
                         title={item.processing_state === 'pending' ? 'Waiting to process' : 'Processing frames'}
                       />
+                    )}
+                    {isFailed && (
+                      <Badge 
+                        appearance="filled"
+                        color="danger"
+                        style={{ fontSize: '11px', padding: '2px 6px' }}
+                      >
+                        Error
+                      </Badge>
                     )}
                   </span>
                 </TableCellLayout>

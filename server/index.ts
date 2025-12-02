@@ -1155,19 +1155,33 @@ async function processCameraMovement(cameraKey: string): Promise<void> {
                     }, 3000);
                 }
                 
-                // Mark as completed
+                // Mark as completed or failed
                 try {
                     const m = await movementdb.get(encodeMovementKey(movement_key));
+                    const totalFrames = frameProcessor.getLastFrameNumber();
+                    const hasFailed = !isGraceful || totalFrames === 0 || code !== 255;
+                    
                     await movementdb.put(encodeMovementKey(movement_key), {
                         ...m,
-                        processing_state: 'completed' as const,
-                        processing_completed_at: Date.now()
+                        processing_state: hasFailed ? 'failed' as const : 'completed' as const,
+                        processing_completed_at: Date.now(),
+                        ...(hasFailed && { processing_error: totalFrames === 0 ? 'No frames extracted' : `ffmpeg exited with code ${code}` })
                     });
                     
-                    logger.info('Movement processing completed', {
-                        camera: cameraEntry.name,
-                        movement_key
-                    });
+                    if (hasFailed) {
+                        logger.warn('Movement processing failed', {
+                            camera: cameraEntry.name,
+                            movement_key,
+                            totalFrames,
+                            exitCode: code,
+                            graceful: isGraceful
+                        });
+                    } else {
+                        logger.info('Movement processing completed', {
+                            camera: cameraEntry.name,
+                            movement_key
+                        });
+                    }
                 } catch (error) {
                     logger.error('Failed to mark movement as completed', {
                         camera: cameraEntry.name,
