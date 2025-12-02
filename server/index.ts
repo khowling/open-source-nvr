@@ -635,7 +635,7 @@ async function detectCameraMovement(cameraKey: string): Promise<void> {
         if (hasMovement && !current_movement_key) {
             // New movement detected - create minimal database entry
             const startDate = Date.now();
-            const movement_key = (startDate / 1000 | 0) - MOVEMENT_KEY_EPOCH;
+            const movement_key = startDate;
             
             const movementEntry: MovementEntry = {
                 cameraKey,
@@ -1398,7 +1398,7 @@ async function processMovement(cameraKey: string) : Promise<void> {
                 const segmentsToLookBack = Math.ceil(cameraEntry.mSPollFrequency / (lhs_seg_duration_seq * 1000));
 
                 const startDate = Date.now(),
-                      movement_key = (startDate / 1000 | 0) - MOVEMENT_KEY_EPOCH,
+                      movement_key = startDate,
                       startSegment = parseInt(hls_segments[hls_segments.length - 1]) - segmentsToLookBack + 1
 
                 const framesPath = getFramesPath(disk, folder);
