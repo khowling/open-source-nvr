@@ -367,7 +367,19 @@ const onSelectionChange = (_, d) => {
     const img = `/image/${key}`
 
     // Show results if we have them, even if still processing
-    if (detection_output && detection_output.tags && detection_output.tags.length > 0) {
+    if (detection_output && detection_output.tags) {
+      if (detection_output.tags.length === 0) {
+        return (
+          <Badge 
+            appearance="tint"
+            color="subtle"
+            style={{ fontSize: '12px' }}
+          >
+            None
+          </Badge>
+        );
+      }
+      
       // Sort tags by maxProbability descending and format with percentage
       const sortedTags = [...detection_output.tags].sort((a, b) => b.maxProbability - a.maxProbability)
       return (
@@ -376,10 +388,10 @@ const onSelectionChange = (_, d) => {
             <Badge 
               key={idx}
               appearance="filled"
-              color="informative"
+              color="brand"
               style={{ whiteSpace: 'nowrap' }}
             >
-              {t.tag} {(t.maxProbability * 100).toFixed(0)}% ({t.count})
+              {t.tag} {(t.maxProbability * 100).toFixed(0)}%
             </Badge>
           ))}
         </div>
@@ -389,27 +401,25 @@ const onSelectionChange = (_, d) => {
     // Show precise status if ML processing is ongoing and no results yet
     if (detection_status) {
       const statusMessages = {
-        'starting': 'Starting frame extraction...',
-        'extracting': 'Processing frames...',
-        'analyzing': 'Analyzing frame...'
+        'starting': 'Starting',
+        'extracting': 'Processing',
+        'analyzing': 'Analyzing'
       };
-      const message = detection_status ? statusMessages[detection_status] : 'Detecting...';
+      const message = detection_status ? statusMessages[detection_status] : 'Processing';
       
       return (
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          <Spinner size="tiny" />
-          <Text variant="mediumPlus">{message}</Text>
-        </div>
+        <Badge 
+          appearance="tint"
+          color="warning"
+          style={{ 
+            fontSize: '12px',
+            fontWeight: 'bold',
+            padding: '4px 8px'
+          }}
+        >
+          {message}...
+        </Badge>
       )
-    }
-
-    // If we have detection_output but no tags, show link to image
-    if (detection_output && detection_output.tags) {
-      if (detection_output.tags.length === 0) {
-        return <a target="_blank" href={img}><Text variant="mediumPlus">Detection Image (no objects)</Text></a>
-      }
-      // Non-zero tags already handled above
-      return null;
     }
     
     // Legacy fallback for old ffmpeg data structure (if any exists)
@@ -560,8 +570,19 @@ const onSelectionChange = (_, d) => {
           createTableColumn({
             columnId: "seconds",
             renderCell: (item) => {
+              const isProcessing = item.processing_state === 'processing' || item.processing_state === 'pending';
               return (
-                <TableCellLayout>{item.seconds}s</TableCellLayout>
+                <TableCellLayout>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                    <span>{item.seconds}s</span>
+                    {isProcessing && (
+                      <Spinner 
+                        size="extra-tiny" 
+                        title={item.processing_state === 'pending' ? 'Waiting to process' : 'Processing frames'}
+                      />
+                    )}
+                  </span>
+                </TableCellLayout>
               )
             }
 
@@ -644,10 +665,14 @@ const onSelectionChange = (_, d) => {
           >
 
           <DataGridBody itemSize={50} height={700}>
-            {({ item, rowId }, style) => (
+            {({ item, rowId }, style) => {
+              const isProcessing = item.processing_state === 'processing' || item.processing_state === 'pending';
+              const className = isProcessing ? 'processing-row' : (highlightedKeys.has(item.key) ? 'highlighted-row' : '');
+              
+              return (
               <DataGridRow 
                 key={rowId} 
-                className={highlightedKeys.has(item.key) ? 'highlighted-row' : ''}
+                className={className}
                 style={{ 
                   ...style, 
                   cursor: 'pointer',
@@ -672,6 +697,7 @@ const onSelectionChange = (_, d) => {
                 )}
               </DataGridRow>
             )}
+            }
           </DataGridBody>
       </DataGrid>
 

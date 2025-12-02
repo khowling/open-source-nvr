@@ -75,7 +75,13 @@ class SSEManager {
         });
         
         ctx.req.on('error', (error: Error) => {
-            logger.error('SSE client error', { clientId, error: error.message });
+            // "aborted" errors are normal when client navigates/re-renders
+            const isAborted = error.message === 'aborted';
+            if (isAborted) {
+                logger.debug('SSE client connection aborted (normal during page changes)', { clientId });
+            } else {
+                logger.error('SSE client error', { clientId, error: error.message });
+            }
             this.removeClient(clientId);
         });
         
@@ -195,7 +201,16 @@ export const sseManager = new SSEManager();
  * Helper to format movement data for SSE broadcast
  */
 export function formatMovementForSSE(key: number, movement: any): any {
+    if (!movement) throw new Error(`Cannot format null movement ${key}`);
+    if (!movement.startDate) throw new Error(`Movement ${key} missing startDate`);
+    
     const startDate = new Date(movement.startDate);
+    
+    // Validate the date
+    if (isNaN(startDate.getTime())) {
+        throw new Error(`Movement ${key} has invalid startDate: ${movement.startDate} (${typeof movement.startDate})`);
+    }
+    
     return {
         key,
         startDate_en_GB: new Intl.DateTimeFormat('en-GB', {
@@ -210,8 +225,9 @@ export function formatMovementForSSE(key: number, movement: any): any {
             startSegment: movement.startSegment,
             seconds: movement.seconds,
             detection_status: movement.detection_status || 'complete',
-            ...(movement.detection_output?.tags && movement.detection_output.tags.length > 0 && {
-                detection_output: { tags: movement.detection_output.tags }
+            processing_state: movement.processing_state,
+            ...(movement.detection_output && {
+                detection_output: { tags: movement.detection_output.tags || [] }
             })
         }
     };

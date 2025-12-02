@@ -372,8 +372,9 @@ export function createFFmpegFrameProcessor(movement_key: number, framesPath: str
             const isInfoMessage = data.includes('Input #0') || data.includes('Output #0') || 
                                  data.includes('Stream mapping:') || data.includes('Duration:') ||
                                  data.includes('Press [q]') || data.includes('Stream #');
+            const isHLSNoise = data.includes('[hls @') && (data.includes("Skip ('#EXT-X-VERSION") || data.includes("Opening '"));
             
-            if (!isProgressInfo && !isInfoMessage) {
+            if (!isProgressInfo && !isInfoMessage && !isHLSNoise) {
                 logger.warn('ffmpeg stderr', { camera: cameraName, movement: movement_key, data: data.trim() });
             }
         },

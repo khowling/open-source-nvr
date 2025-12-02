@@ -57,12 +57,33 @@
   }
 }
 
+@keyframes processing-pulse {
+  0%, 100% {
+    background-color: rgba(255, 165, 0, 0.25);
+    transform: scale(1);
+  }
+  50% {
+    background-color: rgba(255, 165, 0, 0.5);
+    transform: scale(1.05);
+  }
+}
+
 .highlighted-row {
   animation: highlight-pulse 2s ease-in-out;
 }
 
 .highlighted-row:hover {
   animation: highlight-pulse 2s ease-in-out;
+}
+
+.processing-row {
+  animation: processing-pulse 2s ease-in-out infinite;
+  font-weight: bold;
+}
+
+.processing-row:hover {
+  animation: processing-pulse 2s ease-in-out infinite;
+  font-weight: bold;
 }
 
 @keyframes App-logo-spin {

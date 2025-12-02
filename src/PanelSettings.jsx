@@ -453,12 +453,6 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
                       <Slider style={{"width": "100%"}} disabled={!panel.values.enable_streaming}  min={0} max={60} step={1} defaultValue={panel.values.segments_post_movement}  onChange={(_,data) => updatePanelValues('segments_post_movement', data.value)} />
                     </div>
 
-                    { currCamera && currCamera.ffmpeg_process &&
-                    <Alert intent={currCamera.ffmpeg_process.error ? 'error' : (currCamera.ffmpeg_process.running ?  'success' : 'warning')}>
-                      {JSON.stringify(currCamera.ffmpeg_process, null, 2)}
-                    </Alert>
-                    }
-
                     <Divider><b>Movement processing</b></Divider>
                     
                     <Checkbox disabled={!panel.values.enable_streaming} label="Enable Movement" checked={panel.values.enable_movement} onChange={(_, data) => updatePanelValues('enable_movement', data.checked)} />
@@ -478,12 +472,6 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
                       <Slider style={{"width": "100%"}} disabled={!panel.values.enable_movement}  min={60} max={600} step={10} defaultValue={panel.values.secMaxSingleMovement}  onChange={(_,data) => updatePanelValues('secMaxSingleMovement', data.value)} />
                     </div>
 
-                    { currCamera && currCamera.movementStatus &&
-                    <Alert intent={currCamera.movementStatus.fail ? 'error' : (currCamera.movementStatus.current_movement ?  'success' : 'warning')}>
-                      {JSON.stringify(currCamera.movementStatus, null, 2)}
-                      </Alert>
-                    }
-
               </DialogContent>
             }
 
@@ -492,6 +480,12 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
               { panel.key === 'edit' &&
                       
                  <MySplitButton  label="Delete" disabled={panel.invalidArray.length >0}  items={[
+                        {
+                            key: 'reset',
+                            text: 'Reset Recordings (keep camera)',
+                            iconProps: { iconName: 'Refresh' },
+                            onClick: savePanel
+                        },
                         {
                             key: 'del',
                             text: 'Delete Camera',

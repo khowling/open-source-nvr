@@ -45,13 +45,29 @@ interface TagFilter {
 interface MovementEntry {
     cameraKey: string;
     startDate: number;
-    startSegment: number;
+    startSegment: number | null;
     lhs_seg_duration_seq?: number;
     seconds: number;
     pollCount: number;
     consecutivePollsWithoutMovement: number;
     detection_status?: string;  // 'starting', 'extracting', 'analyzing', or undefined when complete
     detection_output?: DetectionOutput;
+    
+    // Processing state fields
+    processing_state?: 'pending' | 'processing' | 'completed' | 'failed';
+    processing_started_at?: number;
+    processing_completed_at?: number;
+    processing_error?: string;
+    processing_attempts?: number;
+    endSegment?: number | null;  // Final segment when movement ended
+    
+    // Additional timestamps and keys for new detection logic
+    created?: number;      // When movement record was created
+    start?: number;        // When movement actually started
+    stop?: number;         // When movement actually stopped
+    updated?: number;      // Last update timestamp
+    movement_key?: string; // Alternative key format for new detection logic
+    camera_key?: string;   // Alternative camera key format
 }
 
 interface MovementToClient {
@@ -62,6 +78,7 @@ interface MovementToClient {
         startSegment: number;
         seconds: number;
         detection_status?: string;
+        processing_state?: 'pending' | 'processing' | 'completed' | 'failed';
         detection_output?: DetectionOutput;
     };
     startDate_en_GB: string;
@@ -98,7 +115,19 @@ interface MovementStatus {
     control: ExecuteControl;
     status?: string;
     current_key?: number;
-    current_taskid?: ChildProcessWithoutNullStreams;
+}
+
+interface MovementDetectionStatus {
+    control: ExecuteControl;
+    status?: string;
+    current_movement_key?: number;
+}
+
+interface ProcessingCursor {
+    cameraKey: string;
+    last_processed_movement_key: number;
+    last_check_at: number;
+    is_processing: boolean;
 }
 
 interface ExecuteControl {
@@ -115,15 +144,21 @@ interface CameraEntryClient extends CameraEntry {
 
 interface CameraCacheEntry {
     cameraEntry: CameraEntry;
-    ffmpeg_task?: ChildProcessWithoutNullStreams;
-    movementStatus?: MovementStatus;
-    lastMovementCheck?: number;  // Track last time we checked for movement
+    ffmpeg_task?: ChildProcessWithoutNullStreams;  // Streaming task only
+    movementDetectionStatus?: MovementDetectionStatus;  // Renamed from movementStatus
+    lastMovementCheck?: number;
 }
 
 interface CameraCache { 
     [key: string]: CameraCacheEntry;
 }
 var cameraCache: CameraCache = {}
+
+// Processing controller intervals (one per camera)
+const processingIntervals: Map<string, NodeJS.Timeout> = new Map();
+
+// Track ffmpeg processes for each movement (key: movement_key, value: process)
+const movementFFmpegProcesses: Map<number, ChildProcessWithoutNullStreams> = new Map();
 
 // Global ML detection process
 var mlDetectionProcess: ChildProcessWithoutNullStreams | null = null;
@@ -150,6 +185,7 @@ const db = new Level(process.env['DBPATH'] || './mydb',  { valueEncoding : 'json
 const cameradb = db.sublevel<string, CameraEntry>('cameras', { valueEncoding : 'json' })
 const movementdb = db.sublevel<string, MovementEntry>('movements', { valueEncoding : 'json' })
 const settingsdb = db.sublevel<string, Settings>('settings', { valueEncoding : 'json' })
+const cursordb = db.sublevel<string, ProcessingCursor>('processing_cursors', { valueEncoding : 'json' })
 
 // Epoch offset for movement keys (Sept 13, 2020)
 const MOVEMENT_KEY_EPOCH = 1600000000;
@@ -171,14 +207,63 @@ async function gracefulShutdown(signal: string): Promise<void> {
     isShuttingDown = true;
     logger.info('Graceful shutdown initiated', { signal });
     
+    // Stop processing controllers
+    for (const cameraKey of processingIntervals.keys()) {
+        const interval = processingIntervals.get(cameraKey);
+        if (interval) {
+            clearInterval(interval);
+            processingIntervals.delete(cameraKey);
+        }
+    }
+    logger.info('Processing controllers stopped');
+    
     const shutdownPromises: Promise<void>[] = [];
     
-    // Stop all camera ffmpeg processes
+    // Stop all movement extraction ffmpeg processes
+    for (const [movement_key, ffmpeg] of movementFFmpegProcesses.entries()) {
+        if (ffmpeg && ffmpeg.exitCode === null) {
+            logger.info('Stopping movement ffmpeg process', { movement: movement_key, pid: ffmpeg.pid });
+            
+            const promise = new Promise<void>((resolve) => {
+                const timeout = setTimeout(() => {
+                    logger.warn('Movement ffmpeg did not terminate in time - forcing', { 
+                        movement: movement_key,
+                        pid: ffmpeg.pid 
+                    });
+                    try {
+                        ffmpeg.kill('SIGKILL');
+                    } catch (e) {
+                        logger.error('Failed to force kill movement ffmpeg', { error: String(e) });
+                    }
+                    resolve();
+                }, 5000);
+                
+                ffmpeg.once('close', () => {
+                    clearTimeout(timeout);
+                    logger.info('Movement ffmpeg terminated', { movement: movement_key });
+                    resolve();
+                });
+                
+                try {
+                    ffmpeg.kill();
+                } catch (e) {
+                    logger.error('Failed to kill movement ffmpeg', { error: String(e) });
+                    clearTimeout(timeout);
+                    resolve();
+                }
+            });
+            
+            shutdownPromises.push(promise);
+        }
+    }
+    logger.info('Movement ffmpeg processes stopped', { count: movementFFmpegProcesses.size });
+    
+    // Stop all camera streaming ffmpeg processes
     for (const cameraKey of Object.keys(cameraCache)) {
-        const { ffmpeg_task, cameraEntry, movementStatus } = cameraCache[cameraKey];
+        const { ffmpeg_task, cameraEntry } = cameraCache[cameraKey];
         
         if (ffmpeg_task && ffmpeg_task.exitCode === null) {
-            logger.info('Stopping ffmpeg process', { camera: cameraEntry.name, pid: ffmpeg_task.pid });
+            logger.info('Stopping camera ffmpeg process', { camera: cameraEntry.name, pid: ffmpeg_task.pid });
             
             const promise = new Promise<void>((resolve) => {
                 const timeout = setTimeout(() => {
@@ -196,7 +281,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
                 
                 ffmpeg_task.once('close', () => {
                     clearTimeout(timeout);
-                    logger.info('ffmpeg process terminated', { camera: cameraEntry.name });
+                    logger.info('Camera ffmpeg terminated', { camera: cameraEntry.name });
                     resolve();
                 });
                 
@@ -204,45 +289,6 @@ async function gracefulShutdown(signal: string): Promise<void> {
                     ffmpeg_task.kill();
                 } catch (e) {
                     logger.error('Failed to kill ffmpeg process', { error: String(e) });
-                    clearTimeout(timeout);
-                    resolve();
-                }
-            });
-            
-            shutdownPromises.push(promise);
-        }
-        
-        // Stop any ongoing movement detection ffmpeg processes
-        if (movementStatus?.current_taskid && movementStatus.current_taskid.exitCode === null) {
-            logger.info('Stopping movement detection process', { 
-                camera: cameraEntry.name, 
-                pid: movementStatus.current_taskid.pid 
-            });
-            
-            const promise = new Promise<void>((resolve) => {
-                const timeout = setTimeout(() => {
-                    logger.warn('Movement process did not terminate in time - forcing', { 
-                        camera: cameraEntry.name, 
-                        pid: movementStatus.current_taskid.pid 
-                    });
-                    try {
-                        movementStatus.current_taskid.kill('SIGKILL');
-                    } catch (e) {
-                        logger.error('Failed to force kill movement process', { error: String(e) });
-                    }
-                    resolve();
-                }, 5000);
-                
-                movementStatus.current_taskid.once('close', () => {
-                    clearTimeout(timeout);
-                    logger.info('Movement process terminated', { camera: cameraEntry.name });
-                    resolve();
-                });
-                
-                try {
-                    movementStatus.current_taskid.kill();
-                } catch (e) {
-                    logger.error('Failed to kill movement process', { error: String(e) });
                     clearTimeout(timeout);
                     resolve();
                 }
@@ -380,6 +426,7 @@ async function processDetectionResult(line: string): Promise<void> {
         try {
             // Read current movement state from database
             const movement: MovementEntry = await movementdb.get(encodeMovementKey(movement_key));
+            if (!movement) throw new Error(`Movement ${movement_key} not found in database`);
             
             // Get existing tags or initialize empty
             const existingTags = movement.detection_output?.tags || [];
@@ -396,9 +443,17 @@ async function processDetectionResult(line: string): Promise<void> {
                     frame: imageName, 
                     movement: movement_key,
                     processingTime: processingTimeMs ? `${processingTimeMs}ms` : 'unknown',
-                    objects: result.detections.map(d => `${d.object}(${(d.probability * 100).toFixed(1)}%)`).join(', ')
+                    objects: result.detections.map(d => `${d.object}(${(d.probability * 100).toFixed(1)}%)`).join(', '),
+                    existingTags: existingTags.length
                 });
             }
+            
+            logger.debug('Processing detections for movement', {
+                movement: movement_key,
+                frame: imageName,
+                detectionCount: result.detections.length,
+                existingTagsCount: existingTags.length
+            });
             
             // Process all detections for this image
             for (const detection of result.detections) {
@@ -434,12 +489,17 @@ async function processDetectionResult(line: string): Promise<void> {
             
             await movementdb.put(encodeMovementKey(movement_key), updatedMovement);
             
+            logger.info('Movement updated with ML results', {
+                movement: movement_key,
+                tagCount: updatedTags.length,
+                tags: updatedTags.map(t => `${t.tag}(${(t.maxProbability*100).toFixed(1)}%)`).join(', ')
+            });
+            
             // Broadcast ML update via SSE
             if (sseManager.getClientCount() > 0) {
-                const formattedMovement = formatMovementForSSE(movement_key, updatedMovement);
                 sseManager.broadcastMovementUpdate({
                     type: 'movement_update',
-                    movement: formattedMovement
+                    movement: formatMovementForSSE(movement_key, updatedMovement)
                 });
             }
             
@@ -466,6 +526,7 @@ async function processDetectionResult(line: string): Promise<void> {
 async function flushDetectionsToDatabase(movement_key: number): Promise<void> {
     try {
         const movement: MovementEntry = await movementdb.get(encodeMovementKey(movement_key));
+        if (!movement) throw new Error(`Movement ${movement_key} not found in database`);
         
         // Mark ML processing as complete (results already in database from processDetectionResult)
         await movementdb.put(encodeMovementKey(movement_key), {
@@ -489,8 +550,767 @@ async function flushDetectionsToDatabase(movement_key: number): Promise<void> {
     }
 }
 
- // Called every second for each camera, to process movement
+// Fast polling function - only detects and records movements, doesn't process frames
+async function detectCameraMovement(cameraKey: string): Promise<void> {
+    const { movementDetectionStatus, cameraEntry } = cameraCache[cameraKey];
 
+    // Circuit breaker
+    const control = { fn_not_finished: false, fail: false, check_after: 0 };
+    const { fn_not_finished, fail, check_after } = movementDetectionStatus?.control || control;
+    
+    if (fn_not_finished || (fail && (!check_after || check_after > Date.now()))) {
+        logger.debug('detectCameraMovement skipped - already in progress or in failure backoff', { 
+            camera: cameraEntry.name, 
+            cameraKey,
+            fn_not_finished,
+            fail,
+            check_after: check_after ? new Date(check_after).toISOString() : null
+        });
+        return;
+    }
+    
+    // Set flag to prevent concurrent execution
+    cameraCache[cameraKey] = {
+        ...cameraCache[cameraKey],
+        movementDetectionStatus: {
+            ...movementDetectionStatus,
+            control: { fail, check_after, fn_not_finished: true }
+        }
+    };
+    
+    logger.debug('detectCameraMovement started', { 
+        camera: cameraEntry.name, 
+        cameraKey,
+        current_movement_key: movementDetectionStatus?.current_movement_key
+    });
+
+    const { ip, passwd } = cameraEntry;
+    
+    try {
+        const { current_movement_key } = movementDetectionStatus || { current_movement_key: undefined };
+        
+        const apiUrl = `http://${ip}/api.cgi?cmd=GetMdState&user=admin&password=${passwd}`;
+        
+        // Fetch with timeout
+        const fetchAndReadPromise = (async () => {
+            const response = await fetch(apiUrl);
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            return await response.text();
+        })();
+        
+        const timeoutPromise = new Promise<string>((_, reject) => 
+            setTimeout(() => reject(new Error('Request timeout after 5000ms')), 5000)
+        );
+        
+        const body_json = await Promise.race([fetchAndReadPromise, timeoutPromise]);
+        
+        // Parse the JSON response (camera returns JSON with text/html content type)
+        const body = JSON.parse(body_json);
+        const movementState = body[0]?.value?.state;
+        
+        logger.info('Movement detection API result', {
+            camera: cameraEntry.name,
+            state: movementState === 1 ? 'MOVEMENT' : 'NO_MOVEMENT',
+            rawState: movementState
+        });
+        
+        if (body[0]?.error) {
+            throw new Error(`Camera API error: ${JSON.stringify(body[0].error)}`);
+        }
+        
+        const hasMovement = movementState === 1;
+        
+        // Only log poll when there's something interesting (movement or tracking existing movement)
+        if (hasMovement || current_movement_key !== undefined) {
+            logger.debug('Movement detection poll', {
+                camera: cameraEntry.name,
+                hasMovement,
+                current_movement_key
+            });
+        }
+        
+        // Handle movement lifecycle
+        if (hasMovement && !current_movement_key) {
+            // New movement detected - create minimal database entry
+            const startDate = Date.now();
+            const movement_key = (startDate / 1000 | 0) - MOVEMENT_KEY_EPOCH;
+            
+            const movementEntry: MovementEntry = {
+                cameraKey,
+                startDate,
+                startSegment: null as any,  // Will be set during processing
+                seconds: 0,
+                pollCount: 0,
+                consecutivePollsWithoutMovement: 0,
+                processing_state: 'pending'
+            };
+            
+            await movementdb.put(encodeMovementKey(movement_key), movementEntry);
+            
+            logger.info('New movement detected', {
+                camera: cameraEntry.name,
+                movement_key
+            });
+            
+            // Update cache
+            cameraCache[cameraKey] = {
+                ...cameraCache[cameraKey],
+                movementDetectionStatus: {
+                    current_movement_key: movement_key,
+                    status: 'Movement detected',
+                    control: { ...control, fn_not_finished: false }
+                }
+            };
+            
+            // Notify SSE clients
+            sseManager.broadcastMovementUpdate({
+                type: 'movement_new',
+                movement: formatMovementForSSE(movement_key, movementEntry)
+            });
+            
+            // Immediately trigger processing instead of waiting for next 5s interval
+            setImmediate(() => processCameraMovement(cameraKey));
+            
+        } else if (!hasMovement && current_movement_key !== undefined) {
+            // Movement ended - mark in database and check if should terminate
+            logger.debug('Movement ended - checking termination conditions', {
+                camera: cameraEntry.name,
+                movement_key: current_movement_key
+            });
+            
+            const existing = await movementdb.get(encodeMovementKey(current_movement_key));
+            const now = Date.now();
+            const elapsedSeconds = Math.floor((now - existing.startDate) / 1000);
+            const consecutivePolls = (existing.consecutivePollsWithoutMovement || 0) + 1;
+            
+            // Check if movement should end
+            const pollsWithoutMovement = cameraEntry.pollsWithoutMovement;
+            const maxDuration = cameraEntry.secMaxSingleMovement || 600;
+            const shouldEndMovement = 
+                pollsWithoutMovement === 0 || // Immediate stop
+                consecutivePolls >= pollsWithoutMovement || // Exceeded poll threshold
+                elapsedSeconds > maxDuration; // Exceeded max duration
+            
+            logger.debug('Movement termination check', {
+                camera: cameraEntry.name,
+                movement_key: current_movement_key,
+                elapsedSeconds,
+                consecutivePolls,
+                pollsWithoutMovement,
+                maxDuration,
+                shouldEndMovement
+            });
+            
+            if (shouldEndMovement) {
+                // Terminate ffmpeg process if still running
+                const ffmpegProcess = movementFFmpegProcesses.get(current_movement_key);
+                if (ffmpegProcess && ffmpegProcess.exitCode === null) {
+                    const reason = elapsedSeconds > maxDuration
+                        ? `max duration (${maxDuration}s) exceeded`
+                        : (pollsWithoutMovement === 0 
+                            ? 'camera reports no movement (immediate stop)'
+                            : `${consecutivePolls} polls without movement (threshold: ${pollsWithoutMovement})`);
+                    
+                    logger.info('Terminating movement ffmpeg', {
+                        camera: cameraEntry.name,
+                        movement_key: current_movement_key,
+                        reason,
+                        pid: ffmpegProcess.pid
+                    });
+                    
+                    ffmpegProcess.kill();
+                }
+                
+                const updated: MovementEntry = {
+                    ...existing,
+                    seconds: elapsedSeconds,
+                    consecutivePollsWithoutMovement: consecutivePolls
+                };
+                
+                await movementdb.put(encodeMovementKey(current_movement_key), updated);
+                
+                logger.info('Movement ended', {
+                    camera: cameraEntry.name,
+                    movement_key: current_movement_key,
+                    duration: elapsedSeconds,
+                    consecutivePolls,
+                    reason: elapsedSeconds > maxDuration ? 'max_duration' : 'no_movement'
+                });
+                
+                // Update cache
+                cameraCache[cameraKey] = {
+                    ...cameraCache[cameraKey],
+                    movementDetectionStatus: {
+                        current_movement_key: undefined,
+                        status: 'No movement',
+                        control: { ...control, fn_not_finished: false }
+                    }
+                };
+                
+                // Notify SSE clients
+                sseManager.broadcastMovementUpdate({
+                    type: 'movement_complete',
+                    movement: formatMovementForSSE(current_movement_key, updated)
+                });
+            } else {
+                // Still within grace period - update polls count
+                const updated: MovementEntry = {
+                    ...existing,
+                    seconds: elapsedSeconds,
+                    consecutivePollsWithoutMovement: consecutivePolls
+                };
+                
+                await movementdb.put(encodeMovementKey(current_movement_key), updated);
+                
+                logger.debug('Movement grace period', {
+                    camera: cameraEntry.name,
+                    movement_key: current_movement_key,
+                    consecutivePolls,
+                    threshold: pollsWithoutMovement
+                });
+            }
+            
+        } else if (hasMovement && current_movement_key !== undefined) {
+            // Movement continuation - update duration and check max duration
+            const existing = await movementdb.get(encodeMovementKey(current_movement_key));
+            const now = Date.now();
+            const elapsedSeconds = Math.floor((now - existing.startDate) / 1000);
+            const maxDuration = cameraEntry.secMaxSingleMovement || 600;
+            
+            if (elapsedSeconds > maxDuration) {
+                // Max duration exceeded - terminate
+                const ffmpegProcess = movementFFmpegProcesses.get(current_movement_key);
+                if (ffmpegProcess && ffmpegProcess.exitCode === null) {
+                    logger.info('Terminating movement ffmpeg', {
+                        camera: cameraEntry.name,
+                        movement_key: current_movement_key,
+                        reason: `max duration (${maxDuration}s) exceeded`,
+                        pid: ffmpegProcess.pid
+                    });
+                    ffmpegProcess.kill();
+                }
+                
+                const updated: MovementEntry = {
+                    ...existing,
+                    seconds: elapsedSeconds,
+                    consecutivePollsWithoutMovement: 0
+                };
+                
+                await movementdb.put(encodeMovementKey(current_movement_key), updated);
+                
+                logger.info('Movement ended - max duration', {
+                    camera: cameraEntry.name,
+                    movement_key: current_movement_key,
+                    duration: elapsedSeconds
+                });
+                
+                // Clear current movement
+                cameraCache[cameraKey] = {
+                    ...cameraCache[cameraKey],
+                    movementDetectionStatus: {
+                        current_movement_key: undefined,
+                        status: 'No movement',
+                        control: { ...control, fn_not_finished: false }
+                    }
+                };
+                
+                // Notify SSE clients
+                sseManager.broadcastMovementUpdate({
+                    type: 'movement_complete',
+                    movement: formatMovementForSSE(current_movement_key, updated)
+                });
+            } else {
+                // Normal continuation - reset polls counter
+                const updated: MovementEntry = {
+                    ...existing,
+                    seconds: elapsedSeconds,
+                    pollCount: (existing.pollCount || 0) + 1,
+                    consecutivePollsWithoutMovement: 0  // Reset on movement
+                };
+                
+                await movementdb.put(encodeMovementKey(current_movement_key), updated);
+                
+                logger.debug('Movement continuation', {
+                    camera: cameraEntry.name,
+                    movement_key: current_movement_key,
+                    duration: elapsedSeconds
+                });
+                
+                cameraCache[cameraKey] = {
+                    ...cameraCache[cameraKey],
+                    movementDetectionStatus: {
+                        ...movementDetectionStatus,
+                        status: 'Movement continuing',
+                        control: { ...control, fn_not_finished: false }
+                    }
+                };
+            }
+        } else {
+            // No movement and no current movement - only log on state change
+            if (movementDetectionStatus?.status !== 'No movement') {
+                cameraCache[cameraKey] = {
+                    ...cameraCache[cameraKey],
+                    movementDetectionStatus: {
+                        ...movementDetectionStatus,
+                        status: 'No movement',
+                        control: { ...control, fn_not_finished: false }
+                    }
+                };
+            } else {
+                // Just reset flag, don't update cache
+                if (movementDetectionStatus) {
+                    movementDetectionStatus.control.fn_not_finished = false;
+                }
+            }
+        }
+        
+    } catch (error) {
+        const filtersensitive = String(error).replace(new RegExp(passwd, 'g'), '****');
+        logger.error('detectCameraMovement failed', {
+            camera: cameraEntry.name,
+            error: filtersensitive
+        });
+        
+        cameraCache[cameraKey] = {
+            ...cameraCache[cameraKey],
+            movementDetectionStatus: {
+                ...movementDetectionStatus,
+                status: `Detection failed: ${filtersensitive}`,
+                control: {
+                    fail: true,
+                    check_after: Date.now() + 10000, // 10 seconds
+                    fn_not_finished: false
+                }
+            }
+        };
+    } finally {
+        // Always reset fn_not_finished flag, even if error occurred mid-function
+        if (cameraCache[cameraKey]?.movementDetectionStatus) {
+            cameraCache[cameraKey].movementDetectionStatus.control.fn_not_finished = false;
+            
+            // Only log completion for interesting events (not idle polling)
+            if (movementDetectionStatus?.current_movement_key !== undefined || 
+                movementDetectionStatus?.status !== 'No movement') {
+                logger.debug('detectCameraMovement completed - flag reset', {
+                    camera: cameraEntry?.name,
+                    cameraKey
+                });
+            }
+        }
+    }
+}
+
+// Helper: Find the next unprocessed movement for a camera
+async function findNextUnprocessedMovement(cameraKey: string): Promise<{ key: number; movement: MovementEntry } | null> {
+    try {
+        // Get cursor to know where we left off
+        let cursor = await cursordb.get(cameraKey);
+        
+        // Level v10 returns undefined for missing keys instead of throwing
+        if (!cursor) {
+            cursor = {
+                cameraKey,
+                last_processed_movement_key: 0,
+                last_check_at: Date.now(),
+                is_processing: false
+            };
+            await cursordb.put(cameraKey, cursor);
+        }
+        
+        // Find movements for this camera that are pending or failed (with retries left)
+        const movements: Array<{ key: number; movement: MovementEntry }> = [];
+        
+        for await (const [key, movement] of movementdb.iterator()) {
+            const movement_key = parseInt(key);
+            
+            // Only movements for this camera
+            if (movement.cameraKey !== cameraKey) continue;
+            
+            // Only movements after the cursor
+            if (movement_key <= cursor.last_processed_movement_key) continue;
+            
+            // Check if pending or failed with retries left
+            const isPending = !movement.processing_state || movement.processing_state === 'pending';
+            const isFailed = movement.processing_state === 'failed' && (movement.processing_attempts || 0) < 3;
+            
+            if (isPending || isFailed) {
+                movements.push({ key: movement_key, movement });
+            }
+        }
+        
+        // Return the oldest one (lowest key)
+        if (movements.length > 0) {
+            movements.sort((a, b) => a.key - b.key);
+            return movements[0];
+        }
+        
+        return null;
+    } catch (error) {
+        logger.error('findNextUnprocessedMovement failed', { cameraKey, error: String(error) });
+        return null;
+    }
+}
+
+// Slow processing function - processes one movement at a time per camera
+async function processCameraMovement(cameraKey: string): Promise<void> {
+    const { cameraEntry } = cameraCache[cameraKey];
+    
+    if (!cameraEntry) {
+        logger.warn('processCameraMovement - camera not found', { cameraKey });
+        return;
+    }
+    
+    try {
+        // Check if already processing
+        let cursor = await cursordb.get(cameraKey);
+        
+        // Level v10 returns undefined for missing keys
+        if (!cursor) {
+            cursor = {
+                cameraKey,
+                last_processed_movement_key: 0,
+                last_check_at: Date.now(),
+                is_processing: false
+            };
+        }
+        
+        if (cursor.is_processing) {
+            logger.debug('processCameraMovement - already processing', { 
+                camera: cameraEntry.name, 
+                cameraKey 
+            });
+            return;
+        }
+        
+        // Find next movement to process
+        const next = await findNextUnprocessedMovement(cameraKey);
+        
+        if (!next) {
+            logger.debug('processCameraMovement - no pending movements', { 
+                camera: cameraEntry.name, 
+                cameraKey 
+            });
+            
+            // Update cursor check time
+            await cursordb.put(cameraKey, {
+                ...cursor,
+                last_check_at: Date.now()
+            });
+            return;
+        }
+        
+        const { key: movement_key, movement } = next;
+        
+        logger.info('Processing movement', {
+            camera: cameraEntry.name,
+            movement_key,
+            attempt: (movement.processing_attempts || 0) + 1
+        });
+        
+        // Mark as processing
+        await cursordb.put(cameraKey, {
+            ...cursor,
+            is_processing: true,
+            last_check_at: Date.now()
+        });
+        
+        const now = Date.now();
+        await movementdb.put(encodeMovementKey(movement_key), {
+            ...movement,
+            processing_state: 'processing',
+            processing_started_at: now,
+            processing_attempts: (movement.processing_attempts || 0) + 1
+        });
+        
+        // Get segment information from HLS playlist
+        const { disk, folder } = cameraEntry;
+        const filepath = `${disk}/${folder}/stream.m3u8`;
+        
+        let startSegment: number;
+        let lhs_seg_duration_seq: number;
+        
+        try {
+            const hls = (await fs.readFile(filepath)).toString();
+            const hls_segments = [...hls.matchAll(re)].map(m => m[1]);
+            const targetduration = hls.match(/#EXT-X-TARGETDURATION:([\d])/);
+            lhs_seg_duration_seq = parseInt(targetduration && targetduration.length > 1 ? targetduration[1] : "2");
+            
+            // Calculate start segment accounting for poll frequency
+            const segmentsToLookBack = Math.ceil(cameraEntry.mSPollFrequency / (lhs_seg_duration_seq * 1000));
+            startSegment = parseInt(hls_segments[hls_segments.length - 1]) - segmentsToLookBack + 1;
+            
+            // Update movement with segment info
+            await movementdb.put(encodeMovementKey(movement_key), {
+                ...movement,
+                startSegment,
+                lhs_seg_duration_seq,
+                processing_state: 'processing',
+                processing_started_at: now,
+                processing_attempts: (movement.processing_attempts || 0) + 1
+            });
+        } catch (error) {
+            logger.error('Failed to read HLS playlist', {
+                camera: cameraEntry.name,
+                movement_key,
+                error: String(error)
+            });
+            
+            // Mark as failed
+            await movementdb.put(encodeMovementKey(movement_key), {
+                ...movement,
+                processing_state: 'failed',
+                processing_error: `Failed to read HLS playlist: ${String(error)}`,
+                processing_completed_at: Date.now()
+            });
+            
+            // Reset cursor
+            await cursordb.put(cameraKey, {
+                ...cursor,
+                is_processing: false,
+                last_processed_movement_key: movement_key,
+                last_check_at: Date.now()
+            });
+            return;
+        }
+        
+        // Setup frame extraction
+        const framesPath = getFramesPath(disk, folder);
+        await ensureDir(framesPath);
+        
+        const ffmpegArgs = [
+            '-hide_banner', '-loglevel', 'info',
+            '-progress', 'pipe:1',
+            '-i', filepath,
+            '-vf', 'fps=1,scale=640:640:force_original_aspect_ratio=decrease,pad=640:640:(ow-iw)/2:(oh-ih)/2',
+            `${framesPath}/mov${movement_key}_%04d.jpg`
+        ];
+        
+        logger.info('Starting ffmpeg for frame extraction', {
+            camera: cameraEntry.name,
+            movement: movement_key,
+            framesPath,
+            mlEnabled: settingsCache.settings.detection_enable
+        });
+        
+        // Update status
+        if (settingsCache.settings.detection_enable) {
+            setTimeout(async () => {
+                try {
+                    const m = await movementdb.get(encodeMovementKey(movement_key));
+                    await movementdb.put(encodeMovementKey(movement_key), {
+                        ...m,
+                        detection_status: 'extracting'
+                    });
+                    
+                    if (sseManager.getClientCount() > 0) {
+                        sseManager.broadcastMovementUpdate({
+                            type: 'movement_update',
+                            movement: formatMovementForSSE(movement_key, { ...m, detection_status: 'extracting' })
+                        });
+                    }
+                } catch (e) {
+                    logger.warn('Failed to update status to extracting', { movement: movement_key, error: String(e) });
+                }
+            }, 100);
+        }
+        
+        // Create frame processor
+        const frameProcessor = createFFmpegFrameProcessor(movement_key, framesPath, cameraEntry.name);
+        
+        // Spawn ffmpeg
+        const ffmpeg = spawnProcess({
+            name: `ffmpeg-${cameraEntry.name}-mov${movement_key}`,
+            cmd: '/usr/bin/ffmpeg',
+            args: ffmpegArgs,
+            onStdout: frameProcessor.processStdout,
+            onStderr: frameProcessor.processStderr,
+            onError: (error: Error) => {
+                logger.error('ffmpeg frame extraction error', {
+                    camera: cameraEntry.name,
+                    movement: movement_key,
+                    error: error.message
+                });
+            },
+            onClose: async (code: number | null, signal: string | null) => {
+                const isGraceful = code === 0 || code === 255 || signal === 'SIGTERM' || signal === 'SIGKILL' || isShuttingDown;
+                
+                logger.info('ffmpeg frame extraction complete', {
+                    camera: cameraEntry.name,
+                    movement: movement_key,
+                    exitCode: code,
+                    signal,
+                    totalFrames: frameProcessor.getLastFrameNumber(),
+                    graceful: isGraceful
+                });
+                
+                // Remove from tracking map
+                movementFFmpegProcesses.delete(movement_key);
+                
+                // Flush ML detections if enabled
+                if (settingsCache.settings.detection_enable) {
+                    setTimeout(async () => {
+                        await flushDetectionsToDatabase(movement_key);
+                    }, 3000);
+                }
+                
+                // Mark as completed
+                try {
+                    const m = await movementdb.get(encodeMovementKey(movement_key));
+                    await movementdb.put(encodeMovementKey(movement_key), {
+                        ...m,
+                        processing_state: 'completed' as const,
+                        processing_completed_at: Date.now()
+                    });
+                    
+                    logger.info('Movement processing completed', {
+                        camera: cameraEntry.name,
+                        movement_key
+                    });
+                } catch (error) {
+                    logger.error('Failed to mark movement as completed', {
+                        camera: cameraEntry.name,
+                        movement_key,
+                        error: String(error)
+                    });
+                }
+                
+                // Reset cursor to allow next movement to process
+                try {
+                    const c = await cursordb.get(cameraKey);
+                    if (c) {
+                        await cursordb.put(cameraKey, {
+                            ...c,
+                            is_processing: false,
+                            last_processed_movement_key: movement_key,
+                            last_check_at: Date.now()
+                        });
+                        logger.debug('Cursor reset after ffmpeg completion - ready for next movement', {
+                            camera: cameraEntry.name,
+                            movement_key
+                        });
+                    }
+                } catch (error) {
+                    logger.error('Failed to reset cursor after completion', {
+                        camera: cameraEntry.name,
+                        error: String(error)
+                    });
+                }
+            }
+        });
+        
+        // Store ffmpeg process in tracking map for movement termination
+        movementFFmpegProcesses.set(movement_key, ffmpeg);
+        
+    } catch (error) {
+        logger.error('processCameraMovement failed', {
+            camera: cameraEntry.name,
+            error: String(error)
+        });
+        
+        // Reset cursor on error
+        try {
+            const cursor = await cursordb.get(cameraKey);
+            if (cursor) {
+                await cursordb.put(cameraKey, {
+                    ...cursor,
+                    is_processing: false,
+                    last_check_at: Date.now()
+                });
+            }
+        } catch (e) {
+            logger.error('Failed to reset cursor after error', {
+                camera: cameraEntry.name,
+                error: String(e)
+            });
+        }
+    }
+}
+
+// Controller functions for processing
+function startProcessingController(cameraKey: string): void {
+    // Stop existing controller if any
+    stopProcessingController(cameraKey);
+    
+    const { cameraEntry } = cameraCache[cameraKey];
+    if (!cameraEntry) return;
+    
+    // Start processing every 5 seconds
+    const interval = setInterval(async () => {
+        await processCameraMovement(cameraKey);
+    }, 5000);
+    
+    processingIntervals.set(cameraKey, interval);
+    
+    logger.info('Processing controller started', {
+        camera: cameraEntry.name,
+        cameraKey,
+        intervalMs: 5000
+    });
+}
+
+function stopProcessingController(cameraKey: string): void {
+    const interval = processingIntervals.get(cameraKey);
+    if (interval) {
+        clearInterval(interval);
+        processingIntervals.delete(cameraKey);
+        
+        const { cameraEntry } = cameraCache[cameraKey];
+        logger.info('Processing controller stopped', {
+            camera: cameraEntry?.name,
+            cameraKey
+        });
+    }
+}
+
+// Reset stale processing locks on startup
+async function resetStaleProcessingLocks(): Promise<void> {
+    logger.info('Resetting stale processing locks...');
+    
+    try {
+        for await (const [cameraKey, cursor] of cursordb.iterator()) {
+            if (cursor.is_processing) {
+                logger.warn('Found stale processing lock', {
+                    cameraKey,
+                    last_check: new Date(cursor.last_check_at).toISOString()
+                });
+                
+                await cursordb.put(cameraKey, {
+                    ...cursor,
+                    is_processing: false
+                });
+            }
+        }
+        
+        // Also reset any movements stuck in 'processing' state
+        for await (const [key, movement] of movementdb.iterator()) {
+            if (movement.processing_state === 'processing') {
+                const movement_key = parseInt(key);
+                logger.warn('Found movement stuck in processing state', {
+                    movement_key,
+                    camera: movement.cameraKey,
+                    started: movement.processing_started_at ? new Date(movement.processing_started_at).toISOString() : 'unknown'
+                });
+                
+                await movementdb.put(key, {
+                    ...movement,
+                    processing_state: 'pending',
+                    processing_error: 'Reset after server restart'
+                });
+            }
+        }
+        
+        logger.info('Stale lock reset complete');
+    } catch (error) {
+        logger.error('Failed to reset stale locks', { error: String(error) });
+    }
+}
+
+ // OLD FUNCTION - DEPRECATED - Kept for reference only
+ // This function has been replaced by detectCameraMovement (fast detection) 
+ // and processCameraMovement (slow frame processing)
+ /*
 async function processMovement(cameraKey: string) : Promise<void> {
 
     const { movementStatus, cameraEntry } = cameraCache[cameraKey]
@@ -825,6 +1645,7 @@ async function processMovement(cameraKey: string) : Promise<void> {
         }}}
     }
 }
+*/
 
 // Manage ML detection process lifecycle
 async function processControllerDetector(): Promise<void> {
@@ -921,6 +1742,7 @@ async function processControllerFFmpeg(
         if (task && task.exitCode === null) {
             task.kill();
         }
+        processControllerFFmpeg_inprogress[name].inprogress = false;
         return task
     }
 
@@ -1127,7 +1949,15 @@ async function init_web() {
 
             try {
                 const m: MovementEntry = await movementdb.get(encodeMovementKey(parseInt(moment)))
+                if (!m) {
+                    ctx.throw(404, `Movement not found: ${moment}`);
+                    return;
+                }
                 const c: CameraEntry = await cameradb.get(m.cameraKey)
+                if (!c) {
+                    ctx.throw(404, `Camera not found: ${m.cameraKey}`);
+                    return;
+                }
                 const hasDetections = m.detection_output?.tags && m.detection_output.tags.length > 0;
                 const serve = `${c.disk}/${c.folder}/${hasDetections ? 'mlimage' : 'image'}${moment}.jpg`
                 const { size } = await fs.stat(serve)
@@ -1145,6 +1975,10 @@ async function init_web() {
 
             try {
                 const m: MovementEntry = await movementdb.get(encodeMovementKey(parseInt(moment)))
+                if (!m) {
+                    ctx.throw(404, `Movement not found: ${moment}`);
+                    return;
+                }
                 const { disk, folder } = cameraCache[m.cameraKey].cameraEntry;
                 const framesPath = getFramesPath(disk, folder);
                 
@@ -1162,7 +1996,11 @@ async function init_web() {
                   file = ctx.params['file']
 
             try {
-                const c = await cameradb.get(cameraKey)            
+                const c = await cameradb.get(cameraKey)
+                if (!c) {
+                    ctx.throw(404, `Camera not found: ${cameraKey}`);
+                    return;
+                }
                 const serve = `${c.disk}/${c.folder}/${file}`
                 const { size } = await fs.stat(serve)
                 //console.log(`serving : ${serve}`)
@@ -1396,20 +2234,62 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n"
                                 movement: new_vals.enable_movement
                             });
                             
+                            // Restart movement detection controller if enabled
+                            if (new_vals.enable_movement) {
+                                startProcessingController(cameraKey);
+                            } else {
+                                stopProcessingController(cameraKey);
+                            }
+                            
                             ctx.status = 201
                         } else {
-                            logger.info('Deleting camera', {
+                            logger.info('Camera operation', {
                                 camera: old_cc.cameraEntry.name,
                                 cameraKey,
-                                deleteOption,
-                                deleteFiles: deleteOption === 'delall'
+                                deleteOption
                             });
                             
-                            if (deleteOption === 'delall') {
+                            if (deleteOption === 'reset') {
+                                // Reset camera: delete movements and files, reset cursor
+                                logger.info('Resetting camera recordings', { cameraKey });
+                                
+                                // Delete all movement files
+                                const diskres = await clearDownDisk(settingsCache.settings.disk_base_dir, [cameraKey], -1)
+                                logger.info('Camera movement files deleted', { cameraKey, diskres });
+                                
+                                // Delete all movement database entries for this camera
+                                const movementsToDelete: string[] = [];
+                                for await (const [key, movement] of movementdb.iterator()) {
+                                    if (movement.cameraKey === cameraKey) {
+                                        movementsToDelete.push(key);
+                                    }
+                                }
+                                
+                                for (const key of movementsToDelete) {
+                                    await movementdb.del(key);
+                                }
+                                
+                                logger.info('Camera movements deleted from database', { 
+                                    cameraKey, 
+                                    count: movementsToDelete.length 
+                                });
+                                
+                                // Reset processing cursor
+                                try {
+                                    await cursordb.del(cameraKey);
+                                    logger.info('Camera cursor reset', { cameraKey });
+                                } catch (e) {
+                                    logger.debug('No cursor to reset', { cameraKey });
+                                }
+                                
+                                ctx.status = 200;
+                                
+                            } else if (deleteOption === 'delall') {
                                 //delete all camera files
                                 const diskres = await clearDownDisk(settingsCache.settings.disk_base_dir, [cameraKey], -1)
                                 logger.info('Camera files deleted', { cameraKey, diskres });
                             }
+                            
                             if (deleteOption === 'del' || deleteOption === 'delall') {
                                 //delete camera entry
                                 const new_vals: CameraEntry = {...old_cc.cameraEntry, delete: true}
@@ -1423,7 +2303,7 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n"
                                 });
                                 
                                 ctx.status = 200
-                            } else {
+                            } else if (deleteOption !== 'reset') {
                                 logger.warn('Unknown delete option', { deleteOption });
                                 ctx.status = 400
                             }
@@ -1445,13 +2325,12 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n"
             const mode = ctx.query['mode'] 
             const cameras: CameraEntryClient[] = Object.entries(cameraCache).filter(([_, value]) => !value.cameraEntry.delete).map(([key, value]) => {
 
-               const { movementStatus, cameraEntry /*, ffmpeg_process*/ } = value
+               const { cameraEntry } = value
 
-                // filer out data not for the client
+                // Filter out data not for the client
                 const {ip, passwd, ...clientCameraEntry} = cameraEntry
 
-                //const {taskid, ...clientFfmpeg_process} = ffmpeg_process || {}
-                return {key, ...clientCameraEntry, /*ffmpeg_process: clientFfmpeg_process,*/ movementStatus} as CameraEntryClient
+                return {key, ...clientCameraEntry} as CameraEntryClient
             })
 
             ctx.response.set("content-type", "application/json");
@@ -1517,6 +2396,7 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n"
                                     startSegment: value.startSegment,
                                     seconds: value.seconds,
                                     detection_status: value.detection_status || 'complete',  // Always include status
+                                    processing_state: value.processing_state,
                                     ...(tags && tags.length > 0 && { detection_output: { tags } })
                                 }
                             })
@@ -1623,6 +2503,9 @@ async function main() {
     if (savedSettings) {
         settingsCache = {...settingsCache, settings: savedSettings};
     }
+    
+    // Reset any stale processing locks from previous server instance
+    await resetStaleProcessingLocks();
 
     // Initialize process utilities with dependencies
     setDependencies({
@@ -1658,34 +2541,32 @@ async function main() {
                     
                 // Process movement detection if streaming is active and movement detection is enabled
                 if (cameraEntry.enable_movement && cameraCache[cKey].ffmpeg_task && cameraCache[cKey].ffmpeg_task.exitCode === null) {
-                    // Verify stream is current before processing movement
-                    const streamIsReady = await isStreamCurrent(streamFile, 10000);
+                    // Check if enough time has passed since last movement check
+                    const now = Date.now();
+                    const lastCheck = cameraCache[cKey].lastMovementCheck || 0;
+                    const pollInterval = cameraEntry.mSPollFrequency || 1000; // Default 1 second if not set
                     
-                    if (streamIsReady) {
-                        // Check if enough time has passed since last movement check
-                        const now = Date.now();
-                        const lastCheck = cameraCache[cKey].lastMovementCheck || 0;
-                        const pollInterval = cameraEntry.mSPollFrequency || 1000; // Default 1 second if not set
-                        
-                        if (now - lastCheck >= pollInterval) {
-                            cameraCache[cKey] = {...cameraCache[cKey], lastMovementCheck: now};
-                            await processMovement(cKey);
-                        }
-                    } else {
-                        // Stream not ready - log periodically
-                        if (!global[`lastStreamNotReadyLog_${cKey}`] || Date.now() - global[`lastStreamNotReadyLog_${cKey}`] > 60000) {
-                            logger.warn('Stream not ready for movement detection', { 
-                                camera: cameraEntry.name,
-                                streamFile 
-                            });
-                            global[`lastStreamNotReadyLog_${cKey}`] = Date.now();
-                        }
+                    if (now - lastCheck >= pollInterval) {
+                        cameraCache[cKey] = {...cameraCache[cKey], lastMovementCheck: now};
+                        await detectCameraMovement(cKey);
                     }
-                } else if (!cameraEntry.enable_movement) {
-                    // Only log once per minute to avoid spam
-                    if (!global[`lastMovementDisabledLog_${cKey}`] || Date.now() - global[`lastMovementDisabledLog_${cKey}`] > 60000) {
-                        logger.debug('Movement detection disabled', { camera: cameraEntry.name });
-                        global[`lastMovementDisabledLog_${cKey}`] = Date.now();
+                    
+                    // Ensure processing controller is running
+                    if (!processingIntervals.has(cKey)) {
+                        startProcessingController(cKey);
+                    }
+                } else {
+                    // Movement detection disabled - stop processing controller
+                    if (processingIntervals.has(cKey)) {
+                        stopProcessingController(cKey);
+                    }
+                    
+                    if (!cameraEntry.enable_movement) {
+                        // Only log once per minute to avoid spam
+                        if (!global[`lastMovementDisabledLog_${cKey}`] || Date.now() - global[`lastMovementDisabledLog_${cKey}`] > 60000) {
+                            logger.debug('Movement detection disabled', { camera: cameraEntry.name });
+                            global[`lastMovementDisabledLog_${cKey}`] = Date.now();
+                        }
                     }
                 }
             }

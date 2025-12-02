@@ -227,7 +227,10 @@ def main():
 
             boxes, classes, scores = post_process(outputs)
 
-            # Handle case where no objects are detected
+            # Prepare detection output (even if empty)
+            detections = []
+            
+            # Handle case where objects are detected
             if boxes is not None and len(boxes) > 0:
                 # Model outputs pixel coordinates in 640x640 space
                 # Clip to image bounds (should already be within bounds)
@@ -242,8 +245,7 @@ def main():
                 # Overwrite the original image with annotated version
                 cv2.imwrite(img_path, img_annotated)
                 
-                # Output single JSON line with image path and all detections
-                detections = []
+                # Build detections list
                 for box, score, cl in zip(boxes, scores, classes):
                     left, top, right, bottom = [int(_b) for _b in box]
                     detections.append({
@@ -251,13 +253,14 @@ def main():
                         "box": [left, top, right, bottom],
                         "probability": float(score)
                     })
-                
-                result = {
-                    "image": img_path,
-                    "detections": detections
-                }
-                print(json.dumps(result))
-                sys.stdout.flush()  # Ensure output is sent immediately
+            
+            # Always output JSON result (even with empty detections)
+            result = {
+                "image": img_path,
+                "detections": detections
+            }
+            print(json.dumps(result))
+            sys.stdout.flush()  # Ensure output is sent immediately
             
             if args.img_show or args.img_save:
                 print('\n\nIMG: {}'.format(img_name))
