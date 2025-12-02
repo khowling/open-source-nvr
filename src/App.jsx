@@ -3,7 +3,7 @@ import './App.css';
 import React, { useEffect }  from 'react';
 import videojs from 'video.js'
 import { PanelSettings } from './PanelSettings.jsx'
-import { ToolbarGroup, Badge, Text, Button, Portal, Toolbar, Menu, MenuTrigger, Tooltip, SplitButton, MenuPopover, MenuList, MenuItem, ToolbarButton, ToolbarDivider, createTableColumn, TableCellLayout, Spinner, tokens } from "@fluentui/react-components";
+import { ToolbarGroup, Badge, Text, Button, Portal, Toolbar, Menu, MenuTrigger, Tooltip, SplitButton, MenuPopover, MenuList, MenuItem, ToolbarButton, ToolbarDivider, createTableColumn, TableCellLayout, Spinner, tokens, Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent } from "@fluentui/react-components";
 import {
   DataGridBody,
   DataGrid,
@@ -160,6 +160,7 @@ function App() {
 function CCTVControl({currentPlaying, playVideo}) {
 
   const [panel, setPanel] = React.useState({open: false, invalidArray: []});
+  const [errorDialog, setErrorDialog] = React.useState({open: false, item: null});
 
   const init_data = { cameras: [], movements: [] }
   const [data, setData] = React.useState(init_data)
@@ -623,6 +624,14 @@ const onSelectionChange = (_, d) => {
                     </div>
                     <MenuPopover>
                       <MenuList>
+                        {item.processing_state === 'failed' && (
+                          <MenuItem onClick={(e) => {
+                            e.stopPropagation();
+                            setErrorDialog({open: true, item});
+                          }}>
+                            View Error Details
+                          </MenuItem>
+                        )}
                         {sortedTags.length > 0 && sortedTags.map((t, idx) => {
                           const frameUrl = t.maxProbabilityImage 
                             ? `/frame/${key}/${t.maxProbabilityImage}`
@@ -710,6 +719,48 @@ const onSelectionChange = (_, d) => {
             }
           </DataGridBody>
       </DataGrid>
+
+      {/* Error Details Dialog */}
+      <Dialog 
+        open={errorDialog.open} 
+        onOpenChange={(e, data) => setErrorDialog({open: data.open, item: data.open ? errorDialog.item : null})}
+      >
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Processing Error</DialogTitle>
+            <DialogContent>
+              {errorDialog.item && (
+                <div style={{ fontFamily: 'monospace', fontSize: '13px' }}>
+                  <div style={{ marginBottom: '8px' }}>
+                    <strong>Movement:</strong> {errorDialog.item.key}
+                  </div>
+                  <div style={{ marginBottom: '8px' }}>
+                    <strong>Camera:</strong> {errorDialog.item.cameraName}
+                  </div>
+                  <div style={{ marginBottom: '8px' }}>
+                    <strong>Time:</strong> {errorDialog.item.startDate_en_GB}
+                  </div>
+                  <div style={{ marginBottom: '8px' }}>
+                    <strong>Duration:</strong> {errorDialog.item.seconds}s
+                  </div>
+                  <div style={{ 
+                    marginTop: '12px',
+                    padding: '12px',
+                    backgroundColor: '#fff4f4',
+                    border: '1px solid #ffcccc',
+                    borderRadius: '4px'
+                  }}>
+                    <strong style={{ color: '#d13438' }}>Error:</strong>
+                    <div style={{ marginTop: '4px', color: '#333' }}>
+                      {errorDialog.item.processing_error || 'Unknown processing error'}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </DialogContent>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
 
   </>
 }
