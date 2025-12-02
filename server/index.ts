@@ -1779,6 +1779,13 @@ async function processControllerFFmpeg(
             return task
         }
     } else if (task) {
+        // Don't restart if shutting down
+        if (isShuttingDown) {
+            logger.info('Skipping process restart - shutdown in progress', { name });
+            processControllerFFmpeg_inprogress[name] = {...processControllerFFmpeg_inprogress[name], inprogress: false };
+            return null;
+        }
+        
         logger.warn('Process not running - restarting', { name, exitCode: task.exitCode });
     }
 
