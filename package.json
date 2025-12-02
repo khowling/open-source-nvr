@@ -30,29 +30,26 @@
   "devDependencies": {
     "@fluentui-contrib/react-data-grid-react-window": "^1.4.2",
     "@fluentui/react-components": "^9.17.1",
-    "@tsconfig/node16": "^1.0.2",
-    "@types/koa__router": "^8.0.11",
+    "@tsconfig/node16": "^16.1.8",
+    "@types/koa__router": "^12.0.5",
     "@types/koa-bodyparser": "^4.3.5",
     "@types/level": "^6.0.0",
-    "@types/node": "^17.0.45",
-    "@types/subleveldown": "^4.1.1",
+    "@types/node": "^24.10.1",
     "@vitejs/plugin-react": "^5.1.1",
-    "typescript": "^4.9.5",
+    "typescript": "^5.9.3",
     "video.js": "^8.0.4",
-    "vite": "^5.4.21"
+    "vite": "^7.2.6"
   },
   "dependencies": {
-    "@koa/router": "^10.1.1",
+    "@koa/router": "^14.0.0",
     "avsc": "^5.7.3",
-    "koa": "^2.13.4",
+    "koa": "^3.1.1",
     "koa-bodyparser": "^4.3.0",
     "koa-send": "^5.0.1",
-    "level": "^7.0.1",
-    "lexicographic-integer": "^1.1.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "scheduler": "^0.23.2",
-    "subleveldown": "^6.0.1",
+    "level": "^10.0.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "scheduler": "^0.27.0",
     "winston": "^3.18.3"
   }
 }

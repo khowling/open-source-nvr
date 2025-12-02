@@ -6,11 +6,23 @@
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import * as fs from 'fs/promises';
 
+// Helper for encoding movement keys consistently
+const encodeMovementKey = (n: number): string => {
+    return n.toString().padStart(12, '0');
+};
+
 // Forward declaration for logger (will be injected)
 let logger: any;
 
 export function setLogger(loggerInstance: any) {
     logger = loggerInstance;
+}
+
+// Global process registry to track all spawned processes
+const processRegistry = new Set<ChildProcessWithoutNullStreams>();
+
+export function getAllProcesses(): ChildProcessWithoutNullStreams[] {
+    return Array.from(processRegistry);
 }
 
 // Forward declaration for settings and movementdb (will be injected)
@@ -57,6 +69,9 @@ export function spawnProcess(options: ProcessSpawnOptions): ChildProcessWithoutN
         ...(timeout && { timeout })
     });
     
+    // Register process globally for cleanup tracking
+    processRegistry.add(childProcess);
+    
     let stdoutBuffer = '';
     let stderrBuffer = '';
     
@@ -98,6 +113,9 @@ export function spawnProcess(options: ProcessSpawnOptions): ChildProcessWithoutN
     
     if (onClose) {
         childProcess.on('close', (code: number | null, signal: string | null) => {
+            // Remove from registry when closed
+            processRegistry.delete(childProcess);
+            
             if (captureOutput) {
                 // Pass captured output via a custom property
                 (childProcess as any).__capturedOutput = { stdout: stdoutBuffer, stderr: stderrBuffer };
@@ -106,6 +124,9 @@ export function spawnProcess(options: ProcessSpawnOptions): ChildProcessWithoutN
         });
     } else {
         childProcess.on('close', (code: number | null, signal: string | null) => {
+            // Remove from registry when closed
+            processRegistry.delete(childProcess);
+            
             const isGraceful = code === 0 || code === 255 || code === null;
             const logLevel = isGraceful ? 'info' : 'error';
             
@@ -324,14 +345,15 @@ export function createFFmpegFrameProcessor(movement_key: number, framesPath: str
                         });
                         
                         // Send to ML detection pipeline
-                        if (settingsCache.settings.enable_ml) {
+                        if (settingsCache.settings.detection_enable) {
                             sendImageToMLDetection(framePath, movement_key);
                         }
                         
                         // Update ML status to 'analyzing' after first frame
                         if (frameNumber === 1) {
-                            movementdb.get(movement_key).then((movement: any) => {
-                                movementdb.put(movement_key, {
+                            const encodedKey = encodeMovementKey(movement_key);
+                            movementdb.get(encodedKey).then((movement: any) => {
+                                movementdb.put(encodedKey, {
                                     ...movement,
                                     detection_status: 'analyzing'
                                 }).catch((err: Error) => {

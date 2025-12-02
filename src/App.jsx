@@ -168,6 +168,12 @@ function CCTVControl({currentPlaying, playVideo}) {
   const [showPlayer, setShowPlayer] = React.useState(true)
   const [highlightedKeys, setHighlightedKeys] = React.useState(new Set())
 
+  // Use a ref to access latest config without triggering SSE reconnect
+  const configRef = React.useRef(null);
+  React.useEffect(() => {
+    configRef.current = data.config;
+  }, [data.config]);
+
   function getServerData() {
     console.log ('getServerData, mode=', mode)
     setData({...init_data, status: 'fetching'})
@@ -231,7 +237,7 @@ function CCTVControl({currentPlaying, playVideo}) {
               return false;
             }
             
-            const tagFilters = data.config?.settings?.tag_filters;
+            const tagFilters = configRef.current?.settings?.detection_tag_filters;
             if (!tagFilters || tagFilters.length === 0) {
               // No filters configured - hide all movements in filtered mode
               return false;
@@ -329,7 +335,7 @@ function CCTVControl({currentPlaying, playVideo}) {
       console.log('Closing SSE connection');
       eventSource.close();
     };
-  }, [mode, data.config]); // Depend on mode and config to re-evaluate filtering
+  }, [mode]); // Only depend on mode - config changes shouldn't reconnect SSE
 
   
 const onSelectionChange = (_, d) => {
@@ -590,7 +596,7 @@ const onSelectionChange = (_, d) => {
                           const frameUrl = t.maxProbabilityImage 
                             ? `/frame/${key}/${t.maxProbabilityImage}`
                             : img;
-                          const currentFilters = data.config.settings.tag_filters || [];
+                          const currentFilters = data.config.settings.detection_tag_filters || [];
                           const existingFilter = currentFilters.find(f => f.tag === t.tag);
                           
                           return (
@@ -606,7 +612,7 @@ const onSelectionChange = (_, d) => {
                                 if (!existingFilter) {
                                   const newFilters = [...currentFilters, { tag: t.tag, minProbability: t.maxProbability }];
                                   setPanel({...panel, open: true, key: 'settings', invalidArray:[], heading: 'General Settings', 
-                                    values: { ...data.config.settings, tag_filters: newFilters }})
+                                    values: { ...data.config.settings, detection_tag_filters: newFilters }})
                                 } else {
                                   setPanel({...panel, open: true, key: 'settings', invalidArray:[], heading: 'General Settings', 
                                     values: { ...data.config.settings }})
@@ -649,9 +655,15 @@ const onSelectionChange = (_, d) => {
                 }}
                 onClick={() => {
                   const { cameraKey, startSegment, seconds } = item;
+                  console.log('Row clicked:', { cameraKey, startSegment, seconds, itemKey: item.key, fullItem: item });
                   const camera = data.cameras.find(c => c.key === cameraKey);
                   if (camera) {
+                    if (!startSegment) {
+                      console.error('startSegment is missing!', item);
+                    }
                     playVideo(cameraKey, item.key, startSegment, seconds, camera.segments_prior_to_movement, camera.segments_post_movement);
+                  } else {
+                    console.error('Camera not found for key:', cameraKey);
                   }
                 }}
               >

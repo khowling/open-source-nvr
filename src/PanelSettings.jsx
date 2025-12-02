@@ -161,7 +161,7 @@ export const MySplitButton = ({label, items}) => (
     <MenuPopover>
       <MenuList>
         { items.map((i, idx) =>
-          <MenuItem key={idx}>{i.text}</MenuItem>  
+          <MenuItem key={idx} onClick={(event) => i.onClick(event, {key: i.key})}>{i.text}</MenuItem>  
         )}
         
       </MenuList>
@@ -173,25 +173,6 @@ export const MySplitButton = ({label, items}) => (
 export function PanelSettings({panel, setPanel, data, getServerData}) {
 
     const [error, setError] = React.useState(null)
-    const [models, setModels] = React.useState([]);
-    const [modelsLoading, setModelsLoading] = React.useState(false);
-
-    // Fetch available ML models when panel opens
-    React.useEffect(() => {
-        if (panel.open && panel.key === 'settings' && !modelsLoading && models.length === 0) {
-            setModelsLoading(true);
-            fetch('/api/ml-models')
-                .then(res => res.json())
-                .then(data => {
-                    setModels(data.models || []);
-                    setModelsLoading(false);
-                })
-                .catch(err => {
-                    console.error('Failed to fetch ML models:', err);
-                    setModelsLoading(false);
-                });
-        }
-    }, [panel.open, panel.key, models.length, modelsLoading]);
 
     const styles = useStyles();
 
@@ -233,9 +214,9 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
         if (panel.key === 'settings') {
           invalidFn('disk_base_dir', !panel.values.disk_base_dir || panel.values.disk_base_dir.endsWith('/') || !panel.values.disk_base_dir.startsWith('/'),
             <Text>Must be abosolute path (cannot end with '/')</Text>)
-          invalidFn('mlModel', panel.values.enable_ml && (!panel.values.mlModel),
+          invalidFn('detection_model', panel.values.detection_enable && (!panel.values.detection_model),
             <Text>Must select a model for object detection</Text>)
-          invalidFn('mlFramesPath', panel.values.enable_ml && panel.values.mlFramesPath && (panel.values.mlFramesPath.endsWith('/')),
+          invalidFn('detection_frames_path', panel.values.detection_enable && panel.values.detection_frames_path && (panel.values.detection_frames_path.endsWith('/')),
             <Text>Frames path cannot end with '/'</Text>)
         } else {
           invalidFn('name', !panel.values.name || panel.values.name.match(/^[a-z0-9][_\-a-z0-9]+[a-z0-9]$/i) === null || panel.values.name.length > 19,
@@ -308,45 +289,45 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
                     </Field>
 
                     <div className={styles.root}>
-                      <label>Check Capacity Interval {panel.values.cleanup_interval} minutes</label>
-                      <Slider style={{"width": "100%"}} min={0} max={60} step={5} defaultValue={panel.values.cleanup_interval} showValue onChange={(_,data) => updatePanelValues('cleanup_interval', data.value)} />
+                      <label>Check Capacity Interval {panel.values.disk_cleanup_interval} minutes</label>
+                      <Slider style={{"width": "100%"}} min={0} max={60} step={5} defaultValue={panel.values.disk_cleanup_interval} showValue onChange={(_,data) => updatePanelValues('disk_cleanup_interval', data.value)} />
                     </div>
 
                     <div className={styles.root}>
-                      <label>Keep under Capacity {panel.values.cleanup_capacity}%</label>
-                      <Slider style={{"width": "100%"}} disabled={panel.values.cleanup_interval === 0}  min={20} max={100} step={5} defaultValue={panel.values.cleanup_capacity} showValue onChange={(_,data) => updatePanelValues('cleanup_capacity', data.value)} />
+                      <label>Keep under Capacity {panel.values.disk_cleanup_capacity}%</label>
+                      <Slider style={{"width": "100%"}} disabled={panel.values.disk_cleanup_interval === 0}  min={20} max={100} step={5} defaultValue={panel.values.disk_cleanup_capacity} showValue onChange={(_,data) => updatePanelValues('disk_cleanup_capacity', data.value)} />
                     </div>
 
 
                     <Divider><b>Object Detection</b></Divider>
                     
-                    <Checkbox label="Enable Object Detection" checked={panel.values.enable_ml} onChange={(_,data) => updatePanelValues('enable_ml', data.checked)} />
+                    <Checkbox label="Enable Object Detection" checked={panel.values.detection_enable} onChange={(_,data) => updatePanelValues('detection_enable', data.checked)} />
                     
                     <Field
                       label="YOLO Model Path"
                       hint="Relative to ./ai directory (e.g., 'model/yolo11n.onnx' or 'model/yolo11n-rk3588.rknn')"
-                      validationState={getError('mlModel') ? "error" : "none"}
-                      validationMessage={getError('mlModel')}>
+                      validationState={getError('detection_model') ? "error" : "none"}
+                      validationMessage={getError('detection_model')}>
                       <Input 
                         style={{"width": "100%"}} 
-                        disabled={!panel.values.enable_ml}
+                        disabled={!panel.values.detection_enable}
                         placeholder="model/yolo11n.onnx"
-                        value={panel.values.mlModel || ''} 
-                        onChange={(_, data) => updatePanelValues('mlModel', data.value)} />
+                        value={panel.values.detection_model || ''} 
+                        onChange={(_, data) => updatePanelValues('detection_model', data.value)} />
                     </Field>
 
                     <Field
                       label="Target Platform"
                       hint="Hardware acceleration target (leave empty for CPU/ONNX)"
-                      validationState={getError('mlTarget') ? "error" : "none"}
-                      validationMessage={getError('mlTarget')}>  
+                      validationState={getError('detection_target_hw') ? "error" : "none"}
+                      validationMessage={getError('detection_target_hw')}>  
                       <Dropdown 
                         style={{"width": "100%"}} 
-                        disabled={!panel.values.enable_ml}
+                        disabled={!panel.values.detection_enable}
                         placeholder="CPU (default)"
-                        value={panel.values.mlTarget || ''}
-                        selectedOptions={panel.values.mlTarget ? [panel.values.mlTarget] : []}
-                        onOptionSelect={(_, data) => updatePanelValues('mlTarget', data.optionValue)}>
+                        value={panel.values.detection_target_hw || ''}
+                        selectedOptions={panel.values.detection_target_hw ? [panel.values.detection_target_hw] : []}
+                        onOptionSelect={(_, data) => updatePanelValues('detection_target_hw', data.optionValue)}>
                         <Option key="" value="">CPU (default)</Option>
                         <Option key="rk3588" value="rk3588">RK3588 (RKNN)</Option>
                         <Option key="rk3576" value="rk3576">RK3576 (RKNN)</Option>
@@ -356,22 +337,15 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
                     <Field
                       label="Frames Output Path"
                       hint="Relative to Base Directory above (e.g., 'frames' or 'ml_images')"
-                      validationState={getError('mlFramesPath') ? "error" : "none"}
-                      validationMessage={getError('mlFramesPath')}>
+                      validationState={getError('detection_frames_path') ? "error" : "none"}
+                      validationMessage={getError('detection_frames_path')}>
                       <Input 
                         style={{"width": "100%"}} 
-                        disabled={!panel.values.enable_ml} 
+                        disabled={!panel.values.detection_enable} 
                         contentBefore={<Folder16Regular/>}  
                         placeholder="frames"
-                        value={panel.values.mlFramesPath || ''} 
-                        onChange={(_, data) => updatePanelValues('mlFramesPath', data.value)} />
-                    </Field>
-
-
-                    <Field
-                      label="Model Labels (COCO dataset - optional)"
-                      hint="Comma-separated list of object classes. Defaults to COCO 80 classes.">
-                      <Textarea resize="vertical" disabled={!panel.values.enable_ml} rows={3} value={panel.values.labels} onChange={(ev, val) => updatePanelValues('labels', val.value)}/>
+                        value={panel.values.detection_frames_path || ''} 
+                        onChange={(_, data) => updatePanelValues('detection_frames_path', data.value)} />
                     </Field>
 
                     <Divider><b>Tag Filters (Filtered Mode)</b></Divider>
@@ -380,7 +354,7 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
                       label="Minimum Probability Filters"
                       hint="Only show tags that meet or exceed their minimum probability threshold">
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '10px' }}>
-                        {(panel.values.tag_filters || []).map((filter, idx) => (
+                        {(panel.values.detection_tag_filters || []).map((filter, idx) => (
                           <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px', border: '1px solid #e0e0e0', borderRadius: '4px' }}>
                             <Badge appearance="outline" style={{ minWidth: '80px' }}>{filter.tag}</Badge>
                             <div style={{ flex: 1 }}>
@@ -389,11 +363,11 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
                                 max={1} 
                                 step={0.05} 
                                 value={filter.minProbability}
-                                disabled={!panel.values.enable_ml}
+                                disabled={!panel.values.detection_enable}
                                 onChange={(_, data) => {
-                                  const newFilters = [...panel.values.tag_filters];
+                                  const newFilters = [...panel.values.detection_tag_filters];
                                   newFilters[idx] = { ...filter, minProbability: data.value };
-                                  updatePanelValues('tag_filters', newFilters);
+                                  updatePanelValues('detection_tag_filters', newFilters);
                                 }} />
                             </div>
                             <Text style={{ minWidth: '45px', textAlign: 'right' }}>
@@ -402,28 +376,22 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
                             <Button 
                               size="small" 
                               appearance="subtle"
-                              disabled={!panel.values.enable_ml}
+                              disabled={!panel.values.detection_enable}
                               onClick={() => {
-                                const newFilters = panel.values.tag_filters.filter((_, i) => i !== idx);
-                                updatePanelValues('tag_filters', newFilters);
+                                const newFilters = panel.values.detection_tag_filters.filter((_, i) => i !== idx);
+                                updatePanelValues('detection_tag_filters', newFilters);
                               }}>
                               Remove
                             </Button>
                           </div>
                         ))}
-                        {(!panel.values.tag_filters || panel.values.tag_filters.length === 0) && (
+                        {(!panel.values.detection_tag_filters || panel.values.detection_tag_filters.length === 0) && (
                           <Text style={{ fontStyle: 'italic', color: '#666' }}>
                             No filters configured. Right-click any badge to add a filter.
                           </Text>
                         )}
                       </div>
                     </Field>
-
-                    { data.config && data.config.status  &&  Object.keys(data.config.status).length > 0 && 
-                      <div className={styles.root}>
-                        <Alert intent="info">{JSON.stringify(data.config.status, null, 2)}</Alert>
-                      </div>
-                    }
 
                     <div className={styles.root}></div>
 

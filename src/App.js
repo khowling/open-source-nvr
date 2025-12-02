@@ -508,7 +508,7 @@ const onSelectionChange = (_, d) => {
                           const frameUrl = t.maxProbabilityImage 
                             ? `/frame/${key}/${t.maxProbabilityImage}`
                             : img;
-                          const currentFilters = data.config.settings.tag_filters || [];
+                          const currentFilters = data.config.settings.detection_tag_filters || [];
                           const existingFilter = currentFilters.find(f => f.tag === t.tag);
                           
                           return (
@@ -524,7 +524,7 @@ const onSelectionChange = (_, d) => {
                                 if (!existingFilter) {
                                   const newFilters = [...currentFilters, { tag: t.tag, minProbability: t.maxProbability }];
                                   setPanel({...panel, open: true, key: 'settings', invalidArray:[], heading: 'General Settings', 
-                                    values: { ...data.config.settings, tag_filters: newFilters }})
+                                    values: { ...data.config.settings, detection_tag_filters: newFilters }})
                                 } else {
                                   setPanel({...panel, open: true, key: 'settings', invalidArray:[], heading: 'General Settings', 
                                     values: { ...data.config.settings }})
