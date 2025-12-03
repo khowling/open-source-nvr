@@ -1157,14 +1157,9 @@ async function processCameraMovement(cameraKey: string): Promise<void> {
             processing_attempts: (movement.processing_attempts || 0) + 1
         });
         
-        // Use timeout as safety - movement max duration + buffer
-        const maxDuration = cameraEntry.secMaxSingleMovement || 600;
-        const timeoutMicroseconds = (maxDuration + 60) * 1000000; // Convert to microseconds
-        
         const ffmpegArgs = [
             '-hide_banner', '-loglevel', 'info',
             '-progress', 'pipe:1',
-            '-rw_timeout', timeoutMicroseconds.toString(),  // IO timeout for waiting on HLS segments
             '-i', boundedPlaylistPath,  // Growing live playlist
             '-vf', 'fps=1,scale=640:640:force_original_aspect_ratio=decrease,pad=640:640:(ow-iw)/2:(oh-ih)/2',
             `${framesPath}/mov${movement_key}_%04d.jpg`
@@ -1175,7 +1170,6 @@ async function processCameraMovement(cameraKey: string): Promise<void> {
             movement: movement_key,
             startSegment,
             currentLatestSegment,
-            timeoutSeconds: maxDuration + 60,
             framesPath,
             mlEnabled: settingsCache.settings.detection_enable
         });
@@ -1933,7 +1927,7 @@ async function processControllerFFmpeg(
                 }
             },
             onClose: (code: number | null, signal: string | null) => {
-                if (code !== 0 && code !== null && signal === null) {
+                if (code !== 0 && code !== null && signal === null && !isShuttingDown) {
                     logger.error('Streaming process exited unexpectedly', { 
                         name, 
                         exitCode: code,
