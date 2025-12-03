@@ -37,12 +37,12 @@
     "@types/node": "^24.10.1",
     "@vitejs/plugin-react": "^5.1.1",
     "typescript": "^5.9.3",
-    "video.js": "^8.0.4",
     "vite": "^7.2.6"
   },
   "dependencies": {
     "@koa/router": "^14.0.0",
     "avsc": "^5.7.3",
+    "hls.js": "^1.6.15",
     "koa": "^3.1.1",
     "koa-bodyparser": "^4.3.0",
     "koa-send": "^5.0.1",

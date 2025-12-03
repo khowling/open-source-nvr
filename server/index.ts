@@ -60,6 +60,8 @@ interface MovementEntry {
     processing_error?: string;
     processing_attempts?: number;
     endSegment?: number | null;  // Final segment when movement ended
+    playlist_path?: string;  // Path to the growing HLS playlist
+    playlist_last_segment?: number;  // Last segment added to playlist
     
     // Additional timestamps and keys for new detection logic
     created?: number;      // When movement record was created
@@ -109,6 +111,7 @@ interface CameraEntry {
     mSPollFrequency: number;
     segments_prior_to_movement: number;
     segments_post_movement: number;
+    secMovementStartupDelay?: number;  // Delay before starting movement detection after stream starts (default 10s)
 }
 
 interface MovementStatus {
@@ -147,6 +150,7 @@ interface CameraCacheEntry {
     ffmpeg_task?: ChildProcessWithoutNullStreams;  // Streaming task only
     movementDetectionStatus?: MovementDetectionStatus;  // Renamed from movementStatus
     lastMovementCheck?: number;
+    streamStartedAt?: number;  // Timestamp when stream became healthy
 }
 
 interface CameraCache { 
@@ -704,30 +708,31 @@ async function detectCameraMovement(cameraKey: string): Promise<void> {
             });
             
             if (shouldEndMovement) {
-                // Terminate ffmpeg process if still running
-                const ffmpegProcess = movementFFmpegProcesses.get(current_movement_key);
-                if (ffmpegProcess && ffmpegProcess.exitCode === null) {
-                    const reason = elapsedSeconds > maxDuration
-                        ? `max duration (${maxDuration}s) exceeded`
-                        : (pollsWithoutMovement === 0 
-                            ? 'camera reports no movement (immediate stop)'
-                            : `${consecutivePolls} polls without movement (threshold: ${pollsWithoutMovement})`);
-                    
-                    logger.info('Terminating movement ffmpeg', {
-                        camera: cameraEntry.name,
-                        movement_key: current_movement_key,
-                        reason,
-                        pid: ffmpegProcess.pid
-                    });
-                    
-                    ffmpegProcess.kill();
-                }
-                
                 const updated: MovementEntry = {
                     ...existing,
                     seconds: elapsedSeconds,
                     consecutivePollsWithoutMovement: consecutivePolls
                 };
+                
+                // Finalize playlist with ENDLIST so ffmpeg knows to stop
+                if (updated.playlist_path) {
+                    try {
+                        const playlistContent = await fs.readFile(updated.playlist_path, 'utf-8');
+                        if (!playlistContent.includes('#EXT-X-ENDLIST')) {
+                            await fs.appendFile(updated.playlist_path, '\n#EXT-X-ENDLIST\n');
+                            logger.info('Finalized playlist with ENDLIST - ffmpeg will terminate naturally', {
+                                camera: cameraEntry.name,
+                                movement_key: current_movement_key
+                            });
+                        }
+                    } catch (e) {
+                        logger.warn('Failed to finalize playlist', {
+                            camera: cameraEntry.name,
+                            movement_key: current_movement_key,
+                            error: String(e)
+                        });
+                    }
+                }
                 
                 await movementdb.put(encodeMovementKey(current_movement_key), updated);
                 
@@ -773,30 +778,65 @@ async function detectCameraMovement(cameraKey: string): Promise<void> {
             }
             
         } else if (hasMovement && current_movement_key !== undefined) {
-            // Movement continuation - update duration and check max duration
+            // Movement continuation - update duration and append to playlist
             const existing = await movementdb.get(encodeMovementKey(current_movement_key));
             const now = Date.now();
             const elapsedSeconds = Math.floor((now - existing.startDate) / 1000);
             const maxDuration = cameraEntry.secMaxSingleMovement || 600;
             
-            if (elapsedSeconds > maxDuration) {
-                // Max duration exceeded - terminate
-                const ffmpegProcess = movementFFmpegProcesses.get(current_movement_key);
-                if (ffmpegProcess && ffmpegProcess.exitCode === null) {
-                    logger.info('Terminating movement ffmpeg', {
+            // Update playlist with new segments if processing
+            if (existing.playlist_path && existing.playlist_last_segment) {
+                try {
+                    const hls = (await fs.readFile(`${cameraEntry.disk}/${cameraEntry.folder}/stream.m3u8`)).toString();
+                    const hls_segments = [...hls.matchAll(re)].map(m => m[1]);
+                    const currentSegment = parseInt(hls_segments[hls_segments.length - 1]);
+                    
+                    if (currentSegment > existing.playlist_last_segment) {
+                        const newSegments: string[] = [];
+                        for (let i = existing.playlist_last_segment + 1; i <= currentSegment; i++) {
+                            newSegments.push(`#EXTINF:${existing.lhs_seg_duration_seq}.0,`);
+                            newSegments.push(`${cameraEntry.disk}/${cameraEntry.folder}/stream${i}.ts`);
+                        }
+                        
+                        await fs.appendFile(existing.playlist_path, '\n' + newSegments.join('\n'));
+                        
+                        await movementdb.put(encodeMovementKey(current_movement_key), {
+                            ...existing,
+                            playlist_last_segment: currentSegment,
+                            seconds: elapsedSeconds
+                        });
+                    }
+                } catch (e) {
+                    logger.warn('Failed to update playlist', {
                         camera: cameraEntry.name,
                         movement_key: current_movement_key,
-                        reason: `max duration (${maxDuration}s) exceeded`,
-                        pid: ffmpegProcess.pid
+                        error: String(e)
                     });
-                    ffmpegProcess.kill();
                 }
-                
+            }
+            
+            if (elapsedSeconds > maxDuration) {
                 const updated: MovementEntry = {
                     ...existing,
                     seconds: elapsedSeconds,
                     consecutivePollsWithoutMovement: 0
                 };
+                
+                // Max duration - finalize playlist
+                if (updated.playlist_path) {
+                    try {
+                        const playlistContent = await fs.readFile(updated.playlist_path, 'utf-8');
+                        if (!playlistContent.includes('#EXT-X-ENDLIST')) {
+                            await fs.appendFile(updated.playlist_path, '\n#EXT-X-ENDLIST\n');
+                            logger.info('Finalized playlist (max duration) - ffmpeg will terminate naturally', {
+                                camera: cameraEntry.name,
+                                movement_key: current_movement_key
+                            });
+                        }
+                    } catch (e) {
+                        logger.warn('Failed to finalize playlist', { error: String(e) });
+                    }
+                }
                 
                 await movementdb.put(encodeMovementKey(current_movement_key), updated);
                 
@@ -1041,6 +1081,9 @@ async function processCameraMovement(cameraKey: string): Promise<void> {
             const segmentsToLookBack = Math.ceil(cameraEntry.mSPollFrequency / (lhs_seg_duration_seq * 1000));
             startSegment = parseInt(hls_segments[hls_segments.length - 1]) - segmentsToLookBack + 1;
             
+            // Get current latest segment that actually exists
+            const currentLatestSegment = parseInt(hls_segments[hls_segments.length - 1]);
+            
             // Update movement with segment info
             await movementdb.put(encodeMovementKey(movement_key), {
                 ...movement,
@@ -1048,7 +1091,8 @@ async function processCameraMovement(cameraKey: string): Promise<void> {
                 lhs_seg_duration_seq,
                 processing_state: 'processing',
                 processing_started_at: now,
-                processing_attempts: (movement.processing_attempts || 0) + 1
+                processing_attempts: (movement.processing_attempts || 0) + 1,
+                playlist_last_segment: currentLatestSegment  // Track current position
             });
         } catch (error) {
             logger.error('Failed to read HLS playlist', {
@@ -1079,10 +1123,49 @@ async function processCameraMovement(cameraKey: string): Promise<void> {
         const framesPath = getFramesPath(disk, folder);
         await ensureDir(framesPath);
         
+        // Create live HLS playlist
+        const boundedPlaylistPath = `${framesPath}/mov${movement_key}.m3u8`;
+        
+        const hls = (await fs.readFile(filepath)).toString();
+        const hls_segments = [...hls.matchAll(re)].map(m => m[1]);
+        const currentLatestSegment = parseInt(hls_segments[hls_segments.length - 1]);
+        
+        const playlistLines = [
+            '#EXTM3U',
+            '#EXT-X-VERSION:3',
+            `#EXT-X-TARGETDURATION:${lhs_seg_duration_seq}`,
+            '#EXT-X-MEDIA-SEQUENCE:' + startSegment
+        ];
+        
+        for (let i = startSegment; i <= currentLatestSegment; i++) {
+            playlistLines.push(`#EXTINF:${lhs_seg_duration_seq}.0,`);
+            playlistLines.push(`${disk}/${folder}/stream${i}.ts`);
+        }
+        
+        // Don't add ENDLIST - this is a live playlist that will grow
+        await fs.writeFile(boundedPlaylistPath, playlistLines.join('\n'));
+        
+        // Store playlist info for dynamic updates
+        await movementdb.put(encodeMovementKey(movement_key), {
+            ...movement,
+            playlist_path: boundedPlaylistPath,
+            playlist_last_segment: currentLatestSegment,
+            startSegment,
+            lhs_seg_duration_seq,
+            processing_state: 'processing',
+            processing_started_at: now,
+            processing_attempts: (movement.processing_attempts || 0) + 1
+        });
+        
+        // Use timeout as safety - movement max duration + buffer
+        const maxDuration = cameraEntry.secMaxSingleMovement || 600;
+        const timeoutMicroseconds = (maxDuration + 60) * 1000000; // Convert to microseconds
+        
         const ffmpegArgs = [
             '-hide_banner', '-loglevel', 'info',
             '-progress', 'pipe:1',
-            '-i', filepath,
+            '-rw_timeout', timeoutMicroseconds.toString(),  // IO timeout for waiting on HLS segments
+            '-i', boundedPlaylistPath,  // Growing live playlist
             '-vf', 'fps=1,scale=640:640:force_original_aspect_ratio=decrease,pad=640:640:(ow-iw)/2:(oh-ih)/2',
             `${framesPath}/mov${movement_key}_%04d.jpg`
         ];
@@ -1090,6 +1173,9 @@ async function processCameraMovement(cameraKey: string): Promise<void> {
         logger.info('Starting ffmpeg for frame extraction', {
             camera: cameraEntry.name,
             movement: movement_key,
+            startSegment,
+            currentLatestSegment,
+            timeoutSeconds: maxDuration + 60,
             framesPath,
             mlEnabled: settingsCache.settings.detection_enable
         });
@@ -1159,13 +1245,25 @@ async function processCameraMovement(cameraKey: string): Promise<void> {
                 try {
                     const m = await movementdb.get(encodeMovementKey(movement_key));
                     const totalFrames = frameProcessor.getLastFrameNumber();
-                    const hasFailed = !isGraceful || totalFrames === 0 || code !== 255;
+                    const hasFailed = totalFrames === 0 || (!isGraceful && code !== 0);
+                    
+                    let errorMsg = '';
+                    if (hasFailed) {
+                        const stderrErrors = frameProcessor.getErrors();
+                        if (stderrErrors.length > 0) {
+                            errorMsg = stderrErrors[0]; // Use first error
+                        } else if (totalFrames === 0) {
+                            errorMsg = 'No frames extracted';
+                        } else {
+                            errorMsg = `ffmpeg exited with code ${code}`;
+                        }
+                    }
                     
                     await movementdb.put(encodeMovementKey(movement_key), {
                         ...m,
                         processing_state: hasFailed ? 'failed' as const : 'completed' as const,
                         processing_completed_at: Date.now(),
-                        ...(hasFailed && { processing_error: totalFrames === 0 ? 'No frames extracted' : `ffmpeg exited with code ${code}` })
+                        ...(hasFailed && { processing_error: errorMsg })
                     });
                     
                     if (hasFailed) {
@@ -1730,6 +1828,7 @@ async function processControllerDetector(): Promise<void> {
 var processControllerFFmpeg_inprogress: { [key: string]: { inprogress: boolean; checkFrom: number } } = {};
 
 async function processControllerFFmpeg(
+    cameraKey: string,
     cameraEntry: CameraEntry,
     task: ChildProcessWithoutNullStreams | undefined): Promise<ChildProcessWithoutNullStreams | undefined> {
     
@@ -1814,6 +1913,10 @@ async function processControllerFFmpeg(
             '-hide_banner',
             '-loglevel', 'error',
             '-vcodec', 'copy',
+            '-f', 'hls',
+            '-hls_time', '2',
+            '-hls_list_size', '5',
+            '-hls_flags', 'append_list',
             '-start_number', ((Date.now() / 1000 | 0) - MOVEMENT_KEY_EPOCH).toString(),
             streamFile
         ];
@@ -1847,12 +1950,10 @@ async function processControllerFFmpeg(
             processName: name,
             process: childProcess,
             outputFilePath: streamFile,
-                maxWaitTimeMs: 10000,
-                maxFileAgeMs: 5000,
-                checkIntervalMs: 1000
-            });
-            
-            if (!verification.ready) {
+            maxWaitTimeMs: 10000,
+            maxFileAgeMs: 5000,
+            checkIntervalMs: 1000
+        });            if (!verification.ready) {
                 // Stream verification failed
                 logger.error('Stream startup failed - killing process', { 
                     name, 
@@ -1878,45 +1979,10 @@ async function processControllerFFmpeg(
                 return undefined;
             }
             
-        // Additional verification: check file is still fresh after startup
-        await new Promise((res) => setTimeout(res, 2000));
-        try {
-            const {mtimeMs} = await fs.stat(streamFile);
-                const fileAge = Date.now() - mtimeMs;
-                
-                if (fileAge > 10000) {
-                    logger.error('Stream startup succeeded but file is now stale', { 
-                        name, 
-                        fileAge: `${fileAge}ms`,
-                        willKill: true
-                    });
-                    
-                    if (childProcess.exitCode === null) {
-                        childProcess.kill();
-                    }
-                    
-                    processControllerFFmpeg_inprogress[name] = {...processControllerFFmpeg_inprogress[name], inprogress: false };
-                    return undefined;
-                }
-                
-                logger.info('Stream startup confirmed healthy', { 
-                    name, 
-                    pid: childProcess.pid,
-                    fileAge: `${fileAge}ms`
-                });
-            } catch (e) {
-                logger.error('Stream output file disappeared after startup', { 
-                    name, 
-                    error: String(e)
-                });
-                
-                if (childProcess.exitCode === null) {
-                    childProcess.kill();
-                }
-                
-                processControllerFFmpeg_inprogress[name] = {...processControllerFFmpeg_inprogress[name], inprogress: false };
-                return undefined;
-            }
+        // Mark stream start time immediately after successful verification
+        if (cameraCache[cameraKey]) {
+            cameraCache[cameraKey] = {...cameraCache[cameraKey], streamStartedAt: Date.now()};
+        }
         
         processControllerFFmpeg_inprogress[name] = {...processControllerFFmpeg_inprogress[name], inprogress: false };
         return childProcess;
@@ -2555,21 +2621,61 @@ async function main() {
             const {cameraEntry, ffmpeg_task } = cameraCache[cKey]
 
             if (!cameraEntry.delete) {
-                const task = await processControllerFFmpeg(cameraEntry, ffmpeg_task);
+                const task = await processControllerFFmpeg(cKey, cameraEntry, ffmpeg_task);
                 cameraCache[cKey] = {...cameraCache[cKey], ffmpeg_task: task};
                 
                 const streamFile = `${cameraEntry.disk}/${cameraEntry.folder}/stream.m3u8`
+                
+                // Log movement status once per minute
+                const logKey = `movementStatusLog_${cKey}`;
+                if (!global[logKey] || Date.now() - global[logKey] > 60000) {
+                    logger.info('Camera movement status', {
+                        camera: cameraEntry.name,
+                        enable_movement: cameraEntry.enable_movement,
+                        hasTask: !!cameraCache[cKey].ffmpeg_task,
+                        taskExitCode: cameraCache[cKey].ffmpeg_task?.exitCode
+                    });
+                    global[logKey] = Date.now();
+                }
                     
                 // Process movement detection if streaming is active and movement detection is enabled
                 if (cameraEntry.enable_movement && cameraCache[cKey].ffmpeg_task && cameraCache[cKey].ffmpeg_task.exitCode === null) {
-                    // Check if enough time has passed since last movement check
                     const now = Date.now();
-                    const lastCheck = cameraCache[cKey].lastMovementCheck || 0;
-                    const pollInterval = cameraEntry.mSPollFrequency || 1000; // Default 1 second if not set
                     
-                    if (now - lastCheck >= pollInterval) {
-                        cameraCache[cKey] = {...cameraCache[cKey], lastMovementCheck: now};
-                        await detectCameraMovement(cKey);
+                    // Check if startup delay has passed
+                    const streamStartedAt = cameraCache[cKey].streamStartedAt || 0;
+                    
+                    // Skip if stream hasn't been confirmed healthy yet
+                    if (streamStartedAt === 0) {
+                        // Stream not yet confirmed - skip movement detection
+                        logger.debug('Waiting for stream to be confirmed healthy', { 
+                            camera: cameraEntry.name
+                        });
+                        continue;
+                    }
+                    
+                    const startupDelay = (cameraEntry.secMovementStartupDelay || 10) * 1000; // Default 10 seconds
+                    const delayRemaining = Math.max(0, (streamStartedAt + startupDelay) - now);
+                    
+                    if (delayRemaining > 0) {
+                        // Still in startup delay - log once per 10 seconds
+                        const logKey = `lastStartupDelayLog_${cKey}`;
+                        if (!global[logKey] || now - global[logKey] > 10000) {
+                            logger.info('Movement detection startup delay', { 
+                                camera: cameraEntry.name,
+                                delayRemaining: `${Math.ceil(delayRemaining / 1000)}s`
+                            });
+                            global[logKey] = now;
+                        }
+                    } else {
+                        // Check if enough time has passed since last movement check
+                        const lastCheck = cameraCache[cKey].lastMovementCheck || 0;
+                        const pollInterval = cameraEntry.mSPollFrequency || 1000; // Default 1 second if not set
+                        
+                        if (now - lastCheck >= pollInterval) {
+                            cameraCache[cKey] = {...cameraCache[cKey], lastMovementCheck: now};
+                            await detectCameraMovement(cKey);
+                        }
                     }
                     
                     // Ensure processing controller is running

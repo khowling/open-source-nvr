@@ -1,7 +1,7 @@
 //import logo from './logo.svg';
 import './App.css';
 import React, { useEffect }  from 'react';
-import videojs from 'video.js'
+import Hls from 'hls.js'
 import { PanelSettings } from './PanelSettings.jsx'
 import { ToolbarGroup, Badge, Text, Button, Portal, Toolbar, Menu, MenuTrigger, Tooltip, SplitButton, MenuPopover, MenuList, MenuItem, ToolbarButton, ToolbarDivider, createTableColumn, TableCellLayout, Spinner, tokens, Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent } from "@fluentui/react-components";
 import {
@@ -17,68 +17,132 @@ import { ArrowMove20Regular, AccessibilityCheckmark20Regular, AccessTime20Regula
 
 export const VideoJS = ({options, onReady, play}) => {
   const videoRef = React.useRef(null);
-  const playerRef = React.useRef(null);
+  const hlsRef = React.useRef(null);
+  const [isLive, setIsLive] = React.useState(false);
 
   React.useEffect(() => {
+    const video = videoRef.current;
 
-    // Make sure Video.js player is only initialized once
-    if (!playerRef.current) {
-      // The Video.js player needs to be _inside_ the component el for React 18 Strict Mode. 
-      const videoElement = document.createElement("video-js");
+    if (!video) return;
 
-      videoElement.classList.add('vjs-4-3');
-      videoRef.current.appendChild(videoElement);
-
-      const player = playerRef.current = videojs(videoElement, options, () => {
-        videojs.log('player is ready');
-        onReady && onReady(player);
+    // Initialize hls.js if supported
+    if (Hls.isSupported()) {
+      const hls = new Hls({
+        enableWorker: true,
+        lowLatencyMode: true,
+        backBufferLength: 90,
+        liveSyncDuration: 3,
+        liveMaxLatencyDuration: 10
+      });
+      
+      hlsRef.current = hls;
+      hls.attachMedia(video);
+      
+      hls.on(Hls.Events.MEDIA_ATTACHED, () => {
+        console.log('HLS: media attached');
+        onReady && onReady(video, hls);
       });
 
-    // You could update an existing player in the `else` block here
-    // on prop change, for example:
-    } else if (play) {
+      hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
+        console.log('HLS: manifest parsed', data);
+        // Detect if this is a live stream
+        const isLiveStream = !data.levels[0]?.details?.live === false;
+        setIsLive(isLiveStream);
+      });
 
-      const { cKey, mKey, mStartSegment, mSeconds, segments_prior_to_movement, segments_post_movement} = play
-      const player = playerRef.current;
+      hls.on(Hls.Events.ERROR, (event, data) => {
+        if (data.fatal) {
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+              console.error('HLS: fatal network error, trying to recover...');
+              hls.startLoad();
+              break;
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              console.error('HLS: fatal media error, trying to recover...');
+              hls.recoverMediaError();
+              break;
+            default:
+              console.error('HLS: fatal error, cannot recover', data);
+              hls.destroy();
+              break;
+          }
+        }
+      });
 
-      if (!player) {
-        console.warn('VideoJS: player not ready yet');
-        return;
-      }
-
-      player.src({
-        src: `/video/${mKey ? `${mStartSegment}/${mSeconds}` : 'live' }/${cKey}/stream.m3u8${(mKey && segments_prior_to_movement) ? `?preseq=${segments_prior_to_movement}&postseq=${segments_post_movement}` : ''}`,
-        type: 'application/x-mpegURL'
-      })
-
-   
-      if (mKey && segments_prior_to_movement) {
-        player.currentTime(segments_prior_to_movement * 2) // 20 seconds into stream (coresponds with 'segments_prior_to_movement')
-      }
-      
-      console.log ('VideoJS: play()')
-      player.play()
-
-      //player.autoplay(options.autoplay);
-      //player.src(options.sources);
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      // Native HLS support (Safari)
+      console.log('HLS: using native support');
+      onReady && onReady(video, null);
     }
-  }, [options, videoRef, play]);
-
-  // Dispose the Video.js player when the functional component unmounts
-  React.useEffect(() => {
-    const player = playerRef.current;
 
     return () => {
-      if (player && !player.isDisposed()) {
-        player.dispose();
-        playerRef.current = null;
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
       }
     };
-  }, [playerRef]);
+  }, [onReady]);
+
+  // Handle play changes
+  React.useEffect(() => {
+    if (!play) return;
+
+    const { cKey, mKey, mStartSegment, mSeconds, segments_prior_to_movement, segments_post_movement } = play;
+    const video = videoRef.current;
+    const hls = hlsRef.current;
+
+    if (!video) {
+      console.warn('HLS: video element not ready yet');
+      return;
+    }
+
+    const isLiveStream = !mKey; // Live streams don't have mKey
+    setIsLive(isLiveStream);
+
+    const src = `/video/${mKey ? `${mStartSegment}/${mSeconds}` : 'live'}/${cKey}/stream.m3u8${(mKey && segments_prior_to_movement) ? `?preseq=${segments_prior_to_movement}&postseq=${segments_post_movement}` : ''}`;
+
+    if (hls) {
+      hls.loadSource(src);
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      video.src = src;
+    }
+
+    if (mKey && segments_prior_to_movement) {
+      video.addEventListener('loadedmetadata', () => {
+        video.currentTime = segments_prior_to_movement * 2;
+      }, { once: true });
+    }
+
+    console.log('HLS: play()', { isLive: isLiveStream });
+    video.play().catch(e => console.warn('HLS: autoplay prevented', e));
+
+  }, [play]);
 
   return (
-    <div data-vjs-player>
-      <div ref={videoRef} />
+    <div className="video-container">
+      <video 
+        ref={videoRef}
+        controls
+        autoPlay
+        muted
+        className={isLive ? 'live-stream' : ''}
+      />
+      {isLive && (
+        <div style={{
+          position: 'absolute',
+          top: '10px',
+          left: '10px',
+          background: 'rgba(255, 0, 0, 0.8)',
+          color: 'white',
+          padding: '4px 8px',
+          borderRadius: '4px',
+          fontSize: '12px',
+          fontWeight: 'bold',
+          pointerEvents: 'none'
+        }}>
+          ● LIVE
+        </div>
+      )}
     </div>
   );
 }
@@ -105,16 +169,12 @@ function App() {
     }
   }
 
-  const handlePlayerReady = (player) => {
-    playerRef.current = player;
+  const handlePlayerReady = (video, hls) => {
+    playerRef.current = { video, hls };
 
     // you can handle player events here
-    player.on('waiting', () => {
+    video.addEventListener('waiting', () => {
       console.log('handlePlayerReady: player is waiting');
-    });
-
-    player.on('dispose', () => {
-      console.log('handlePlayerReady: player will dispose');
     });
   };
 /*
@@ -142,12 +202,7 @@ function App() {
 */
   return (
     <div className="container">
-          <VideoJS options={{
-              autoplay: true,
-              muted:"muted",
-              controls: true,
-              liveui: true
-          }} onReady={handlePlayerReady} play={currentPlaying}/>
+          <VideoJS onReady={handlePlayerReady} play={currentPlaying}/>
         <div>
           <CCTVControl playVideo={playVideo} currentPlaying={currentPlaying}/>
         </div>

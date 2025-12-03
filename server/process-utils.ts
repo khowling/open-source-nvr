@@ -323,6 +323,7 @@ export async function isStreamCurrent(filePath: string, maxAgeMs: number = 10000
  */
 export function createFFmpegFrameProcessor(movement_key: number, framesPath: string, cameraName: string) {
     let lastFrameNumber = 0;
+    let errorMessages: string[] = [];
     
     return {
         processStdout: (data: string) => {
@@ -375,10 +376,13 @@ export function createFFmpegFrameProcessor(movement_key: number, framesPath: str
             const isHLSNoise = data.includes('[hls @') && (data.includes("Skip ('#EXT-X-VERSION") || data.includes("Opening '"));
             
             if (!isProgressInfo && !isInfoMessage && !isHLSNoise) {
-                logger.warn('ffmpeg stderr', { camera: cameraName, movement: movement_key, data: data.trim() });
+                const trimmed = data.trim();
+                errorMessages.push(trimmed);
+                logger.warn('ffmpeg stderr', { camera: cameraName, movement: movement_key, data: trimmed });
             }
         },
-        getLastFrameNumber: () => lastFrameNumber
+        getLastFrameNumber: () => lastFrameNumber,
+        getErrors: () => errorMessages
     };
 }
 

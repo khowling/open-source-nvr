@@ -60,7 +60,7 @@ class SSEManager {
             lastEventId: ctx.request.headers['last-event-id'] as string
         });
         
-        logger.info('SSE client connected', { clientId, totalClients: this.clients.size });
+        // SSE client connected
         
         // Send initial connection message and flush
         const welcomeMsg = `id: ${++this.eventId}\ndata: ${JSON.stringify({ type: 'connected', message: 'Connected to movement updates', clientId })}\n\n`;
@@ -94,7 +94,7 @@ class SSEManager {
     removeClient(clientId: string): void {
         if (this.clients.has(clientId)) {
             this.clients.delete(clientId);
-            logger.info('SSE client disconnected', { clientId, totalClients: this.clients.size });
+            // SSE client disconnected
         }
     }
 

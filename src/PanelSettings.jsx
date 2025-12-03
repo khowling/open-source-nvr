@@ -471,6 +471,11 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
                       <label>Max. Single Movement {panel.values.secMaxSingleMovement} seconds</label>
                       <Slider style={{"width": "100%"}} disabled={!panel.values.enable_movement}  min={60} max={600} step={10} defaultValue={panel.values.secMaxSingleMovement}  onChange={(_,data) => updatePanelValues('secMaxSingleMovement', data.value)} />
                     </div>
+                    
+                    <div className={styles.root}>
+                      <label>Startup Delay {panel.values.secMovementStartupDelay !== undefined ? panel.values.secMovementStartupDelay : 10} seconds (wait after stream starts before checking for movement)</label>
+                      <Slider style={{"width": "100%"}} disabled={!panel.values.enable_movement}  min={0} max={60} step={5} defaultValue={panel.values.secMovementStartupDelay !== undefined ? panel.values.secMovementStartupDelay : 10}  onChange={(_,data) => updatePanelValues('secMovementStartupDelay', data.value)} />
+                    </div>
 
               </DialogContent>
             }

@@ -1,5 +1,27 @@
 /* If player & list cannot fit on same row: (player: "700px") (list: "420px") */
 
+.video-container {
+  width: 100%;
+  background: #000;
+  position: relative;
+}
+
+.video-container video {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* Hide timeline for live streams */
+.video-container video.live-stream::-webkit-media-controls-timeline {
+  display: none;
+}
+
+.video-container video.live-stream::-webkit-media-controls-current-time-display,
+.video-container video.live-stream::-webkit-media-controls-time-remaining-display {
+  display: none;
+}
+
 .scrollMe { 
   overflow: auto;
   width: 100vw;
