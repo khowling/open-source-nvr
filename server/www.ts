@@ -10,6 +10,7 @@ import send from 'koa-send';
 import fs from 'fs/promises';
 import { createReadStream } from 'fs';
 import { Level } from 'level';
+import type { Server } from 'node:http';
 import { runProcess } from './process-utils.js';
 import { sseManager, formatMovementForSSE } from './sse-manager.js';
 import { diskCheck, catalogVideo, DiskCheckReturn } from './diskcheck.js';
@@ -76,6 +77,12 @@ export interface CameraEntry {
     disk: string;
     ip?: string;
     passwd?: string;
+    /** 
+     * Optional direct URL for motion detection API.
+     * If provided, used instead of constructing from ip/passwd.
+     * Useful for testing or cameras with different API formats.
+     */
+    motionUrl?: string;
     enable_streaming: boolean;
     enable_movement: boolean;
     pollsWithoutMovement: number;
@@ -232,7 +239,7 @@ export interface WebServerDependencies {
 /**
  * Initialize and start the web server
  */
-export async function initWeb(deps: WebServerDependencies, port: number = 8080): Promise<Koa> {
+export async function initWeb(deps: WebServerDependencies, port: number = 8080): Promise<Server> {
     const { logger, cameradb, movementdb, settingsdb, cameraCache, settingsCache, setSettingsCache } = deps;
 
     const assets = new Router()
@@ -687,9 +694,9 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
     app.use(assets.routes());
 
     logger.info('NVR Server starting', { port });
-    app.listen(port);
+    const server = app.listen(port);
 
-    return app;
+    return server;
 }
 
 export { clearDownDisk, ensureDir, getFramesPath, encodeMovementKey, MOVEMENT_KEY_EPOCH };

@@ -11,8 +11,9 @@
  */
 
 import { Level } from 'level';
+
 import { logger } from './logger.js';
-import { initWeb, MOVEMENT_KEY_EPOCH } from './www.js';
+import { initWeb } from './www.js';
 import {
     initProcessor,
     runControlLoop,
@@ -20,43 +21,42 @@ import {
     setShuttingDown,
     isShuttingDown,
     getMLDetectionProcess,
-    getMovementFFmpegProcesses
+    getMovementFFmpegProcesses,
+    getMovementCloseHandlers
 } from './processor.js';
 import { sseManager } from './sse-manager.js';
-import { getAllProcesses, setLogger } from './process-utils.js';
+import { setLogger } from './process-utils.js';
 import { setLogger as setSSELogger } from './sse-manager.js';
-import type {
-    CameraEntry,
-    CameraCache,
-    CameraCacheEntry,
-    Settings,
-    SettingsCache,
-    MovementEntry
-} from './www.js';
+
+import type { CameraEntry, CameraCache, CameraCacheEntry, Settings, SettingsCache } from './www.js';
 
 // ============================================================================
 // Initialize utilities with logger
 // ============================================================================
+
 setLogger(logger);
 setSSELogger(logger);
 
 // ============================================================================
 // Database Setup
 // ============================================================================
+
 const db = new Level(process.env['DBPATH'] || './mydb', { valueEncoding: 'json' });
 const cameradb = db.sublevel<string, CameraEntry>('cameras', { valueEncoding: 'json' });
-const movementdb = db.sublevel<string, MovementEntry>('movements', { valueEncoding: 'json' });
+const movementdb = db.sublevel('movements', { valueEncoding: 'json' });
 const settingsdb = db.sublevel<string, Settings>('settings', { valueEncoding: 'json' });
 
 // ============================================================================
 // In-Memory State (clearly named per requirements)
 // ============================================================================
+
 let _inmem_cameraCache: CameraCache = {};
 let _inmem_settingsCache: SettingsCache;
 
 // ============================================================================
 // State Accessors (for dependency injection)
 // ============================================================================
+
 function getCameraCache(): CameraCache {
     return _inmem_cameraCache;
 }
@@ -76,6 +76,7 @@ function setSettingsCache(cache: SettingsCache): void {
 // ============================================================================
 // Graceful Shutdown
 // ============================================================================
+
 async function gracefulShutdown(signal: string): Promise<void> {
     if (isShuttingDown()) {
         logger.warn('Shutdown already in progress');
@@ -94,6 +95,8 @@ async function gracefulShutdown(signal: string): Promise<void> {
             logger.info('Stopping movement ffmpeg process', { movement: movement_key, pid: ffmpeg.pid });
 
             const promise = new Promise<void>((resolve) => {
+                let forceKillTimeout: NodeJS.Timeout | null = null;
+
                 const timeout = setTimeout(() => {
                     logger.warn('Movement ffmpeg did not terminate in time - forcing', {
                         movement: movement_key,
@@ -104,11 +107,12 @@ async function gracefulShutdown(signal: string): Promise<void> {
                     } catch (e) {
                         logger.error('Failed to force kill movement ffmpeg', { error: String(e) });
                     }
-                    resolve();
+                    forceKillTimeout = setTimeout(() => resolve(), 1000);
                 }, 5000);
 
                 ffmpeg.once('close', () => {
                     clearTimeout(timeout);
+                    if (forceKillTimeout) clearTimeout(forceKillTimeout);
                     logger.info('Movement ffmpeg terminated', { movement: movement_key });
                     resolve();
                 });
@@ -128,8 +132,10 @@ async function gracefulShutdown(signal: string): Promise<void> {
 
     // Stop all camera streaming ffmpeg processes
     for (const cameraKey of Object.keys(_inmem_cameraCache)) {
-        const { ffmpeg_task, cameraEntry } = _inmem_cameraCache[cameraKey];
+        const cacheEntry = _inmem_cameraCache[cameraKey];
+        if (!cacheEntry) continue;
 
+        const { ffmpeg_task, cameraEntry } = cacheEntry;
         if (ffmpeg_task && ffmpeg_task.exitCode === null) {
             logger.info('Stopping camera ffmpeg process', { camera: cameraEntry.name, pid: ffmpeg_task.pid });
 
@@ -205,6 +211,13 @@ async function gracefulShutdown(signal: string): Promise<void> {
     // Wait for all processes to terminate
     await Promise.all(shutdownPromises);
 
+    // Wait for any in-flight movement close handlers to complete DB writes
+    const closeHandlers = getMovementCloseHandlers();
+    if (closeHandlers.size > 0) {
+        logger.info('Waiting for movement close handlers', { count: closeHandlers.size });
+        await Promise.all(closeHandlers.values()).catch(() => {});
+    }
+
     logger.info('All processes terminated - exiting', {
         signal,
         processCount: shutdownPromises.length
@@ -227,6 +240,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
 // ============================================================================
 // Main Application Entry
 // ============================================================================
+
 async function main(): Promise<void> {
     // Populate cameraCache from database
     for await (const [key, value] of cameradb.iterator()) {
@@ -310,7 +324,7 @@ async function main(): Promise<void> {
     process.on('SIGUSR2', () => gracefulShutdown('SIGUSR2')); // For nodemon
 
     // Handle uncaught exceptions and rejections
-    process.on('uncaughtException', (error: Error) => {
+    process.on('uncaughtException', (error) => {
         logger.error('Uncaught exception - initiating shutdown', {
             error: error.message,
             stack: error.stack
@@ -318,7 +332,7 @@ async function main(): Promise<void> {
         gracefulShutdown('uncaughtException').then(() => process.exit(1));
     });
 
-    process.on('unhandledRejection', (reason: any) => {
+    process.on('unhandledRejection', (reason) => {
         logger.error('Unhandled rejection - initiating shutdown', {
             reason: reason instanceof Error ? reason.message : String(reason),
             stack: reason instanceof Error ? reason.stack : undefined

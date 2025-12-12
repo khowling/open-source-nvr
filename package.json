@@ -6,7 +6,10 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "server": "node lib"
+    "server": "node lib",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "eslintConfig": {
     "extends": []
@@ -34,10 +37,12 @@
     "@types/koa__router": "^12.0.5",
     "@types/koa-bodyparser": "^4.3.5",
     "@types/level": "^6.0.0",
-    "@types/node": "^24.10.1",
+    "@types/node": "^24.10.3",
     "@vitejs/plugin-react": "^5.1.1",
+    "@vitest/coverage-v8": "^4.0.15",
     "typescript": "^5.9.3",
-    "vite": "^7.2.6"
+    "vite": "^7.2.6",
+    "vitest": "^4.0.15"
   },
   "dependencies": {
     "@koa/router": "^14.0.0",

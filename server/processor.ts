@@ -19,7 +19,8 @@ import {
     createFFmpegFrameProcessor,
     createMLResultProcessor,
     verifyStreamStartup,
-    setDependencies
+    setDependencies,
+    setLogger
 } from './process-utils.js';
 import { sseManager, formatMovementForSSE } from './sse-manager.js';
 import { diskCheck, DiskCheckReturn } from './diskcheck.js';
@@ -47,6 +48,9 @@ let _inmem_mlDetectionProcess: ChildProcessWithoutNullStreams | null = null;
 
 // Track ffmpeg processes for each movement (key: movement_key, value: process)
 const _inmem_movementFFmpegProcesses: Map<string, ChildProcessWithoutNullStreams> = new Map();
+
+// Track in-flight movement close handlers (for graceful shutdown)
+const _inmem_movementCloseHandlers: Map<string, Promise<void>> = new Map();
 
 // Track when frames are sent to ML for timing
 const _inmem_mlFrameSentTimes: Map<string, number> = new Map();
@@ -142,6 +146,7 @@ export function initProcessor(dependencies: ProcessorDependencies): void {
     deps = dependencies;
     
     // Initialize process-utils with required dependencies
+    setLogger(dependencies.logger);
     setDependencies({
         settingsCache: dependencies.getSettingsCache(),
         movementdb: dependencies.movementdb,
@@ -164,6 +169,32 @@ export function getMLDetectionProcess(): ChildProcessWithoutNullStreams | null {
 
 export function getMovementFFmpegProcesses(): Map<string, ChildProcessWithoutNullStreams> {
     return _inmem_movementFFmpegProcesses;
+}
+
+export function getMovementCloseHandlers(): Map<string, Promise<void>> {
+    return _inmem_movementCloseHandlers;
+}
+
+/**
+ * Reset all in-memory state. Used by tests to ensure isolation.
+ */
+export function resetProcessorState(): void {
+    _inmem_isShuttingDown = false;
+    _inmem_mlDetectionProcess = null;
+    _inmem_movementFFmpegProcesses.clear();
+    _inmem_movementCloseHandlers.clear();
+    _inmem_mlFrameSentTimes.clear();
+    _inmem_pendingUpdates.clear();
+    _inmem_lastSSEKeepAlive = 0;
+    _inmem_lastDiskCheck = 0;
+    
+    // Clear controller state objects
+    for (const key of Object.keys(_inmem_controllerFFmpeg_inprogress)) {
+        delete _inmem_controllerFFmpeg_inprogress[key];
+    }
+    for (const key of Object.keys(_inmem_controllerFFmpegConfirmation)) {
+        delete _inmem_controllerFFmpegConfirmation[key];
+    }
 }
 
 // ============================================================================
@@ -481,12 +512,13 @@ export async function detectCameraMovement(cameraKey: string): Promise<void> {
         current_movement_key: movementDetectionStatus?.current_movement_key
     });
 
-    const { ip, passwd } = cameraEntry;
+    const { ip, passwd, motionUrl } = cameraEntry;
 
     try {
         const { current_movement_key } = movementDetectionStatus || { current_movement_key: undefined };
 
-        const apiUrl = `http://${ip}/api.cgi?cmd=GetMdState&user=admin&password=${passwd}`;
+        // Use motionUrl if provided, otherwise construct from ip/passwd
+        const apiUrl = motionUrl || `http://${ip}/api.cgi?cmd=GetMdState&user=admin&password=${passwd}`;
 
         // Fetch with timeout
         const fetchAndReadPromise = (async () => {
@@ -923,67 +955,77 @@ export async function triggerProcessMovement(
                 error: error.message
             });
         },
-        onClose: async (code: number | null, signal: string | null) => {
-            const isGraceful = code === 0 || code === 255 || signal === 'SIGTERM' || signal === 'SIGKILL' || _inmem_isShuttingDown;
+        onClose: (code: number | null, signal: string | null) => {
+            // Wrap async logic in a tracked promise for graceful shutdown
+            const closeHandler = async () => {
+                const isGraceful = code === 0 || code === 255 || signal === 'SIGTERM' || signal === 'SIGKILL' || _inmem_isShuttingDown;
 
-            deps.logger.info('ffmpeg frame extraction complete', {
-                camera: cameraEntry.name,
-                movement: movement_key,
-                exitCode: code,
-                signal,
-                totalFrames: frameProcessor.getLastFrameNumber(),
-                graceful: isGraceful
-            });
-
-            // Remove from tracking
-            _inmem_movementFFmpegProcesses.delete(movement_key);
-
-            // Mark as completed or failed
-            try {
-                const m = await deps.movementdb.get(movement_key);
-                const totalFrames = frameProcessor.getLastFrameNumber();
-                const hasFailed = totalFrames === 0 || (!isGraceful && code !== 0);
-
-                let errorMsg = '';
-                if (hasFailed) {
-                    const stderrErrors = frameProcessor.getErrors();
-                    if (stderrErrors.length > 0) {
-                        errorMsg = stderrErrors[0];
-                    } else if (totalFrames === 0) {
-                        errorMsg = 'No frames extracted';
-                    } else {
-                        errorMsg = `ffmpeg exited with code ${code}`;
-                    }
-                }
-
-                await deps.movementdb.put(movement_key, {
-                    ...m,
-                    processing_state: hasFailed ? 'failed' as const : 'completed' as const,
-                    processing_completed_at: Date.now(),
-                    ...(hasFailed && { processing_error: errorMsg })
+                deps.logger.info('ffmpeg frame extraction complete', {
+                    camera: cameraEntry.name,
+                    movement: movement_key,
+                    exitCode: code,
+                    signal,
+                    totalFrames: frameProcessor.getLastFrameNumber(),
+                    graceful: isGraceful
                 });
 
-                if (hasFailed) {
-                    deps.logger.warn('Movement processing failed', {
+                // Remove from tracking
+                _inmem_movementFFmpegProcesses.delete(movement_key);
+
+                // Mark as completed or failed
+                try {
+                    const m = await deps.movementdb.get(movement_key);
+                    const totalFrames = frameProcessor.getLastFrameNumber();
+                    const hasFailed = totalFrames === 0 || (!isGraceful && code !== 0);
+
+                    let errorMsg = '';
+                    if (hasFailed) {
+                        const stderrErrors = frameProcessor.getErrors();
+                        if (stderrErrors.length > 0) {
+                            errorMsg = stderrErrors[0];
+                        } else if (totalFrames === 0) {
+                            errorMsg = 'No frames extracted';
+                        } else {
+                            errorMsg = `ffmpeg exited with code ${code}`;
+                        }
+                    }
+
+                    await deps.movementdb.put(movement_key, {
+                        ...m,
+                        processing_state: hasFailed ? 'failed' as const : 'completed' as const,
+                        processing_completed_at: Date.now(),
+                        ...(hasFailed && { processing_error: errorMsg })
+                    });
+
+                    if (hasFailed) {
+                        deps.logger.warn('Movement processing failed', {
+                            camera: cameraEntry.name,
+                            movement_key,
+                            totalFrames,
+                            exitCode: code,
+                            graceful: isGraceful
+                        });
+                    } else {
+                        deps.logger.info('Movement processing completed', {
+                            camera: cameraEntry.name,
+                            movement_key
+                        });
+                    }
+                } catch (error) {
+                    deps.logger.error('Failed to mark movement as completed', {
                         camera: cameraEntry.name,
                         movement_key,
-                        totalFrames,
-                        exitCode: code,
-                        graceful: isGraceful
+                        error: String(error)
                     });
-                } else {
-                    deps.logger.info('Movement processing completed', {
-                        camera: cameraEntry.name,
-                        movement_key
-                    });
+                } finally {
+                    // Remove from close handlers tracking
+                    _inmem_movementCloseHandlers.delete(movement_key);
                 }
-            } catch (error) {
-                deps.logger.error('Failed to mark movement as completed', {
-                    camera: cameraEntry.name,
-                    movement_key,
-                    error: String(error)
-                });
-            }
+            };
+
+            // Track this close handler promise
+            const promise = closeHandler();
+            _inmem_movementCloseHandlers.set(movement_key, promise);
         }
     });
 
