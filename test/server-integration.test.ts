@@ -215,7 +215,7 @@ describe('Full Movement Pipeline', () => {
             enableDetection: true, 
             controlLoopInterval: 0,
             testVideoPath: fastVideoPath,
-            streamVerifyTimeoutMs: 5000  // Allow more time for HLS segments to be created
+            streamVerifyTimeoutMs: 10000  // Allow 10s for HLS segments (2s segment time + buffering)
         });
         
         try {
@@ -223,7 +223,7 @@ describe('Full Movement Pipeline', () => {
             server.setCameraMovement(cameraKey, true);
             
             // Run multiple control loops to allow stream to start and movement to be detected
-            // The stream needs time to start and verify before movement detection runs
+            // With secMovementStartupDelay=0, movement should be detected on first poll after stream ready
             let movements: any[] = [];
             const maxAttempts = 10;
             for (let i = 0; i < maxAttempts && movements.length === 0; i++) {

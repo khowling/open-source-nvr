@@ -1342,8 +1342,8 @@ export async function runControlLoop(): Promise<void> {
                     continue;
                 }
 
-                // Entry criteria: startup delay must have passed
-                const startupDelay = (cameraEntry.secMovementStartupDelay || 10) * 1000;
+                // Entry criteria: startup delay must have passed (use ?? to allow 0)
+                const startupDelay = (cameraEntry.secMovementStartupDelay ?? 10) * 1000;
                 const delayCheck = checkStartupDelayPassed(streamStartedAt, startupDelay);
                 if (!delayCheck.canRun) {
                     const logKey = `lastStartupDelayLog_${cKey}`;
