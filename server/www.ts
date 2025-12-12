@@ -251,7 +251,7 @@ export interface WebServerDependencies {
     movementdb: any;
     settingsdb: any;
     cameraCache: CameraCache;
-    settingsCache: SettingsCache;
+    getSettingsCache: () => SettingsCache;
     setSettingsCache: (cache: SettingsCache) => void;
 }
 
@@ -259,7 +259,7 @@ export interface WebServerDependencies {
  * Initialize and start the web server
  */
 export async function initWeb(deps: WebServerDependencies, port: number = 8080): Promise<Server> {
-    const { logger, cameradb, movementdb, settingsdb, cameraCache, settingsCache, setSettingsCache } = deps;
+    const { logger, cameradb, movementdb, settingsdb, cameraCache, getSettingsCache, setSettingsCache } = deps;
 
     const assets = new Router()
         .get('/image/:moment', async (ctx) => {
@@ -297,7 +297,7 @@ export async function initWeb(deps: WebServerDependencies, port: number = 8080):
                     return;
                 }
                 const { disk, folder } = cameraCache[m.cameraKey].cameraEntry;
-                const framesPath = getFramesPath(settingsCache.settings, disk, folder);
+                const framesPath = getFramesPath(getSettingsCache().settings, disk, folder);
                 const serve = `${framesPath}/${filename}`;
                 await fs.stat(serve);
                 ctx.set('content-type', 'image/jpeg');
@@ -435,10 +435,11 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
                     const dirchk = await fs.stat(new_settings.disk_base_dir);
                     if (!dirchk.isDirectory()) throw new Error(`${new_settings.disk_base_dir} is not a directory`);
                     await settingsdb.put('config', new_settings);
+                    const currentCache = getSettingsCache();
                     setSettingsCache({
-                        ...settingsCache,
+                        ...currentCache,
                         settings: new_settings,
-                        status: { ...settingsCache.status, nextCheckInMinutes: new_settings.disk_cleanup_interval }
+                        status: { ...currentCache.status, nextCheckInMinutes: new_settings.disk_cleanup_interval }
                     });
                     ctx.status = 201;
                 } catch (err) {
@@ -539,12 +540,13 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
 
                             if (deleteOption === 'reset') {
                                 logger.info('Resetting camera recordings', { cameraKey });
+                                const currentSettings = getSettingsCache();
                                 const diskres = await clearDownDisk(
-                                    settingsCache.settings.disk_base_dir,
+                                    currentSettings.settings.disk_base_dir,
                                     [cameraKey],
                                     -1,
                                     cameraCache,
-                                    settingsCache,
+                                    currentSettings,
                                     movementdb,
                                     logger
                                 );
@@ -567,12 +569,13 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
                                 });
                                 ctx.status = 200;
                             } else if (deleteOption === 'delall') {
+                                const currentSettings = getSettingsCache();
                                 const diskres = await clearDownDisk(
-                                    settingsCache.settings.disk_base_dir,
+                                    currentSettings.settings.disk_base_dir,
                                     [cameraKey],
                                     -1,
                                     cameraCache,
-                                    settingsCache,
+                                    currentSettings,
                                     movementdb,
                                     logger
                                 );
@@ -626,14 +629,14 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
                         const listfiles = await catalogVideo(`${c.disk}/${c.folder}`);
                         // Time mode implementation - currently empty per original
                     }
-                    res({ config: settingsCache, cameras, movements });
+                    res({ config: getSettingsCache(), cameras, movements });
                 } else {
                     for await (const [key, value] of movementdb.iterator({ reverse: true })) {
                         const { detection_output } = value;
 
                         let tags = detection_output?.tags || null;
                         if (mode === 'Filtered') {
-                            const { detection_tag_filters } = settingsCache.settings || {};
+                            const { detection_tag_filters } = getSettingsCache().settings || {};
                             if (!detection_tag_filters || detection_tag_filters.length === 0) {
                                 tags = [];
                             } else if (tags && Array.isArray(tags) && tags.length > 0) {
@@ -671,7 +674,7 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
                             });
                         }
                     }
-                    res({ config: settingsCache, cameras, movements });
+                    res({ config: getSettingsCache(), cameras, movements });
                 }
             });
         });

@@ -171,7 +171,7 @@ export async function createServer(config: ServerConfig = {}): Promise<ServerHan
         movementdb,
         settingsdb,
         cameraCache: _inmem_cameraCache,
-        settingsCache: _inmem_settingsCache,
+        getSettingsCache,
         setSettingsCache
     }, port);
 

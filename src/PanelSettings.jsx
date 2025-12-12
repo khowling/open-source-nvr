@@ -387,9 +387,47 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
                         ))}
                         {(!panel.values.detection_tag_filters || panel.values.detection_tag_filters.length === 0) && (
                           <Text style={{ fontStyle: 'italic', color: '#666' }}>
-                            No filters configured. Right-click any badge to add a filter.
+                            No filters configured. Add a tag below or right-click any badge in the movement list.
                           </Text>
                         )}
+                        <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+                          <Input 
+                            style={{ flex: 1 }}
+                            placeholder="Enter tag name (e.g., person, car, toilet)"
+                            disabled={!panel.values.detection_enable}
+                            id="newTagFilterInput"
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                const input = e.target;
+                                const tagName = input.value.trim().toLowerCase();
+                                if (tagName) {
+                                  const currentFilters = panel.values.detection_tag_filters || [];
+                                  if (!currentFilters.find(f => f.tag === tagName)) {
+                                    const newFilters = [...currentFilters, { tag: tagName, minProbability: 0.5 }];
+                                    updatePanelValues('detection_tag_filters', newFilters);
+                                    input.value = '';
+                                  }
+                                }
+                              }
+                            }}
+                          />
+                          <Button 
+                            disabled={!panel.values.detection_enable}
+                            onClick={() => {
+                              const input = document.getElementById('newTagFilterInput');
+                              const tagName = input?.value?.trim().toLowerCase();
+                              if (tagName) {
+                                const currentFilters = panel.values.detection_tag_filters || [];
+                                if (!currentFilters.find(f => f.tag === tagName)) {
+                                  const newFilters = [...currentFilters, { tag: tagName, minProbability: 0.5 }];
+                                  updatePanelValues('detection_tag_filters', newFilters);
+                                  input.value = '';
+                                }
+                              }
+                            }}>
+                            Add Filter
+                          </Button>
+                        </div>
                       </div>
                     </Field>
 
