@@ -1016,12 +1016,21 @@ export async function triggerProcessMovement(
                         }
                     }
 
-                    await deps.movementdb.put(movement_key, {
+                    const updatedMovement = {
                         ...m,
                         processing_state: hasFailed ? 'failed' as const : 'completed' as const,
                         processing_completed_at: Date.now(),
                         ...(hasFailed && { processing_error: errorMsg })
-                    });
+                    };
+                    await deps.movementdb.put(movement_key, updatedMovement);
+
+                    // Broadcast completion state to UI
+                    if (sseManager.getClientCount() > 0) {
+                        sseManager.broadcastMovementUpdate({
+                            type: 'movement_update',
+                            movement: formatMovementForSSE(movement_key, updatedMovement)
+                        });
+                    }
 
                     if (hasFailed) {
                         deps.logger.warn('Movement processing failed', {
