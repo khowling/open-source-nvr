@@ -226,6 +226,7 @@ export function formatMovementForSSE(key: string, movement: any): any {
             seconds: movement.seconds,
             detection_status: movement.detection_status || 'complete',
             processing_state: movement.processing_state,
+            ...(movement.processing_error && { processing_error: movement.processing_error }),
             ...(movement.detection_output && {
                 detection_output: { tags: movement.detection_output.tags || [] }
             })

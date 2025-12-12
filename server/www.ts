@@ -669,6 +669,7 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
                                     seconds: value.seconds,
                                     detection_status: value.detection_status || 'complete',
                                     processing_state: value.processing_state,
+                                    ...(value.processing_error && { processing_error: value.processing_error }),
                                     ...(tags && tags.length > 0 && { detection_output: { tags } })
                                 }
                             });

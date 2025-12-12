@@ -550,6 +550,11 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
                     <div className={styles.root}>
                       <label>Extend capturing movement after camera reports no movement for {panel.values.pollsWithoutMovement} poll(s) (0 = stop immediately)</label>
                       <Slider style={{"width": "100%"}} disabled={!panel.values.enable_movement}  min={0} max={10} step={1} defaultValue={panel.values.pollsWithoutMovement}  onChange={(_,data) => updatePanelValues('pollsWithoutMovement', data.value)} />
+                      {panel.values.pollsWithoutMovement === 0 && (
+                        <Alert intent="warning" style={{marginTop: "4px"}}>
+                          Setting to 0 may cause frame extraction to fail for short movements. Use at least 1-2 polls for reliable detection.
+                        </Alert>
+                      )}
                     </div>
                     
                     <div className={styles.root}>

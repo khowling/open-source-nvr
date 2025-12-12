@@ -1019,6 +1019,7 @@ export async function triggerProcessMovement(
                     const updatedMovement = {
                         ...m,
                         processing_state: hasFailed ? 'failed' as const : 'completed' as const,
+                        detection_status: hasFailed ? 'failed' : 'complete',
                         processing_completed_at: Date.now(),
                         ...(hasFailed && { processing_error: errorMsg })
                     };
