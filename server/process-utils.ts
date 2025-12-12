@@ -321,7 +321,7 @@ export async function isStreamCurrent(filePath: string, maxAgeMs: number = 10000
  * Create a processor for ffmpeg frame extraction output
  * Extracts frame numbers and paths, sends them to ML detection
  */
-export function createFFmpegFrameProcessor(movement_key: number, framesPath: string, cameraName: string) {
+export function createFFmpegFrameProcessor(movement_key: string, framesPath: string, cameraName: string) {
     let lastFrameNumber = 0;
     let errorMessages: string[] = [];
     
@@ -338,7 +338,7 @@ export function createFFmpegFrameProcessor(movement_key: number, framesPath: str
                         lastFrameNumber = frameNumber;
                         const framePath = `${framesPath}/mov${movement_key}_${frameNumber.toString().padStart(4, '0')}.jpg`;
                         
-                        logger.debug('Frame extracted', { 
+                        logger.info('createFFmpegFrameProcessor: Frame extracted', { 
                             camera: cameraName, 
                             movement: movement_key, 
                             frame: frameNumber,
@@ -352,9 +352,9 @@ export function createFFmpegFrameProcessor(movement_key: number, framesPath: str
                         
                         // Update ML status to 'analyzing' after first frame
                         if (frameNumber === 1) {
-                            const encodedKey = encodeMovementKey(movement_key);
-                            movementdb.get(encodedKey).then((movement: any) => {
-                                movementdb.put(encodedKey, {
+
+                            movementdb.get(movement_key).then((movement: any) => {
+                                movementdb.put(movement_key, {
                                     ...movement,
                                     detection_status: 'analyzing'
                                 }).catch((err: Error) => {
@@ -378,7 +378,7 @@ export function createFFmpegFrameProcessor(movement_key: number, framesPath: str
             if (!isProgressInfo && !isInfoMessage && !isHLSNoise) {
                 const trimmed = data.trim();
                 errorMessages.push(trimmed);
-                logger.warn('ffmpeg stderr', { camera: cameraName, movement: movement_key, data: trimmed });
+                logger.warn('createFFmpegFrameProcessor: ffmpeg stderr', { camera: cameraName, movement: movement_key, data: trimmed });
             }
         },
         getLastFrameNumber: () => lastFrameNumber,

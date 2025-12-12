@@ -200,7 +200,7 @@ export const sseManager = new SSEManager();
 /**
  * Helper to format movement data for SSE broadcast
  */
-export function formatMovementForSSE(key: number, movement: any): any {
+export function formatMovementForSSE(key: string, movement: any): any {
     if (!movement) throw new Error(`Cannot format null movement ${key}`);
     if (!movement.startDate) throw new Error(`Movement ${key} missing startDate`);
     
