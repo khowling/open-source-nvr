@@ -1,12 +1,9 @@
 {
   "compilerOptions": {
-    "lib": [
-      "es2022",
-      "dom"
-    ],
-    "module": "Node16",
-    "moduleResolution": "Node16",
-    "target": "es2022",
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "target": "ES2023",
     "strict": false,
     "esModuleInterop": true,
     "skipLibCheck": true,

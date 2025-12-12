@@ -36,6 +36,8 @@ export interface TestServerConfig {
     cameraCount?: number;
     enableDetection?: boolean;
     modelPath?: string;
+    testVideoPath?: string;
+    streamVerifyTimeoutMs?: number;
     controlLoopInterval?: number;
     port?: number;
     movements?: Array<{
@@ -70,6 +72,8 @@ export async function startTestServer(config: TestServerConfig = {}): Promise<Te
         cameraCount = 1,
         enableDetection = false,
         modelPath = path.join(process.cwd(), 'ai/model/yolo11n.onnx'),
+        testVideoPath: customVideoPath,
+        streamVerifyTimeoutMs = 2000,
         controlLoopInterval = 0,
         port = 0
     } = config;
@@ -83,7 +87,7 @@ export async function startTestServer(config: TestServerConfig = {}): Promise<Te
     await fs.mkdir(dbPath, { recursive: true });
 
     // Find test video file (for stream source)
-    const testVideoPath = path.join(process.cwd(), 'test/data/video/test.mp4');
+    const testVideoPath = customVideoPath || path.join(process.cwd(), 'test/data/video/test.mp4');
     const testVideoExists = await fs.access(testVideoPath).then(() => true).catch(() => false);
 
     // Create mock camera servers and camera configs
@@ -145,7 +149,7 @@ export async function startTestServer(config: TestServerConfig = {}): Promise<Te
         disk_cleanup_interval: 0,
         disk_cleanup_capacity: 90,
         shutdown_timeout_ms: 500,
-        stream_verify_timeout_ms: 2000
+        stream_verify_timeout_ms: streamVerifyTimeoutMs
     };
     await fetch(`http://127.0.0.1:${server.port}/api/settings`, {
         method: 'POST',

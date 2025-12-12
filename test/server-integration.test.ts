@@ -4,6 +4,7 @@
  * Uses shared server instances to minimize startup/shutdown overhead.
  */
 
+import path from 'path';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { startTestServer, TestServer } from './helpers/test-server.js';
 
@@ -43,7 +44,7 @@ describe('Server Integration', () => {
         it('should respond to GET /api/movements with config and cameras', async () => {
             const response = await fetch(`${server.baseUrl}/api/movements`);
             expect(response.ok).toBe(true);
-            const data = await response.json();
+            const data = await response.json() as { config: any; cameras: any[] };
             expect(data.config).toBeDefined();
             expect(data.cameras).toBeDefined();
             expect(Array.isArray(data.cameras)).toBe(true);
@@ -95,7 +96,7 @@ describe('Server Integration', () => {
             });
             const response = await fetch(`${server.baseUrl}/api/movements?mode=Movement`);
             expect(response.ok).toBe(true);
-            const data = await response.json();
+            const data = await response.json() as { movements: any[] };
             expect(data.movements.length).toBeGreaterThanOrEqual(1);
         });
 
@@ -201,14 +202,21 @@ describe('Server Integration', () => {
 describe('Full Movement Pipeline', () => {
     it('should complete full movement detection cycle', async () => {
         const modelExists = await checkFileExists('ai/model/yolo11n.onnx');
-        // Requires a loopable video file (MP4), not just HLS segments
-        const videoExists = await checkFileExists('test/data/video/test.mp4');
+        // Use fast-test.mp4 (10s, ultrafast encode, frequent keyframes) for quick HLS segment generation
+        const fastVideoPath = path.join(process.cwd(), 'test/data/video/fast-test.mp4');
+        const videoExists = await checkFileExists('test/data/video/fast-test.mp4');
         if (!modelExists || !videoExists) {
-            console.log('Skipping full pipeline test - required files missing (need test.mp4 and yolo model)');
+            console.log('Skipping full pipeline test - required files missing (need fast-test.mp4 and yolo model)');
             return;
         }
 
-        const server = await startTestServer({ cameraCount: 1, enableDetection: true, controlLoopInterval: 0 });
+        const server = await startTestServer({ 
+            cameraCount: 1, 
+            enableDetection: true, 
+            controlLoopInterval: 0,
+            testVideoPath: fastVideoPath,
+            streamVerifyTimeoutMs: 5000  // Allow more time for HLS segments to be created
+        });
         
         try {
             const cameraKey = server.getCameraKey(1);
