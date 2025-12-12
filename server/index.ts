@@ -8,11 +8,16 @@
  * - Graceful shutdown handling
  * 
  * Per requirements: Minimal boilerplate, state in database for persistence
+ * 
+ * Exports createServer() for programmatic use (e.g., tests)
  */
 
 import { Level } from 'level';
+import type { Server } from 'node:http';
+import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 
-import { logger } from './logger.js';
+import { logger as defaultLogger } from './logger.js';
 import { initWeb } from './www.js';
 import {
     initProcessor,
@@ -22,226 +27,98 @@ import {
     isShuttingDown,
     getMLDetectionProcess,
     getMovementFFmpegProcesses,
-    getMovementCloseHandlers
+    getMovementCloseHandlers,
+    resetProcessorState
 } from './processor.js';
 import { sseManager } from './sse-manager.js';
 import { setLogger } from './process-utils.js';
 import { setLogger as setSSELogger } from './sse-manager.js';
 
-import type { CameraEntry, CameraCache, CameraCacheEntry, Settings, SettingsCache } from './www.js';
+import type { CameraEntry, CameraCache, CameraCacheEntry, Settings, SettingsCache, MovementEntry } from './www.js';
 
 // ============================================================================
-// Initialize utilities with logger
+// Server Configuration
 // ============================================================================
 
-setLogger(logger);
-setSSELogger(logger);
-
-// ============================================================================
-// Database Setup
-// ============================================================================
-
-const db = new Level(process.env['DBPATH'] || './mydb', { valueEncoding: 'json' });
-const cameradb = db.sublevel<string, CameraEntry>('cameras', { valueEncoding: 'json' });
-const movementdb = db.sublevel('movements', { valueEncoding: 'json' });
-const settingsdb = db.sublevel<string, Settings>('settings', { valueEncoding: 'json' });
-
-// ============================================================================
-// In-Memory State (clearly named per requirements)
-// ============================================================================
-
-let _inmem_cameraCache: CameraCache = {};
-let _inmem_settingsCache: SettingsCache;
-
-// ============================================================================
-// State Accessors (for dependency injection)
-// ============================================================================
-
-function getCameraCache(): CameraCache {
-    return _inmem_cameraCache;
+export interface ServerConfig {
+    /** Database path (default: ./mydb or DBPATH env var) */
+    dbPath?: string;
+    /** HTTP port (default: 8080 or PORT env var) */
+    port?: number;
+    /** Custom logger (default: winston logger from logger.ts) */
+    logger?: {
+        debug: (...args: any[]) => void;
+        info: (...args: any[]) => void;
+        warn: (...args: any[]) => void;
+        error: (...args: any[]) => void;
+    };
+    /** Control loop interval in ms (default: 1000, set 0 to disable auto-run) */
+    controlLoopInterval?: number;
+    /** Disk cleanup loop interval in ms (default: 60000, set 0 to disable) */
+    diskCleanupInterval?: number;
+    /** Register process signal handlers (default: true, set false for tests) */
+    registerSignalHandlers?: boolean;
 }
 
-function setCameraCache(key: string, entry: CameraCacheEntry): void {
-    _inmem_cameraCache[key] = entry;
-}
-
-function getSettingsCache(): SettingsCache {
-    return _inmem_settingsCache;
-}
-
-function setSettingsCache(cache: SettingsCache): void {
-    _inmem_settingsCache = cache;
-}
-
-// ============================================================================
-// Graceful Shutdown
-// ============================================================================
-
-async function gracefulShutdown(signal: string): Promise<void> {
-    if (isShuttingDown()) {
-        logger.warn('Shutdown already in progress');
-        return;
-    }
-
-    setShuttingDown(true);
-    logger.info('Graceful shutdown initiated', { signal });
-
-    const shutdownPromises: Promise<void>[] = [];
-
-    // Stop all movement extraction ffmpeg processes
-    const movementProcesses = getMovementFFmpegProcesses();
-    for (const [movement_key, ffmpeg] of movementProcesses.entries()) {
-        if (ffmpeg && ffmpeg.exitCode === null) {
-            logger.info('Stopping movement ffmpeg process', { movement: movement_key, pid: ffmpeg.pid });
-
-            const promise = new Promise<void>((resolve) => {
-                let forceKillTimeout: NodeJS.Timeout | null = null;
-
-                const timeout = setTimeout(() => {
-                    logger.warn('Movement ffmpeg did not terminate in time - forcing', {
-                        movement: movement_key,
-                        pid: ffmpeg.pid
-                    });
-                    try {
-                        ffmpeg.kill('SIGKILL');
-                    } catch (e) {
-                        logger.error('Failed to force kill movement ffmpeg', { error: String(e) });
-                    }
-                    forceKillTimeout = setTimeout(() => resolve(), 1000);
-                }, 5000);
-
-                ffmpeg.once('close', () => {
-                    clearTimeout(timeout);
-                    if (forceKillTimeout) clearTimeout(forceKillTimeout);
-                    logger.info('Movement ffmpeg terminated', { movement: movement_key });
-                    resolve();
-                });
-
-                try {
-                    ffmpeg.kill();
-                } catch (e) {
-                    logger.error('Failed to kill movement ffmpeg', { error: String(e) });
-                    clearTimeout(timeout);
-                    resolve();
-                }
-            });
-
-            shutdownPromises.push(promise);
-        }
-    }
-
-    // Stop all camera streaming ffmpeg processes
-    for (const cameraKey of Object.keys(_inmem_cameraCache)) {
-        const cacheEntry = _inmem_cameraCache[cameraKey];
-        if (!cacheEntry) continue;
-
-        const { ffmpeg_task, cameraEntry } = cacheEntry;
-        if (ffmpeg_task && ffmpeg_task.exitCode === null) {
-            logger.info('Stopping camera ffmpeg process', { camera: cameraEntry.name, pid: ffmpeg_task.pid });
-
-            const promise = new Promise<void>((resolve) => {
-                const timeout = setTimeout(() => {
-                    logger.warn('ffmpeg process did not terminate in time - forcing', {
-                        camera: cameraEntry.name,
-                        pid: ffmpeg_task.pid
-                    });
-                    try {
-                        ffmpeg_task.kill('SIGKILL');
-                    } catch (e) {
-                        logger.error('Failed to force kill ffmpeg', { error: String(e) });
-                    }
-                    resolve();
-                }, 5000);
-
-                ffmpeg_task.once('close', () => {
-                    clearTimeout(timeout);
-                    logger.info('Camera ffmpeg terminated', { camera: cameraEntry.name });
-                    resolve();
-                });
-
-                try {
-                    ffmpeg_task.kill();
-                } catch (e) {
-                    logger.error('Failed to kill ffmpeg process', { error: String(e) });
-                    clearTimeout(timeout);
-                    resolve();
-                }
-            });
-
-            shutdownPromises.push(promise);
-        }
-    }
-
-    // Stop ML detection process
-    const mlProcess = getMLDetectionProcess();
-    if (mlProcess && mlProcess.exitCode === null) {
-        logger.info('Stopping ML detection process', { pid: mlProcess.pid });
-
-        const promise = new Promise<void>((resolve) => {
-            const timeout = setTimeout(() => {
-                logger.warn('ML detection process did not terminate in time - forcing', {
-                    pid: mlProcess.pid
-                });
-                try {
-                    mlProcess.kill('SIGKILL');
-                } catch (e) {
-                    logger.error('Failed to force kill ML process', { error: String(e) });
-                }
-                resolve();
-            }, 5000);
-
-            mlProcess.once('close', () => {
-                clearTimeout(timeout);
-                logger.info('ML detection process terminated');
-                resolve();
-            });
-
-            try {
-                mlProcess.kill();
-            } catch (e) {
-                logger.error('Failed to kill ML detection process', { error: String(e) });
-                clearTimeout(timeout);
-                resolve();
-            }
-        });
-
-        shutdownPromises.push(promise);
-    }
-
-    // Wait for all processes to terminate
-    await Promise.all(shutdownPromises);
-
-    // Wait for any in-flight movement close handlers to complete DB writes
-    const closeHandlers = getMovementCloseHandlers();
-    if (closeHandlers.size > 0) {
-        logger.info('Waiting for movement close handlers', { count: closeHandlers.size });
-        await Promise.all(closeHandlers.values()).catch(() => {});
-    }
-
-    logger.info('All processes terminated - exiting', {
-        signal,
-        processCount: shutdownPromises.length
-    });
-
-    // Close SSE connections
-    sseManager.closeAll();
-
-    // Close database
-    try {
-        await db.close();
-        logger.info('Database closed');
-    } catch (e) {
-        logger.error('Failed to close database', { error: String(e) });
-    }
-
-    process.exit(0);
+export interface ServerHandle {
+    /** HTTP port the server is listening on */
+    port: number;
+    /** Base URL for HTTP requests */
+    baseUrl: string;
+    /** Database handles */
+    db: {
+        base: Level<string, any>;
+        cameras: ReturnType<Level<string, any>['sublevel']>;
+        movements: ReturnType<Level<string, any>['sublevel']>;
+        settings: ReturnType<Level<string, any>['sublevel']>;
+    };
+    /** In-memory camera cache (live reference) */
+    cameraCache: CameraCache;
+    /** In-memory settings cache (live getter) */
+    getSettingsCache: () => SettingsCache;
+    /** Manually run the control loop */
+    runControlLoop: () => Promise<void>;
+    /** Graceful shutdown */
+    shutdown: () => Promise<void>;
 }
 
 // ============================================================================
-// Main Application Entry
+// Create Server
 // ============================================================================
 
-async function main(): Promise<void> {
+export async function createServer(config: ServerConfig = {}): Promise<ServerHandle> {
+    const {
+        dbPath = process.env['DBPATH'] || './mydb',
+        port = parseInt(process.env['PORT'] || '8080'),
+        logger = defaultLogger,
+        controlLoopInterval = 1000,
+        diskCleanupInterval = 60000,
+        registerSignalHandlers = true
+    } = config;
+
+    // Initialize utilities with logger
+    setLogger(logger);
+    setSSELogger(logger);
+    
+    // Reset processor state (important for tests that create multiple servers)
+    resetProcessorState();
+
+    // Database Setup
+    const db = new Level(dbPath, { valueEncoding: 'json' });
+    const cameradb = db.sublevel<string, CameraEntry>('cameras', { valueEncoding: 'json' });
+    const movementdb = db.sublevel<string, MovementEntry>('movements', { valueEncoding: 'json' });
+    const settingsdb = db.sublevel<string, Settings>('settings', { valueEncoding: 'json' });
+
+    // In-Memory State
+    let _inmem_cameraCache: CameraCache = {};
+    let _inmem_settingsCache: SettingsCache;
+
+    // State Accessors
+    const getCameraCache = () => _inmem_cameraCache;
+    const setCameraCache = (key: string, entry: CameraCacheEntry) => { _inmem_cameraCache[key] = entry; };
+    const getSettingsCache = () => _inmem_settingsCache;
+    const setSettingsCache = (cache: SettingsCache) => { _inmem_settingsCache = cache; };
+
     // Populate cameraCache from database
     for await (const [key, value] of cameradb.iterator()) {
         _inmem_cameraCache[key] = { cameraEntry: value };
@@ -271,8 +148,7 @@ async function main(): Promise<void> {
         if (savedSettings) {
             _inmem_settingsCache = { ..._inmem_settingsCache, settings: savedSettings };
         }
-    } catch (e) {
-        // No saved settings - use defaults
+    } catch {
         logger.info('No saved settings found, using defaults');
     }
 
@@ -288,27 +164,8 @@ async function main(): Promise<void> {
         setSettingsCache
     });
 
-    // Start the main control loop (runs every 1 second per requirements)
-    setInterval(async () => {
-        try {
-            await runControlLoop();
-        } catch (e) {
-            logger.error('Control loop error', { error: String(e) });
-        }
-    }, 1000);
-
-    // Start the disk cleanup loop (runs every 1 minute per requirements)
-    setInterval(async () => {
-        try {
-            await runDiskCleanupLoop();
-        } catch (e) {
-            logger.error('Disk cleanup loop error', { error: String(e) });
-        }
-    }, 60000);
-
     // Initialize web server
-    const PORT = parseInt(process.env['PORT'] || '8080');
-    await initWeb({
+    const httpServer: Server = await initWeb({
         logger,
         cameradb,
         movementdb,
@@ -316,42 +173,193 @@ async function main(): Promise<void> {
         cameraCache: _inmem_cameraCache,
         settingsCache: _inmem_settingsCache,
         setSettingsCache
-    }, PORT);
+    }, port);
 
-    // Register graceful shutdown handlers
-    process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-    process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-    process.on('SIGUSR2', () => gracefulShutdown('SIGUSR2')); // For nodemon
+    const actualPort = (httpServer.address() as any).port;
+    const baseUrl = `http://127.0.0.1:${actualPort}`;
 
-    // Handle uncaught exceptions and rejections
-    process.on('uncaughtException', (error) => {
-        logger.error('Uncaught exception - initiating shutdown', {
-            error: error.message,
-            stack: error.stack
+    // Track intervals for cleanup
+    const intervals: NodeJS.Timeout[] = [];
+
+    // Start control loop (if interval > 0)
+    if (controlLoopInterval > 0) {
+        intervals.push(setInterval(async () => {
+            try {
+                await runControlLoop();
+            } catch (e) {
+                logger.error('Control loop error', { error: String(e) });
+            }
+        }, controlLoopInterval));
+    }
+
+    // Start disk cleanup loop (if interval > 0)
+    if (diskCleanupInterval > 0) {
+        intervals.push(setInterval(async () => {
+            try {
+                await runDiskCleanupLoop();
+            } catch (e) {
+                logger.error('Disk cleanup loop error', { error: String(e) });
+            }
+        }, diskCleanupInterval));
+    }
+
+    // Shutdown function
+    let isShutdown = false;
+    const shutdown = async (): Promise<void> => {
+        if (isShutdown) return;
+        isShutdown = true;
+        
+        if (isShuttingDown()) {
+            logger.warn('Shutdown already in progress');
+            return;
+        }
+
+        setShuttingDown(true);
+        logger.info('Graceful shutdown initiated');
+
+        // Clear intervals
+        intervals.forEach(i => clearInterval(i));
+
+        // Get shutdown timeout from settings
+        const shutdownTimeout = _inmem_settingsCache.settings.shutdown_timeout_ms || 5000;
+        const shutdownPromises: Promise<void>[] = [];
+
+        // Stop all movement extraction ffmpeg processes
+        for (const [movement_key, ffmpeg] of getMovementFFmpegProcesses().entries()) {
+            if (ffmpeg?.exitCode === null) {
+                logger.info('Stopping movement ffmpeg process', { movement: movement_key, pid: ffmpeg.pid });
+                shutdownPromises.push(killProcess(ffmpeg, `movement-${movement_key}`, shutdownTimeout, logger));
+            }
+        }
+
+        // Stop all camera streaming ffmpeg processes
+        for (const cameraKey of Object.keys(_inmem_cameraCache)) {
+            const cacheEntry = _inmem_cameraCache[cameraKey];
+            if (!cacheEntry) continue;
+            const { ffmpeg_task, cameraEntry } = cacheEntry;
+            if (ffmpeg_task?.exitCode === null) {
+                logger.info('Stopping camera ffmpeg process', { camera: cameraEntry.name, pid: ffmpeg_task.pid });
+                shutdownPromises.push(killProcess(ffmpeg_task, cameraEntry.name, shutdownTimeout, logger));
+            }
+        }
+
+        // Stop ML detection process
+        const mlProcess = getMLDetectionProcess();
+        if (mlProcess?.exitCode === null) {
+            logger.info('Stopping ML detection process', { pid: mlProcess.pid });
+            shutdownPromises.push(killProcess(mlProcess, 'ML-Detection', shutdownTimeout, logger));
+        }
+
+        // Wait for all processes to terminate
+        await Promise.all(shutdownPromises);
+
+        // Wait for any in-flight movement close handlers
+        const closeHandlers = getMovementCloseHandlers();
+        if (closeHandlers.size > 0) {
+            logger.info('Waiting for movement close handlers', { count: closeHandlers.size });
+            await Promise.all(closeHandlers.values()).catch(() => {});
+        }
+
+        logger.info('All processes terminated', { processCount: shutdownPromises.length });
+
+        // Close SSE connections
+        sseManager.closeAll();
+
+        // Close HTTP server
+        if (httpServer.listening) {
+            await new Promise<void>(resolve => httpServer.close(() => resolve()));
+        }
+
+        // Close database
+        try {
+            await db.close();
+            logger.info('Database closed');
+        } catch (e) {
+            logger.error('Failed to close database', { error: String(e) });
+        }
+
+        setShuttingDown(false);
+    };
+
+    // Register signal handlers (for standalone server mode)
+    if (registerSignalHandlers) {
+        const signalShutdown = () => {
+            shutdown().then(() => process.exit(0));
+        };
+        process.on('SIGTERM', signalShutdown);
+        process.on('SIGINT', signalShutdown);
+        process.on('SIGUSR2', signalShutdown);
+
+        process.on('uncaughtException', (error) => {
+            logger.error('Uncaught exception', { error: error.message, stack: error.stack });
+            shutdown().then(() => process.exit(1));
         });
-        gracefulShutdown('uncaughtException').then(() => process.exit(1));
-    });
 
-    process.on('unhandledRejection', (reason) => {
-        logger.error('Unhandled rejection - initiating shutdown', {
-            reason: reason instanceof Error ? reason.message : String(reason),
-            stack: reason instanceof Error ? reason.stack : undefined
+        process.on('unhandledRejection', (reason) => {
+            logger.error('Unhandled rejection', {
+                reason: reason instanceof Error ? reason.message : String(reason)
+            });
+            shutdown().then(() => process.exit(1));
         });
-        gracefulShutdown('unhandledRejection').then(() => process.exit(1));
-    });
 
-    logger.info('Shutdown handlers registered', {
-        signals: ['SIGTERM', 'SIGINT', 'SIGUSR2', 'uncaughtException', 'unhandledRejection']
-    });
+        logger.info('Signal handlers registered');
+    }
 
-    logger.info('NVR Server initialized', {
-        cameras: Object.keys(_inmem_cameraCache).length,
-        port: PORT
+    logger.info('NVR Server initialized', { cameras: Object.keys(_inmem_cameraCache).length, port: actualPort });
+
+    return {
+        port: actualPort,
+        baseUrl,
+        db: { base: db, cameras: cameradb, movements: movementdb, settings: settingsdb },
+        cameraCache: _inmem_cameraCache,
+        getSettingsCache,
+        runControlLoop,
+        shutdown
+    };
+}
+
+// ============================================================================
+// Helper: Kill process with timeout
+// ============================================================================
+
+function killProcess(
+    proc: { exitCode: number | null; pid?: number; kill: (signal?: NodeJS.Signals | number) => boolean; once: (event: string, fn: (...args: any[]) => void) => void },
+    name: string,
+    timeoutMs: number,
+    logger: { info: (...args: any[]) => void; warn: (...args: any[]) => void; error: (...args: any[]) => void }
+): Promise<void> {
+    return new Promise<void>((resolve) => {
+        const timeout = setTimeout(() => {
+            logger.warn('Process did not terminate in time - forcing', { name, pid: proc.pid });
+            try { proc.kill('SIGKILL'); } catch {}
+            setTimeout(resolve, 100);
+        }, timeoutMs);
+
+        proc.once('close', () => {
+            clearTimeout(timeout);
+            logger.info('Process terminated', { name });
+            resolve();
+        });
+
+        try {
+            proc.kill();
+        } catch (e) {
+            logger.error('Failed to kill process', { name, error: String(e) });
+            clearTimeout(timeout);
+            resolve();
+        }
     });
 }
 
-// Start the application
-main().catch((e) => {
-    logger.error('Failed to start application', { error: String(e) });
-    process.exit(1);
-});
+// ============================================================================
+// Standalone Entry Point
+// ============================================================================
+
+// Only run main() if this file is executed directly (not imported)
+const isMainModule = fileURLToPath(import.meta.url) === resolve(process.argv[1]);
+if (isMainModule) {
+    createServer().catch((e) => {
+        defaultLogger.error('Failed to start application', { error: String(e) });
+        process.exit(1);
+    });
+}

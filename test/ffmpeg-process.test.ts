@@ -14,7 +14,7 @@ import { existsSync } from 'fs';
 const TEST_DATA_DIR = path.join(process.cwd(), 'test/data');
 const TEST_VIDEO_DIR = path.join(TEST_DATA_DIR, 'video');
 const TEST_OUTPUT_DIR = path.join(TEST_DATA_DIR, 'output');
-const TEST_PLAYLIST = path.join(TEST_VIDEO_DIR, 'test.m3u8');
+const TEST_VIDEO = path.join(TEST_VIDEO_DIR, 'test.mp4');
 
 describe('FFmpeg Process', () => {
     let ffmpegProcess: ChildProcessWithoutNullStreams | null = null;
@@ -47,11 +47,11 @@ describe('FFmpeg Process', () => {
     });
 
     describe('Frame Extraction', () => {
-        it('should extract frames from HLS playlist using ffmpeg', async () => {
+        it('should extract frames from video using ffmpeg', async () => {
             // Check if test data exists
-            const playlistExists = existsSync(TEST_PLAYLIST);
-            if (!playlistExists) {
-                console.log('Skipping test: Test playlist not found');
+            const videoExists = existsSync(TEST_VIDEO);
+            if (!videoExists) {
+                console.log('Skipping test: Test video not found');
                 return;
             }
 
@@ -61,7 +61,7 @@ describe('FFmpeg Process', () => {
             ffmpegProcess = spawn('/usr/bin/ffmpeg', [
                 '-hide_banner',
                 '-loglevel', 'info',
-                '-i', TEST_PLAYLIST,
+                '-i', TEST_VIDEO,
                 '-vf', 'fps=1,scale=640:640:force_original_aspect_ratio=decrease,pad=640:640:(ow-iw)/2:(oh-ih)/2',
                 outputPattern
             ]);
@@ -102,9 +102,9 @@ describe('FFmpeg Process', () => {
         }, 35000);
 
         it('should handle progress output correctly', async () => {
-            const playlistExists = existsSync(TEST_PLAYLIST);
-            if (!playlistExists) {
-                console.log('Skipping test: Test playlist not found');
+            const videoExists = existsSync(TEST_VIDEO);
+            if (!videoExists) {
+                console.log('Skipping test: Test video not found');
                 return;
             }
 
@@ -114,7 +114,7 @@ describe('FFmpeg Process', () => {
                 '-hide_banner',
                 '-loglevel', 'info',
                 '-progress', 'pipe:1',  // Output progress to stdout
-                '-i', TEST_PLAYLIST,
+                '-i', TEST_VIDEO,
                 '-vf', 'fps=1',
                 outputPattern
             ]);
@@ -187,15 +187,16 @@ describe('FFmpeg Process', () => {
         }, 15000);
 
         it('should be killable mid-process', async () => {
-            const playlistExists = existsSync(TEST_PLAYLIST);
-            if (!playlistExists) {
-                console.log('Skipping test: Test playlist not found');
+            const videoExists = existsSync(TEST_VIDEO);
+            if (!videoExists) {
+                console.log('Skipping test: Test video not found');
                 return;
             }
 
             ffmpegProcess = spawn('/usr/bin/ffmpeg', [
                 '-hide_banner',
-                '-i', TEST_PLAYLIST,
+                '-re',  // Read input at native frame rate (prevents fast processing)
+                '-i', TEST_VIDEO,
                 '-vf', 'fps=1',
                 path.join(TEST_OUTPUT_DIR, 'kill_%04d.jpg')
             ]);

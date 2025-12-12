@@ -393,6 +393,30 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
                       </div>
                     </Field>
 
+                    <Divider><b>Advanced Settings</b></Divider>
+                    
+                    <div className={styles.root}>
+                      <label>Shutdown Timeout: {panel.values.shutdown_timeout_ms !== undefined ? panel.values.shutdown_timeout_ms : 5000}ms</label>
+                      <Slider 
+                        style={{"width": "100%"}} 
+                        min={1000} 
+                        max={30000} 
+                        step={1000} 
+                        defaultValue={panel.values.shutdown_timeout_ms !== undefined ? panel.values.shutdown_timeout_ms : 5000}  
+                        onChange={(_,data) => updatePanelValues('shutdown_timeout_ms', data.value)} />
+                    </div>
+
+                    <div className={styles.root}>
+                      <label>Stream Verify Timeout: {panel.values.stream_verify_timeout_ms !== undefined ? panel.values.stream_verify_timeout_ms : 10000}ms</label>
+                      <Slider 
+                        style={{"width": "100%"}} 
+                        min={2000} 
+                        max={60000} 
+                        step={1000} 
+                        defaultValue={panel.values.stream_verify_timeout_ms !== undefined ? panel.values.stream_verify_timeout_ms : 10000}  
+                        onChange={(_,data) => updatePanelValues('stream_verify_timeout_ms', data.value)} />
+                    </div>
+
                     <div className={styles.root}></div>
 
               </DialogContent>
@@ -420,9 +444,32 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
                       <Input style={{"width": "100%"}} contentBefore={<Password16Regular/>}  required type="password" value={panel.values.passwd} onChange={(_, data) => updatePanelValues('passwd', data.value)} />
                     </Field>
 
+                    <Divider><b>Advanced Stream Settings</b></Divider>
+                    
+                    <Field
+                      label="Stream Source (optional)"
+                      hint="Override RTSP URL (e.g., 'rtsp://user:pass@ip:554/path' or '/path/to/video.mp4')">
+                      <Input 
+                        style={{"width": "100%"}} 
+                        placeholder="Leave empty to use IP/Password"
+                        value={panel.values.streamSource || ''} 
+                        onChange={(_, data) => updatePanelValues('streamSource', data.value)} />
+                    </Field>
 
                     <Field
-                      label="Video Files"
+                      label="Motion Detection URL (optional)"
+                      hint="Override motion API URL (e.g., 'http://ip/api/motion')">
+                      <Input 
+                        style={{"width": "100%"}} 
+                        placeholder="Leave empty to use IP/Password"
+                        value={panel.values.motionUrl || ''} 
+                        onChange={(_, data) => updatePanelValues('motionUrl', data.value)} />
+                    </Field>
+
+                    <Divider><b>Video Files</b></Divider>
+                    
+                    <Field
+                      label="Storage Location"
                       validationState={getError('disk') || getError('folder') ? "error" : "none"}
                       validationMessage={getError('disk') || getError('folder')}>
                       <div>

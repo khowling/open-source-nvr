@@ -129,8 +129,16 @@ function checkFFmpegShouldRun(cacheEntry: CameraCacheEntry): EntryCriteria {
 // Processor Dependencies (injected at initialization)
 // ============================================================================
 
+/** Simple logger interface for dependency injection (subset of winston Logger) */
+export interface SimpleLogger {
+    debug: (...args: any[]) => void;
+    info: (...args: any[]) => void;
+    warn: (...args: any[]) => void;
+    error: (...args: any[]) => void;
+}
+
 interface ProcessorDependencies {
-    logger: Logger;
+    logger: SimpleLogger;
     cameradb: any;
     movementdb: any;
     settingsdb: any;
@@ -282,18 +290,18 @@ export async function controllerFFmpeg(
     const enabled = cameraEntry.enable_streaming;
     const streamFile = `${cameraEntry.disk}/${cameraEntry.folder}/stream.m3u8`;
 
-    // Entry criteria: check not already running
-    const runningCheck = checkNotAlreadyRunning(name, _inmem_controllerFFmpeg_inprogress);
+    // Entry criteria: check not already running (use cameraKey for uniqueness, not name)
+    const runningCheck = checkNotAlreadyRunning(cameraKey, _inmem_controllerFFmpeg_inprogress);
     if (!runningCheck.canRun) {
-        deps.logger.debug('controllerFFmpeg skipped', { name, reason: runningCheck.reason });
+        deps.logger.debug('controllerFFmpeg skipped', { name, cameraKey, reason: runningCheck.reason });
         return task;
     }
 
     // Initialize or update progress tracking
-    if (!_inmem_controllerFFmpeg_inprogress[name]) {
-        _inmem_controllerFFmpeg_inprogress[name] = { inprogress: true, checkFrom: Date.now() };
+    if (!_inmem_controllerFFmpeg_inprogress[cameraKey]) {
+        _inmem_controllerFFmpeg_inprogress[cameraKey] = { inprogress: true, checkFrom: Date.now() };
     } else {
-        _inmem_controllerFFmpeg_inprogress[name].inprogress = true;
+        _inmem_controllerFFmpeg_inprogress[cameraKey].inprogress = true;
     }
 
     try {
@@ -321,11 +329,28 @@ export async function controllerFFmpeg(
 
         deps.logger.info('Starting streaming process', { name, pid: 'pending' });
 
-        const cmdArgs = [
-            '-rtsp_transport', 'tcp',
-            '-reorder_queue_size', '500',
-            '-max_delay', '500000',
-            '-i', `rtsp://admin:${cameraEntry.passwd}@${cameraEntry.ip}:554/h264Preview_01_main`,
+        // Determine stream source: explicit streamSource, or construct from ip/passwd
+        const streamSource = cameraEntry.streamSource || 
+            `rtsp://admin:${cameraEntry.passwd}@${cameraEntry.ip}:554/h264Preview_01_main`;
+        const isFileSource = !streamSource.startsWith('rtsp://');
+        const isHlsSource = streamSource.endsWith('.m3u8');
+
+        // Build ffmpeg args based on source type
+        const cmdArgs: string[] = [];
+        
+        if (isFileSource) {
+            // File source: loop video files (but not HLS - can't loop HLS)
+            if (!isHlsSource) {
+                cmdArgs.push('-stream_loop', '-1');
+            }
+            cmdArgs.push('-re');
+        } else {
+            // RTSP source: TCP transport with buffering
+            cmdArgs.push('-rtsp_transport', 'tcp', '-reorder_queue_size', '500', '-max_delay', '500000');
+        }
+        
+        cmdArgs.push(
+            '-i', streamSource,
             '-hide_banner',
             '-loglevel', 'error',
             '-vcodec', 'copy',
@@ -335,7 +360,7 @@ export async function controllerFFmpeg(
             '-hls_flags', 'append_list',
             '-start_number', ((Date.now() / 1000 | 0) - MOVEMENT_KEY_EPOCH).toString(),
             streamFile
-        ];
+        );
 
         const childProcess = spawnProcess({
             name,
@@ -361,14 +386,15 @@ export async function controllerFFmpeg(
             }
         });
 
-        // Verify stream startup
+        // Verify stream startup (use configurable timeout from settings)
+        const streamVerifyTimeout = deps.getSettingsCache().settings.stream_verify_timeout_ms || 10000;
         const verification = await verifyStreamStartup({
             processName: name,
             process: childProcess,
             outputFilePath: streamFile,
-            maxWaitTimeMs: 10000,
-            maxFileAgeMs: 5000,
-            checkIntervalMs: 1000
+            maxWaitTimeMs: streamVerifyTimeout,
+            maxFileAgeMs: Math.min(5000, streamVerifyTimeout / 2),
+            checkIntervalMs: Math.min(1000, streamVerifyTimeout / 10)
         });
 
         if (!verification.ready) {
@@ -400,11 +426,11 @@ export async function controllerFFmpeg(
                 streamStartedAt: Date.now()
             });
         }
-        _inmem_controllerFFmpegConfirmation[name] = { lastCheck: 0, confirmed: false };
+        _inmem_controllerFFmpegConfirmation[cameraKey] = { lastCheck: 0, confirmed: false };
 
         return childProcess;
     } finally {
-        _inmem_controllerFFmpeg_inprogress[name].inprogress = false;
+        _inmem_controllerFFmpeg_inprogress[cameraKey].inprogress = false;
     }
 }
 
@@ -430,8 +456,8 @@ export async function controllerFFmpegConfirmation(
         return { healthy: false, shouldRestart: false };
     }
 
-    // Entry criteria: check interval (first run or every 5 seconds)
-    const confirmState = _inmem_controllerFFmpegConfirmation[name] || { lastCheck: 0, confirmed: false };
+    // Entry criteria: check interval (first run or every 5 seconds) - use cameraKey for uniqueness
+    const confirmState = _inmem_controllerFFmpegConfirmation[cameraKey] || { lastCheck: 0, confirmed: false };
     if (confirmState.confirmed) {
         const intervalCheck = checkIntervalElapsed(confirmState.lastCheck, checkIntervalMs);
         if (!intervalCheck.canRun) {
@@ -440,33 +466,33 @@ export async function controllerFFmpegConfirmation(
     }
 
     // Update last check time
-    _inmem_controllerFFmpegConfirmation[name] = { ...confirmState, lastCheck: Date.now() };
+    _inmem_controllerFFmpegConfirmation[cameraKey] = { ...confirmState, lastCheck: Date.now() };
 
     try {
         const { mtimeMs, size } = await fs.stat(streamFile);
         const lastUpdatedAgo = Date.now() - mtimeMs;
 
         if (size === 0) {
-            deps.logger.warn('Process producing empty file - killing', { name, file: streamFile, size });
+            deps.logger.warn('Process producing empty file - killing', { name, cameraKey, file: streamFile, size });
             task?.kill();
             return { healthy: false, shouldRestart: true };
         }
 
         if (lastUpdatedAgo > 10000 /* 10 seconds */) {
-            deps.logger.warn('Process hung - killing', { name, file: streamFile, lastUpdate: `${lastUpdatedAgo}ms` });
+            deps.logger.warn('Process hung - killing', { name, cameraKey, file: streamFile, lastUpdate: `${lastUpdatedAgo}ms` });
             task?.kill();
             return { healthy: false, shouldRestart: true };
         }
 
         // Successfully confirmed
         if (!confirmState.confirmed) {
-            deps.logger.info('Stream confirmed healthy', { name, fileAge: `${lastUpdatedAgo}ms` });
+            deps.logger.info('Stream confirmed healthy', { name, cameraKey, fileAge: `${lastUpdatedAgo}ms` });
         }
-        _inmem_controllerFFmpegConfirmation[name] = { lastCheck: Date.now(), confirmed: true };
+        _inmem_controllerFFmpegConfirmation[cameraKey] = { lastCheck: Date.now(), confirmed: true };
         return { healthy: true, shouldRestart: false };
 
     } catch (e) {
-        deps.logger.warn('Cannot access process output - killing', { name, file: streamFile, error: String(e) });
+        deps.logger.warn('Cannot access process output - killing', { name, cameraKey, file: streamFile, error: String(e) });
         task?.kill();
         return { healthy: false, shouldRestart: true };
     }

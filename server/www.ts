@@ -26,6 +26,10 @@ export interface Settings {
     detection_target_hw: string;
     detection_frames_path: string;
     detection_tag_filters: TagFilter[];
+    /** Timeout for graceful process shutdown in ms (default: 5000) */
+    shutdown_timeout_ms?: number;
+    /** Timeout for stream verification in ms (default: 10000) */
+    stream_verify_timeout_ms?: number;
 }
 
 export interface TagFilter {
@@ -83,6 +87,13 @@ export interface CameraEntry {
      * Useful for testing or cameras with different API formats.
      */
     motionUrl?: string;
+    /**
+     * Stream source for ffmpeg input. Can be:
+     * - RTSP URL: rtsp://user:pass@ip:554/path
+     * - File path: /path/to/video.mp4 (loops with -stream_loop -1)
+     * - Omitted: Constructs RTSP URL from ip/passwd fields
+     */
+    streamSource?: string;
     enable_streaming: boolean;
     enable_movement: boolean;
     pollsWithoutMovement: number;
@@ -185,7 +196,7 @@ async function clearDownDisk(
     cameraCache: CameraCache,
     settingsCache: SettingsCache,
     movementdb: any,
-    logger: Logger
+    logger: SimpleLogger
 ): Promise<DiskCheckReturn> {
     const cameraFolders = cameraKeys.map(key => `${diskDir}/${cameraCache[key].cameraEntry.folder}`);
     const mlFramesFolder = settingsCache.settings.detection_frames_path
@@ -226,8 +237,16 @@ async function clearDownDisk(
     return diskres;
 }
 
+/** Simple logger interface for dependency injection (subset of winston Logger) */
+export interface SimpleLogger {
+    debug: (...args: any[]) => void;
+    info: (...args: any[]) => void;
+    warn: (...args: any[]) => void;
+    error: (...args: any[]) => void;
+}
+
 export interface WebServerDependencies {
-    logger: Logger;
+    logger: SimpleLogger;
     cameradb: any;
     movementdb: any;
     settingsdb: any;

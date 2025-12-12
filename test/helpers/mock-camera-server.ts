@@ -57,7 +57,7 @@ export async function createMockCameraServer(initialState?: Partial<MockCameraSt
     };
     let requestCount = 0;
 
-    const server = http.createServer(async (req, res) => {
+    const server = http.createServer(async (_req, res) => {
         requestCount++;
 
         // Simulate response delay if configured

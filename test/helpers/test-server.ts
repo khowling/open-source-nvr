@@ -1,51 +1,36 @@
 /**
- * Test Server - Starts the NVR server in test mode
+ * Test Server - Thin wrapper around createServer() for tests
+ * 
+ * Uses the real server with test configuration:
+ * - Temp database directory
+ * - Test video file as stream source
+ * - Mock motion API servers
+ * - Short timeouts for fast tests
  */
 
-import { Level } from 'level';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 
-import { initWeb } from '../../server/www.js';
-import {
-    initProcessor,
-    runControlLoop,
-    setShuttingDown,
-    getMovementFFmpegProcesses,
-    getMovementCloseHandlers,
-    getMLDetectionProcess,
-    resetProcessorState
-} from '../../server/processor.js';
-import { sseManager } from '../../server/sse-manager.js';
-import { setLogger } from '../../server/process-utils.js';
-import { setLogger as setSSELogger } from '../../server/sse-manager.js';
+import { createServer, ServerHandle } from '../../server/index.js';
 import { createMockCameraServer, MockCameraServer } from './mock-camera-server.js';
-import { createTestSettings, createTestCamera } from './test-database.js';
 
-import type {
-    CameraEntry,
-    CameraCache,
-    CameraCacheEntry,
-    Settings,
-    SettingsCache,
-    MovementEntry
-} from '../../server/www.js';
-import type { Server } from 'node:http';
+import type { CameraEntry, Settings, MovementEntry, CameraCache } from '../../server/www.js';
 
-interface Logger {
-    debug: (...args: any[]) => void;
-    info: (...args: any[]) => void;
-    warn: (...args: any[]) => void;
-    error: (...args: any[]) => void;
-}
+// ============================================================================
+// Test Logger (quiet unless TEST_DEBUG=1)
+// ============================================================================
 
-const createTestLogger = (): Logger => ({
-    debug: (...args: any[]) => process.env.TEST_DEBUG && console.log('[DEBUG]', ...args),
-    info: (...args: any[]) => process.env.TEST_DEBUG && console.log('[INFO]', ...args),
+const createTestLogger = () => ({
+    debug: (...args: any[]) => process.env['TEST_DEBUG'] && console.log('[DEBUG]', ...args),
+    info: (...args: any[]) => process.env['TEST_DEBUG'] && console.log('[INFO]', ...args),
     warn: (...args: any[]) => console.warn('[WARN]', ...args),
     error: (...args: any[]) => console.error('[ERROR]', ...args)
 });
+
+// ============================================================================
+// Test Server Interface
+// ============================================================================
 
 export interface TestServerConfig {
     cameraCount?: number;
@@ -63,17 +48,22 @@ export interface TestServerConfig {
 export interface TestServer {
     port: number;
     baseUrl: string;
-    db: { base: Level<string, any>; cameras: any; movements: any; settings: any; };
+    db: ServerHandle['db'];
     mockCameras: Map<string, MockCameraServer>;
     testDataDir: string;
     cameraCache: CameraCache;
-    settingsCache: SettingsCache;
+    settingsCache: ReturnType<ServerHandle['getSettingsCache']>;
     runControlLoop: () => Promise<void>;
-    setCameraMovement: (cameraKey: string, hasMovement: boolean) => void;
+    getCameraKey: (index: number) => string;
+    setCameraMovement: (cameraKeyOrIndex: string | number, hasMovement: boolean) => void;
     waitForMovementState: (movementKey: string, state: string, timeoutMs?: number) => Promise<MovementEntry>;
     getMovements: () => Promise<MovementEntry[]>;
     shutdown: () => Promise<void>;
 }
+
+// ============================================================================
+// Start Test Server
+// ============================================================================
 
 export async function startTestServer(config: TestServerConfig = {}): Promise<TestServer> {
     const {
@@ -84,6 +74,7 @@ export async function startTestServer(config: TestServerConfig = {}): Promise<Te
         port = 0
     } = config;
 
+    // Create temp directories
     const testId = `nvr-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const testDataDir = path.join(os.tmpdir(), testId);
     const dbPath = path.join(testDataDir, 'db');
@@ -91,20 +82,13 @@ export async function startTestServer(config: TestServerConfig = {}): Promise<Te
     await fs.mkdir(testDataDir, { recursive: true });
     await fs.mkdir(dbPath, { recursive: true });
 
-    const logger = createTestLogger();
-    setLogger(logger as any);
-    setSSELogger(logger as any);
-    
-    // Reset processor state to ensure test isolation
-    resetProcessorState();
+    // Find test video file (for stream source)
+    const testVideoPath = path.join(process.cwd(), 'test/data/video/test.mp4');
+    const testVideoExists = await fs.access(testVideoPath).then(() => true).catch(() => false);
 
-    const db = new Level(dbPath, { valueEncoding: 'json' });
-    const cameradb = db.sublevel<string, CameraEntry>('cameras', { valueEncoding: 'json' });
-    const movementdb = db.sublevel<string, MovementEntry>('movements', { valueEncoding: 'json' });
-    const settingsdb = db.sublevel<string, Settings>('settings', { valueEncoding: 'json' });
-
+    // Create mock camera servers and camera configs
     const mockCameras = new Map<string, MockCameraServer>();
-    const cameraCache: CameraCache = {};
+    const cameraConfigs: Array<{ key: string; entry: CameraEntry }> = [];
 
     for (let i = 0; i < cameraCount; i++) {
         const cameraKey = `camera-${i + 1}`;
@@ -115,43 +99,106 @@ export async function startTestServer(config: TestServerConfig = {}): Promise<Te
         await fs.mkdir(path.join(testDataDir, 'frames'), { recursive: true });
         await setupTestVideoFiles(cameraDir);
 
+        // Create mock camera server for motion API
         const mockCamera = await createMockCameraServer({ movementState: 0 });
         mockCameras.set(cameraKey, mockCamera);
 
-        const cameraEntry = createTestCamera({
-            name: `Test Camera ${i + 1}`,
-            folder: cameraFolder,
-            disk: testDataDir,
-            motionUrl: mockCamera.url,
-            mSPollFrequency: 500,
-            enable_streaming: true  // Enable streaming so controllerFFmpeg doesn't kill the mock task
+        cameraConfigs.push({
+            key: cameraKey,
+            entry: {
+                delete: false,
+                name: `Test Camera ${i + 1}`,
+                folder: cameraFolder,
+                disk: testDataDir,
+                motionUrl: mockCamera.url,
+                streamSource: testVideoExists ? testVideoPath : undefined,
+                enable_streaming: true,
+                enable_movement: true,
+                pollsWithoutMovement: 3,
+                secMaxSingleMovement: 300,
+                mSPollFrequency: 500,
+                segments_prior_to_movement: 2,
+                segments_post_movement: 2,
+                secMovementStartupDelay: 0
+            }
         });
-
-        await cameradb.put(cameraKey, cameraEntry);
-        
-        cameraCache[cameraKey] = {
-            cameraEntry,
-            ffmpeg_task: createMockFfmpegTask(i) as any,
-            streamStartedAt: Date.now() - 60000
-        };
     }
 
-    const settings = createTestSettings({
+    // Create the server with empty database
+    const server = await createServer({
+        dbPath,
+        port,
+        logger: createTestLogger(),
+        controlLoopInterval,
+        diskCleanupInterval: 0,
+        registerSignalHandlers: false
+    });
+
+    // Use API to create settings
+    const settings: Settings = {
         disk_base_dir: testDataDir,
         detection_model: enableDetection ? modelPath : '',
-        detection_enable: enableDetection
-    });
-    await settingsdb.put('config', settings);
-
-    let settingsCache: SettingsCache = {
-        settings,
-        status: { fail: false, nextCheckInMinutes: 0 }
+        detection_target_hw: 'cpu',
+        detection_frames_path: 'frames',
+        detection_enable: enableDetection,
+        detection_tag_filters: [],
+        disk_cleanup_interval: 0,
+        disk_cleanup_capacity: 90,
+        shutdown_timeout_ms: 500,
+        stream_verify_timeout_ms: 2000
     };
+    await fetch(`http://127.0.0.1:${server.port}/api/settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settings)
+    });
 
+    // Use API to create cameras and map mock cameras to server keys
+    const cameraKeyMap = new Map<string, string>();  // testKey -> serverKey
+    
+    for (let i = 0; i < cameraConfigs.length; i++) {
+        const { key: testKey, entry } = cameraConfigs[i];
+        const beforeKeys = new Set(Object.keys(server.cameraCache));
+        
+        const response = await fetch(`http://127.0.0.1:${server.port}/api/camera/new`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(entry)
+        });
+        
+        if (!response.ok) {
+            throw new Error(`Failed to create camera: ${response.status} ${await response.text()}`);
+        }
+        
+        // Find the newly created camera key
+        const afterKeys = Object.keys(server.cameraCache);
+        const serverKey = afterKeys.find(k => !beforeKeys.has(k)) || testKey;
+        cameraKeyMap.set(testKey, serverKey);
+        
+        // Re-map mock camera to server key
+        const mockCamera = mockCameras.get(testKey);
+        if (mockCamera) {
+            mockCameras.delete(testKey);
+            mockCameras.set(serverKey, mockCamera);
+        }
+        
+        // Ensure unique timestamps for next camera (server uses seconds-based keys)
+        // Only wait if there are more cameras to create
+        if (i < cameraConfigs.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 1100));
+        }
+        
+        // Update cache with stream state
+        if (server.cameraCache[serverKey]) {
+            server.cameraCache[serverKey].streamStartedAt = Date.now() - 60000;
+        }
+    }
+
+    // Add test movements via direct DB (movements aren't created via API)
     if (config.movements) {
         for (const mov of config.movements) {
             const key = mov.startDate.toString().padStart(12, '0');
-            await movementdb.put(key, {
+            await server.db.movements.put(key, {
                 cameraKey: mov.cameraKey,
                 startDate: mov.startDate,
                 startSegment: null,
@@ -159,59 +206,36 @@ export async function startTestServer(config: TestServerConfig = {}): Promise<Te
                 pollCount: 0,
                 consecutivePollsWithoutMovement: 0,
                 processing_state: mov.processing_state
-            } as any);
+            } as MovementEntry);
         }
     }
 
-    // State accessors
-    const getCameraCache = () => cameraCache;
-    const setCameraCache = (key: string, entry: CameraCacheEntry) => { cameraCache[key] = entry; };
-    const getSettingsCache = () => settingsCache;
-    const setSettingsCache = (cache: SettingsCache) => { settingsCache = cache; };
-
-    initProcessor({
-        logger: logger as any,
-        cameradb,
-        movementdb,
-        settingsdb,
-        getCameraCache,
-        setCameraCache,
-        getSettingsCache,
-        setSettingsCache
-    });
-
-    const httpServer: Server = await initWeb({
-        logger: logger as any,
-        cameradb,
-        movementdb,
-        settingsdb,
-        cameraCache,
-        settingsCache,
-        setSettingsCache
-    }, port);
-
-    const actualPort = (httpServer.address() as any).port;
-    const baseUrl = `http://127.0.0.1:${actualPort}`;
-
-    let controlLoopHandle: NodeJS.Timeout | null = null;
-    if (controlLoopInterval > 0) {
-        controlLoopHandle = setInterval(() => runControlLoop().catch(() => {}), controlLoopInterval);
-    }
-
-    let isShutdown = false;
-
-    const testServer: TestServer = {
-        port: actualPort,
-        baseUrl,
-        db: { base: db, cameras: cameradb, movements: movementdb, settings: settingsdb },
+    // Return test server interface
+    return {
+        port: server.port,
+        baseUrl: server.baseUrl,
+        db: server.db,
         mockCameras,
         testDataDir,
-        cameraCache,
-        get settingsCache() { return settingsCache; },
+        cameraCache: server.cameraCache,
+        get settingsCache() { return server.getSettingsCache(); },
 
-        runControlLoop: async () => { await runControlLoop(); },
+        runControlLoop: server.runControlLoop,
 
-        setCameraMovement: (cameraKey: string, hasMovement: boolean) => {
+        // Helper to get camera key by index (e.g., 1 -> first camera's server key)
+        getCameraKey: (index: number): string => {
+            const keys = Object.keys(server.cameraCache);
+            return keys[index - 1] || `camera-${index}`;
+        },
+
+        setCameraMovement: (cameraKeyOrIndex: string | number, hasMovement: boolean) => {
+            // Support both index (1, 2) and key lookup
+            let cameraKey: string;
+            if (typeof cameraKeyOrIndex === 'number') {
+                cameraKey = Object.keys(server.cameraCache)[cameraKeyOrIndex - 1];
+            } else {
+                cameraKey = cameraKeyOrIndex;
+            }
             const mockCamera = mockCameras.get(cameraKey);
             if (mockCamera) mockCamera.setState({ movementState: hasMovement ? 1 : 0 });
         },
@@ -220,7 +244,7 @@ export async function startTestServer(config: TestServerConfig = {}): Promise<Te
             const startTime = Date.now();
             while (Date.now() - startTime < timeoutMs) {
                 try {
-                    const movement = await movementdb.get(movementKey);
+                    const movement = await server.db.movements.get(movementKey) as MovementEntry;
                     if (movement && movement.processing_state === state) return movement;
                 } catch { /* not found */ }
                 await new Promise(r => setTimeout(r, 100));
@@ -230,120 +254,59 @@ export async function startTestServer(config: TestServerConfig = {}): Promise<Te
 
         getMovements: async (): Promise<MovementEntry[]> => {
             const movements: MovementEntry[] = [];
-            for await (const [, value] of movementdb.iterator()) movements.push(value);
+            for await (const [, value] of server.db.movements.iterator()) movements.push(value as MovementEntry);
             return movements;
         },
 
         shutdown: async () => {
-            if (isShutdown) return;
-            isShutdown = true;
-            setShuttingDown(true);
-
-            if (controlLoopHandle) clearInterval(controlLoopHandle);
-
-            // Kill movement ffmpeg processes
-            for (const [key, ffmpeg] of getMovementFFmpegProcesses().entries()) {
-                if (ffmpeg?.exitCode === null) {
-                    await new Promise<void>(resolve => {
-                        const timeout = setTimeout(() => { try { ffmpeg.kill('SIGKILL'); } catch {} setTimeout(resolve, 100); }, 500);
-                        ffmpeg.once('close', () => { clearTimeout(timeout); resolve(); });
-                        try { ffmpeg.kill(); } catch { clearTimeout(timeout); resolve(); }
-                    });
-                }
-            }
-
-            // Kill camera ffmpeg processes
-            for (const cameraKey of Object.keys(cameraCache)) {
-                const { ffmpeg_task, cameraEntry } = cameraCache[cameraKey] || {};
-                if (ffmpeg_task?.exitCode === null) {
-                    await new Promise<void>(resolve => {
-                        const timeout = setTimeout(() => {
-                            logger.warn('ffmpeg process did not terminate in time - forcing', { camera: cameraEntry?.name, pid: ffmpeg_task.pid });
-                            try { ffmpeg_task.kill('SIGKILL'); } catch {}
-                            resolve();
-                        }, 500);
-                        ffmpeg_task.once('close', () => { clearTimeout(timeout); resolve(); });
-                        try { ffmpeg_task.kill(); } catch { clearTimeout(timeout); resolve(); }
-                    });
-                }
-            }
-
-            // Kill ML process
-            const mlProcess = getMLDetectionProcess();
-            if (mlProcess?.exitCode === null) {
-                await new Promise<void>(resolve => {
-                    const timeout = setTimeout(() => { try { mlProcess.kill('SIGKILL'); } catch {} resolve(); }, 500);
-                    mlProcess.once('close', () => { clearTimeout(timeout); resolve(); });
-                    try { mlProcess.kill(); } catch { clearTimeout(timeout); resolve(); }
-                });
-            }
-
-            // Wait for close handlers
-            const closeHandlers = getMovementCloseHandlers();
-            if (closeHandlers.size > 0) {
-                await Promise.all(closeHandlers.values()).catch(() => {});
-            }
-
-            sseManager.closeAll();
+            await server.shutdown();
             
-            if (httpServer.listening) {
-                await new Promise<void>(r => httpServer.close(() => r()));
+            // Cleanup mock cameras
+            for (const [, mockCamera] of mockCameras) {
+                await mockCamera.close();
             }
-
-            await db.close().catch(() => {});
-            setShuttingDown(false);
-
-            for (const [, mockCamera] of mockCameras) await mockCamera.close();
+            
+            // Cleanup temp directory
             await fs.rm(testDataDir, { recursive: true, force: true }).catch(() => {});
         }
     };
-
-    return testServer;
 }
 
+// ============================================================================
+// Helper: Setup test video files
+// ============================================================================
+
 async function setupTestVideoFiles(cameraDir: string): Promise<void> {
-    const testVideoDir = path.join(process.cwd(), 'test/data/video');
+    const testVideoPath = path.join(process.cwd(), 'test/data/video/test.mp4');
     try {
-        const files = await fs.readdir(testVideoDir);
-        for (const file of files) {
-            if (file.endsWith('.ts') || file.endsWith('.m3u8')) {
-                const src = path.join(testVideoDir, file);
-                const destName = file === 'test.m3u8' ? 'stream.m3u8' : file;
-                await fs.copyFile(src, path.join(cameraDir, destName));
-            }
-        }
-        const playlistPath = path.join(cameraDir, 'stream.m3u8');
-        let playlist = await fs.readFile(playlistPath, 'utf-8');
-        playlist = playlist.replace(/\/[^\n]*\//g, `${cameraDir}/`);
-        await fs.writeFile(playlistPath, playlist);
-    } catch {
-        const playlistContent = `#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:100\n#EXTINF:2.0,\n${cameraDir}/stream100.ts\n`;
+        // Copy the mp4 file to camera directory
+        const destPath = path.join(cameraDir, 'test.mp4');
+        await fs.copyFile(testVideoPath, destPath);
+        
+        // Also create an HLS playlist that references the mp4 for live streaming tests
+        // This is a minimal playlist that ffmpeg can read
+        const playlistContent = `#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:90
+#EXT-X-MEDIA-SEQUENCE:0
+#EXTINF:90.0,
+${destPath}
+#EXT-X-ENDLIST
+`;
         await fs.writeFile(path.join(cameraDir, 'stream.m3u8'), playlistContent);
-        await fs.writeFile(path.join(cameraDir, 'stream100.ts'), 'dummy');
+    } catch {
+        // Create minimal placeholder if test video doesn't exist
+        await fs.writeFile(path.join(cameraDir, 'test.mp4'), 'dummy');
+        const playlistContent = `#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n`;
+        await fs.writeFile(path.join(cameraDir, 'stream.m3u8'), playlistContent);
     }
 }
 
-function createMockFfmpegTask(index: number) {
-    const listeners: { [event: string]: Function[] } = {};
-    return {
-        exitCode: null as number | null,
-        pid: 99999 + index,
-        kill: function() {
-            this.exitCode = 0;
-            // Emit close event asynchronously
-            setTimeout(() => {
-                (listeners['close'] || []).forEach(fn => fn(0, null));
-            }, 10);
-        },
-        once: function(event: string, fn: Function) {
-            listeners[event] = listeners[event] || [];
-            listeners[event].push(fn);
-        },
-        on: function(event: string, fn: Function) {
-            listeners[event] = listeners[event] || [];
-            listeners[event].push(fn);
-        },
-        stdout: { on: () => {} },
-        stderr: { on: () => {} }
-    };
+// ============================================================================
+// Helper: Check file exists
+// ============================================================================
+
+export async function checkFileExists(relativePath: string): Promise<boolean> {
+    const fullPath = path.join(process.cwd(), relativePath);
+    return fs.access(fullPath).then(() => true).catch(() => false);
 }
