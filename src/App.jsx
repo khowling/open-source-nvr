@@ -215,7 +215,7 @@ function App() {
 function CCTVControl({currentPlaying, playVideo}) {
 
   const [panel, setPanel] = React.useState({open: false, invalidArray: []});
-  const [errorDialog, setErrorDialog] = React.useState({open: false, item: null});
+  const [infoDialog, setInfoDialog] = React.useState({open: false, item: null});
 
   const init_data = { cameras: [], movements: [] }
   const [data, setData] = React.useState(init_data)
@@ -679,14 +679,12 @@ const onSelectionChange = (_, d) => {
                     </div>
                     <MenuPopover>
                       <MenuList>
-                        {item.processing_state === 'failed' && (
-                          <MenuItem onClick={(e) => {
-                            e.stopPropagation();
-                            setErrorDialog({open: true, item});
-                          }}>
-                            View Error Details
-                          </MenuItem>
-                        )}
+                        <MenuItem onClick={(e) => {
+                          e.stopPropagation();
+                          setInfoDialog({open: true, item});
+                        }}>
+                          Information
+                        </MenuItem>
                         {sortedTags.length > 0 && sortedTags.map((t, idx) => {
                           const frameUrl = t.maxProbabilityImage 
                             ? `/frame/${key}/${t.maxProbabilityImage}`
@@ -775,41 +773,65 @@ const onSelectionChange = (_, d) => {
           </DataGridBody>
       </DataGrid>
 
-      {/* Error Details Dialog */}
+      {/* Movement Information Dialog */}
       <Dialog 
-        open={errorDialog.open} 
-        onOpenChange={(e, data) => setErrorDialog({open: data.open, item: data.open ? errorDialog.item : null})}
+        open={infoDialog.open} 
+        onOpenChange={(e, data) => setInfoDialog({open: data.open, item: data.open ? infoDialog.item : null})}
       >
         <DialogSurface>
           <DialogBody>
-            <DialogTitle>Processing Error</DialogTitle>
+            <DialogTitle>Movement Information</DialogTitle>
             <DialogContent>
-              {errorDialog.item && (
+              {infoDialog.item && (
                 <div style={{ fontFamily: 'monospace', fontSize: '13px' }}>
                   <div style={{ marginBottom: '8px' }}>
-                    <strong>Movement:</strong> {errorDialog.item.key}
+                    <strong>Movement Key:</strong> {infoDialog.item.key}
                   </div>
                   <div style={{ marginBottom: '8px' }}>
-                    <strong>Camera:</strong> {errorDialog.item.cameraName}
+                    <strong>Camera:</strong> {infoDialog.item.cameraName}
                   </div>
                   <div style={{ marginBottom: '8px' }}>
-                    <strong>Time:</strong> {errorDialog.item.startDate_en_GB}
+                    <strong>Camera Key:</strong> {infoDialog.item.cameraKey}
                   </div>
                   <div style={{ marginBottom: '8px' }}>
-                    <strong>Duration:</strong> {errorDialog.item.seconds}s
+                    <strong>Time:</strong> {infoDialog.item.startDate_en_GB}
                   </div>
-                  <div style={{ 
-                    marginTop: '12px',
-                    padding: '12px',
-                    backgroundColor: '#fff4f4',
-                    border: '1px solid #ffcccc',
-                    borderRadius: '4px'
-                  }}>
-                    <strong style={{ color: '#d13438' }}>Error:</strong>
-                    <div style={{ marginTop: '4px', color: '#333' }}>
-                      {errorDialog.item.processing_error || 'Unknown processing error'}
+                  <div style={{ marginBottom: '8px' }}>
+                    <strong>Duration:</strong> {infoDialog.item.seconds}s
+                  </div>
+                  <div style={{ marginBottom: '8px' }}>
+                    <strong>Start Segment:</strong> {infoDialog.item.startSegment}
+                  </div>
+                  <div style={{ marginBottom: '8px' }}>
+                    <strong>Processing State:</strong> {infoDialog.item.processing_state || 'N/A'}
+                  </div>
+                  <div style={{ marginBottom: '8px' }}>
+                    <strong>Detection Status:</strong> {infoDialog.item.detection_status || 'N/A'}
+                  </div>
+                  {infoDialog.item.detection_output?.tags && (
+                    <div style={{ marginBottom: '8px' }}>
+                      <strong>Detected Objects:</strong>
+                      <div style={{ marginTop: '4px', paddingLeft: '12px' }}>
+                        {infoDialog.item.detection_output.tags.map((t, idx) => (
+                          <div key={idx}>{t.tag}: {(t.maxProbability * 100).toFixed(0)}% (count: {t.count})</div>
+                        ))}
+                      </div>
                     </div>
-                  </div>
+                  )}
+                  {infoDialog.item.processing_error && (
+                    <div style={{ 
+                      marginTop: '12px',
+                      padding: '12px',
+                      backgroundColor: '#fff4f4',
+                      border: '1px solid #ffcccc',
+                      borderRadius: '4px'
+                    }}>
+                      <strong style={{ color: '#d13438' }}>Error:</strong>
+                      <div style={{ marginTop: '4px', color: '#333' }}>
+                        {infoDialog.item.processing_error}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </DialogContent>
