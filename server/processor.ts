@@ -46,9 +46,6 @@ let _inmem_isShuttingDown = false;
 // Global ML detection process
 let _inmem_mlDetectionProcess: ChildProcessWithoutNullStreams | null = null;
 
-// Track ffmpeg processes for each movement (key: movement_key, value: process)
-const _inmem_movementFFmpegProcesses: Map<string, ChildProcessWithoutNullStreams> = new Map();
-
 // Track in-flight movement close handlers (for graceful shutdown)
 const _inmem_movementCloseHandlers: Map<string, Promise<void>> = new Map();
 
@@ -69,6 +66,16 @@ let _inmem_lastSSEKeepAlive = 0;
 
 // Disk cleanup tracking
 let _inmem_lastDiskCheck = 0;
+
+// Current ffmpeg processing state (only one movement processed at a time)
+let _inmem_currentProcessingMovement: {
+    movement_key: string;
+    startedAt: number;
+    process: ChildProcessWithoutNullStreams;
+} | null = null;
+
+// Max ffmpeg processing time in seconds (default: 300s = 5 minutes)
+const FFMPEG_MAX_PROCESSING_TIME_MS = 300 * 1000;
 
 // Regex for HLS segment parsing
 const re = new RegExp(`stream([\\d]+).ts`, 'g');
@@ -176,7 +183,11 @@ export function getMLDetectionProcess(): ChildProcessWithoutNullStreams | null {
 }
 
 export function getMovementFFmpegProcesses(): Map<string, ChildProcessWithoutNullStreams> {
-    return _inmem_movementFFmpegProcesses;
+    const map = new Map<string, ChildProcessWithoutNullStreams>();
+    if (_inmem_currentProcessingMovement) {
+        map.set(_inmem_currentProcessingMovement.movement_key, _inmem_currentProcessingMovement.process);
+    }
+    return map;
 }
 
 export function getMovementCloseHandlers(): Map<string, Promise<void>> {
@@ -189,12 +200,12 @@ export function getMovementCloseHandlers(): Map<string, Promise<void>> {
 export function resetProcessorState(): void {
     _inmem_isShuttingDown = false;
     _inmem_mlDetectionProcess = null;
-    _inmem_movementFFmpegProcesses.clear();
     _inmem_movementCloseHandlers.clear();
     _inmem_mlFrameSentTimes.clear();
     _inmem_pendingUpdates.clear();
     _inmem_lastSSEKeepAlive = 0;
     _inmem_lastDiskCheck = 0;
+    _inmem_currentProcessingMovement = null;
     
     // Clear controller state objects
     for (const key of Object.keys(_inmem_controllerFFmpeg_inprogress)) {
@@ -638,9 +649,7 @@ async function handleMovementDetected(
             seconds: 0,
             pollCount: 0,
             consecutivePollsWithoutMovement: 0,
-            processing_state: 'processing',
-            processing_started_at: startDate,
-            processing_attempts: 1
+            processing_state: 'pending'
         };
 
         // Get segment information from HLS playlist
@@ -729,9 +738,6 @@ async function handleMovementDetected(
             type: 'movement_new',
             movement: formatMovementForSSE(movement_key, movementEntry)
         });
-
-        // Immediately trigger processing (per requirements - don't wait for next loop)
-        await triggerProcessMovement(movement_key, framesPath, cameraEntry);
 
     } else {
         // Movement continuation
@@ -916,28 +922,148 @@ async function finalizeMovement(
 }
 
 /**
- * triggerProcessMovement - Starts ffmpeg to process movement frames for ML detection
- * Entry criteria: Function isn't already running from previous loops
+ * triggerProcessMovement - Processes pending movements with ML detection
  * 
- * Per requirements: Also called immediately when movement is detected to avoid delays
+ * Idempotent function called by the control loop. Processes ONE movement at a time:
+ * 1. If already processing, check for timeout and return
+ * 2. Find the oldest 'pending' movement with a finalized playlist
+ * 3. Start ffmpeg to extract frames
+ * 4. On ffmpeg close, mark movement as completed/failed
+ * 
+ * Entry criteria: Called by control loop, processes movements sequentially
  */
-export async function triggerProcessMovement(
-    movement_key: string,
-    framesPath: string,
-    cameraEntry: CameraEntry
-): Promise<void> {
-    // Entry criteria: check if already processing this movement
-    if (_inmem_movementFFmpegProcesses.has(movement_key)) {
-        deps.logger.debug('triggerProcessMovement: already processing', { movement_key });
+export async function triggerProcessMovement(): Promise<void> {
+    // If already processing a movement, check for timeout
+    if (_inmem_currentProcessingMovement) {
+        const elapsed = Date.now() - _inmem_currentProcessingMovement.startedAt;
+        
+        if (elapsed > FFMPEG_MAX_PROCESSING_TIME_MS) {
+            const { movement_key, process } = _inmem_currentProcessingMovement;
+            deps.logger.warn('triggerProcessMovement: ffmpeg timeout, killing process', {
+                movement_key,
+                elapsed_ms: elapsed,
+                max_ms: FFMPEG_MAX_PROCESSING_TIME_MS
+            });
+            
+            try {
+                process.kill('SIGTERM');
+                // Force kill after 2 seconds if still running
+                setTimeout(() => {
+                    try {
+                        if (!process.killed) {
+                            process.kill('SIGKILL');
+                        }
+                    } catch (e) {
+                        // Process already terminated
+                    }
+                }, 2000);
+            } catch (e) {
+                deps.logger.error('triggerProcessMovement: Failed to kill timed out ffmpeg', {
+                    movement_key,
+                    error: String(e)
+                });
+            }
+            
+            // Mark as failed due to timeout
+            try {
+                const m = await deps.movementdb.get(movement_key);
+                const updatedMovement = {
+                    ...m,
+                    processing_state: 'failed' as const,
+                    detection_status: 'failed',
+                    processing_completed_at: Date.now(),
+                    processing_error: `Processing timeout after ${Math.floor(elapsed / 1000)}s`
+                };
+                await deps.movementdb.put(movement_key, updatedMovement);
+                
+                if (sseManager.getClientCount() > 0) {
+                    sseManager.broadcastMovementUpdate({
+                        type: 'movement_update',
+                        movement: formatMovementForSSE(movement_key, updatedMovement)
+                    });
+                }
+            } catch (e) {
+                deps.logger.error('triggerProcessMovement: Failed to mark timed out movement as failed', {
+                    movement_key,
+                    error: String(e)
+                });
+            }
+            
+            // Clear the tracking - onClose handler will also run but we've already updated DB
+            _inmem_currentProcessingMovement = null;
+        }
+        
+        // Still processing (or just killed for timeout), don't start another
         return;
     }
-
-    let movement = await deps.movementdb.get(movement_key);
-    if (!movement) {
-        deps.logger.error('triggerProcessMovement: Movement record not found', { movement_key });
+    
+    // Find the oldest pending movement with a finalized playlist
+    let nextMovement: { key: string; movement: MovementEntry; cameraEntry: CameraEntry } | null = null;
+    
+    try {
+        for await (const [encodedKey, movement] of deps.movementdb.iterator()) {
+            // Skip non-pending movements
+            if (movement.processing_state !== 'pending') {
+                continue;
+            }
+            
+            // Must have a playlist path
+            if (!movement.playlist_path) {
+                deps.logger.debug('triggerProcessMovement: Skipping movement without playlist', { 
+                    movement_key: encodedKey 
+                });
+                continue;
+            }
+            
+            // Check if playlist is finalized (contains #EXT-X-ENDLIST)
+            try {
+                const playlistContent = await fs.readFile(movement.playlist_path, 'utf-8');
+                if (!playlistContent.includes('#EXT-X-ENDLIST')) {
+                    deps.logger.debug('triggerProcessMovement: Skipping movement with incomplete playlist', { 
+                        movement_key: encodedKey 
+                    });
+                    continue;
+                }
+            } catch (e) {
+                deps.logger.warn('triggerProcessMovement: Failed to read playlist', {
+                    movement_key: encodedKey,
+                    playlist_path: movement.playlist_path,
+                    error: String(e)
+                });
+                continue;
+            }
+            
+            // Get camera entry
+            const cameraCache = deps.getCameraCache();
+            const cameraEntry = cameraCache[movement.cameraKey]?.cameraEntry;
+            if (!cameraEntry) {
+                deps.logger.warn('triggerProcessMovement: Camera not found for movement', {
+                    movement_key: encodedKey,
+                    cameraKey: movement.cameraKey
+                });
+                continue;
+            }
+            
+            nextMovement = { key: encodedKey, movement, cameraEntry };
+            break; // Take the first (oldest) pending movement
+        }
+    } catch (e) {
+        deps.logger.error('triggerProcessMovement: Failed to iterate movements', { error: String(e) });
         return;
     }
-
+    
+    if (!nextMovement) {
+        // No pending movements to process
+        return;
+    }
+    
+    const { key: movement_key, movement, cameraEntry } = nextMovement;
+    
+    // Setup paths
+    const settingsCache = deps.getSettingsCache();
+    const framesPath = getFramesPath(settingsCache.settings, cameraEntry.disk, cameraEntry.folder);
+    await ensureDir(framesPath);
+    
     const ffmpegArgs = [
         '-hide_banner', '-loglevel', 'info',
         '-progress', 'pipe:1',
@@ -952,15 +1078,19 @@ export async function triggerProcessMovement(
         playlist_path: movement.playlist_path
     });
 
-    await deps.movementdb.put(movement_key, {
+    // Update movement to processing state
+    const updatedMovement = {
         ...movement,
+        processing_state: 'processing' as const,
+        processing_started_at: Date.now(),
         detection_status: 'extracting'
-    });
+    };
+    await deps.movementdb.put(movement_key, updatedMovement);
 
     if (sseManager.getClientCount() > 0) {
         sseManager.broadcastMovementUpdate({
             type: 'movement_update',
-            movement: formatMovementForSSE(movement_key, { ...movement, detection_status: 'extracting' })
+            movement: formatMovementForSSE(movement_key, updatedMovement)
         });
     }
 
@@ -995,12 +1125,22 @@ export async function triggerProcessMovement(
                     graceful: isGraceful
                 });
 
-                // Remove from tracking
-                _inmem_movementFFmpegProcesses.delete(movement_key);
+                // Clear tracking
+                _inmem_currentProcessingMovement = null;
 
-                // Mark as completed or failed
+                // Mark as completed or failed (unless already marked by timeout handler)
                 try {
                     const m = await deps.movementdb.get(movement_key);
+                    
+                    // If already marked as failed/completed (e.g., by timeout handler), skip
+                    if (m.processing_state === 'completed' || m.processing_state === 'failed') {
+                        deps.logger.debug('triggerProcessMovement: Movement already finalized', {
+                            movement_key,
+                            processing_state: m.processing_state
+                        });
+                        return;
+                    }
+                    
                     const totalFrames = frameProcessor.getLastFrameNumber();
                     const hasFailed = totalFrames === 0 || (!isGraceful && code !== 0);
 
@@ -1016,20 +1156,20 @@ export async function triggerProcessMovement(
                         }
                     }
 
-                    const updatedMovement = {
+                    const finalMovement = {
                         ...m,
                         processing_state: hasFailed ? 'failed' as const : 'completed' as const,
                         detection_status: hasFailed ? 'failed' : 'complete',
                         processing_completed_at: Date.now(),
                         ...(hasFailed && { processing_error: errorMsg })
                     };
-                    await deps.movementdb.put(movement_key, updatedMovement);
+                    await deps.movementdb.put(movement_key, finalMovement);
 
                     // Broadcast completion state to UI
                     if (sseManager.getClientCount() > 0) {
                         sseManager.broadcastMovementUpdate({
                             type: 'movement_update',
-                            movement: formatMovementForSSE(movement_key, updatedMovement)
+                            movement: formatMovementForSSE(movement_key, finalMovement)
                         });
                     }
 
@@ -1066,7 +1206,11 @@ export async function triggerProcessMovement(
     });
 
     // Track the process
-    _inmem_movementFFmpegProcesses.set(movement_key, ffmpeg);
+    _inmem_currentProcessingMovement = {
+        movement_key,
+        startedAt: Date.now(),
+        process: ffmpeg
+    };
 }
 
 /**
@@ -1379,6 +1523,9 @@ export async function runControlLoop(): Promise<void> {
             }
         }
     }
+
+    // Process pending movements (one at a time, across all cameras)
+    await triggerProcessMovement();
 
     // SSE keep-alive (every 30 seconds)
     sseKeepAlive();

@@ -222,8 +222,8 @@ describe('Camera Movement Detection', () => {
             
             expect(movements.length).toBe(1);
             expect(movements[0].cameraKey).toBe(CAMERA_KEY);
-            // processing_state is 'processing' when movement starts (it kicks off frame extraction)
-            expect(movements[0].processing_state).toBe('processing');
+            // processing_state is 'pending' when movement starts (processing happens after movement ends)
+            expect(movements[0].processing_state).toBe('pending');
         });
 
         it('should log movement detection with movement_key', async () => {

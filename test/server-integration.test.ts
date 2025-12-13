@@ -252,7 +252,7 @@ describe('Full Movement Pipeline', () => {
             }
 
             expect(finalMovement).toBeDefined();
-            expect(['processing', 'completed', 'failed']).toContain(finalMovement.processing_state);
+            expect(['pending', 'processing', 'completed', 'failed']).toContain(finalMovement.processing_state);
             
             console.log('\n=== Movement Detection Result ===');
             console.log('Movement Key:', movementKey);
