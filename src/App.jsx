@@ -3,7 +3,7 @@ import './App.css';
 import React, { useEffect }  from 'react';
 import Hls from 'hls.js'
 import { PanelSettings } from './PanelSettings.jsx'
-import { ToolbarGroup, Badge, Text, Button, Portal, Toolbar, Menu, MenuTrigger, Tooltip, SplitButton, MenuPopover, MenuList, MenuItem, ToolbarButton, ToolbarDivider, createTableColumn, TableCellLayout, Spinner, tokens, Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent } from "@fluentui/react-components";
+import { ToolbarGroup, Badge, Text, Button, Portal, Toolbar, Menu, MenuTrigger, Tooltip, SplitButton, MenuPopover, MenuList, MenuItem, ToolbarButton, ToolbarDivider, createTableColumn, TableCellLayout, Spinner, tokens, Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions } from "@fluentui/react-components";
 import {
   DataGridBody,
   DataGrid,
@@ -216,6 +216,7 @@ function CCTVControl({currentPlaying, playVideo}) {
 
   const [panel, setPanel] = React.useState({open: false, invalidArray: []});
   const [infoDialog, setInfoDialog] = React.useState({open: false, item: null});
+  const [openMenuKey, setOpenMenuKey] = React.useState(null);
 
   const init_data = { cameras: [], movements: [] }
   const [data, setData] = React.useState(init_data)
@@ -229,6 +230,12 @@ function CCTVControl({currentPlaying, playVideo}) {
   React.useEffect(() => {
     configRef.current = data.config;
   }, [data.config]);
+
+  // Use a ref to store movements for rendering to prevent menu from closing on SSE updates
+  const movementsRef = React.useRef([]);
+  React.useEffect(() => {
+    movementsRef.current = data.movements;
+  }, [data.movements]);
 
   function getServerData() {
     console.log ('getServerData, mode=', mode)
@@ -671,7 +678,11 @@ const onSelectionChange = (_, d) => {
               
               return (
                 <TableCellLayout style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                  <Menu positioning="below-end">
+                  <Menu 
+                    positioning="below-end"
+                    open={openMenuKey === key}
+                    onOpenChange={(e, menuData) => setOpenMenuKey(menuData.open ? key : null)}
+                  >
                     <div onClick={(e) => e.stopPropagation()}>
                       <MenuTrigger disableButtonEnhancement>
                         <Button appearance="subtle" icon={<MoreVertical20Regular />} />
@@ -681,6 +692,7 @@ const onSelectionChange = (_, d) => {
                       <MenuList>
                         <MenuItem onClick={(e) => {
                           e.stopPropagation();
+                          setOpenMenuKey(null);
                           setInfoDialog({open: true, item});
                         }}>
                           Information
@@ -696,12 +708,14 @@ const onSelectionChange = (_, d) => {
                             <React.Fragment key={idx}>
                               <MenuItem onClick={(e) => {
                                 e.stopPropagation();
+                                setOpenMenuKey(null);
                                 window.open(frameUrl, '_blank');
                               }}>
                                 Open {t.tag} image
                               </MenuItem>
                               <MenuItem onClick={(e) => {
                                 e.stopPropagation();
+                                setOpenMenuKey(null);
                                 if (!existingFilter) {
                                   const newFilters = [...currentFilters, { tag: t.tag, minProbability: t.maxProbability }];
                                   setPanel({...panel, open: true, key: 'settings', invalidArray:[], heading: 'General Settings', 
@@ -835,6 +849,9 @@ const onSelectionChange = (_, d) => {
                 </div>
               )}
             </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setInfoDialog({open: false, item: null})}>Close</Button>
+            </DialogActions>
           </DialogBody>
         </DialogSurface>
       </Dialog>
