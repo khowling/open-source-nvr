@@ -997,7 +997,7 @@ export async function triggerProcessMovement(): Promise<void> {
         return;
     }
     
-    // Find the oldest pending movement with a finalized playlist
+    // Find the oldest pending movement with a playlist
     let nextMovement: { key: string; movement: MovementEntry; cameraEntry: CameraEntry } | null = null;
     
     try {
@@ -1015,17 +1015,11 @@ export async function triggerProcessMovement(): Promise<void> {
                 continue;
             }
             
-            // Check if playlist is finalized (contains #EXT-X-ENDLIST)
+            // Verify playlist file exists
             try {
-                const playlistContent = await fs.readFile(movement.playlist_path, 'utf-8');
-                if (!playlistContent.includes('#EXT-X-ENDLIST')) {
-                    deps.logger.debug('triggerProcessMovement: Skipping movement with incomplete playlist', { 
-                        movement_key: encodedKey 
-                    });
-                    continue;
-                }
+                await fs.access(movement.playlist_path);
             } catch (e) {
-                deps.logger.warn('triggerProcessMovement: Failed to read playlist', {
+                deps.logger.warn('triggerProcessMovement: Playlist file not accessible', {
                     movement_key: encodedKey,
                     playlist_path: movement.playlist_path,
                     error: String(e)
@@ -1064,10 +1058,16 @@ export async function triggerProcessMovement(): Promise<void> {
     const framesPath = getFramesPath(settingsCache.settings, cameraEntry.disk, cameraEntry.folder);
     await ensureDir(framesPath);
     
+    // Calculate max wait time based on camera's max single movement setting
+    const maxMovementSeconds = cameraEntry.secMaxSingleMovement || 90;
+    
+    // ffmpeg args with live HLS support - will wait for new segments until ENDLIST or timeout
     const ffmpegArgs = [
         '-hide_banner', '-loglevel', 'info',
+        '-live_start_index', '0',           // Start from first segment in playlist
+        '-rw_timeout', `${(maxMovementSeconds + 30) * 1000000}`,  // Microseconds timeout for reading
         '-progress', 'pipe:1',
-        '-i', movement.playlist_path,
+        '-i', movement.playlist_path!,
         '-vf', 'fps=1,scale=640:640:force_original_aspect_ratio=decrease,pad=640:640:(ow-iw)/2:(oh-ih)/2',
         `${framesPath}/mov${movement_key}_%04d.jpg`
     ];

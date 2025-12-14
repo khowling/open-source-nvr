@@ -31,7 +31,8 @@ import {
   MenuList,
   MenuItem,
   MenuPopover,
-  Field
+  Field,
+  Spinner
 } from "@fluentui/react-components";
 import { Alert } from '@fluentui/react-components/unstable';
 import { Dismiss12Regular, Folder16Regular, KeyCommand16Regular, Camera16Regular, NetworkAdapter16Regular, Password16Regular } from "@fluentui/react-icons";
@@ -242,6 +243,7 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
         const {key} =  ctx && typeof ctx === 'object' ? ctx : {}
 
         setError(null)
+        setPanel(prev => ({...prev, loading: true}))
         fetch(`/api/${panel.key === 'settings' ? 'settings' : `camera/${panel.values.key || 'new'}`}${key && panel.values.key ? `?delopt=${key}` : ''}`, {
         method: 'POST',
         credentials: 'same-origin',
@@ -254,7 +256,7 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
         if (res.ok) {
             console.log(`created success : ${JSON.stringify(res)}`)
             getServerData()
-            setPanel({open: false, invalidArray: []})
+            setPanel({open: false, invalidArray: [], loading: false})
         } else {
             return res.text().then(text => {throw new Error(text)})
             //const ferr = `created failed : ${succ.status} ${succ.statusText}`
@@ -265,6 +267,7 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
         }).catch(error => {
         console.error(`created failed : ${error}`)
         setError(`created failed : ${error}`)
+        setPanel(prev => ({...prev, loading: false}))
         })
     }
 
@@ -559,7 +562,7 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
                     
                     <div className={styles.root}>
                       <label>Max. Single Movement {panel.values.secMaxSingleMovement} seconds</label>
-                      <Slider style={{"width": "100%"}} disabled={!panel.values.enable_movement}  min={60} max={600} step={10} defaultValue={panel.values.secMaxSingleMovement}  onChange={(_,data) => updatePanelValues('secMaxSingleMovement', data.value)} />
+                      <Slider style={{"width": "100%"}} disabled={!panel.values.enable_movement}  min={30} max={90} step={10} defaultValue={panel.values.secMaxSingleMovement}  onChange={(_,data) => updatePanelValues('secMaxSingleMovement', data.value)} />
                     </div>
                     
                     <div className={styles.root}>
@@ -572,9 +575,16 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
 
             <DialogActions>
 
+              { panel.loading && 
+                <div style={{display: 'flex', alignItems: 'center', gap: '8px', marginRight: 'auto'}}>
+                  <Spinner size="small" />
+                  <Text>Please wait...</Text>
+                </div>
+              }
+
               { panel.key === 'edit' &&
                       
-                 <MySplitButton  label="Delete" disabled={panel.invalidArray.length >0}  items={[
+                 <MySplitButton  label="Delete" disabled={panel.invalidArray.length >0 || panel.loading}  items={[
                         {
                             key: 'reset',
                             text: 'Reset Recordings (keep camera)',
@@ -595,9 +605,9 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
                    }]} />
                    
                 }
-              <Button appearance="primary" disabled={panel.invalidArray.length >0} onClick={savePanel}>Save</Button>
+              <Button appearance="primary" disabled={panel.invalidArray.length >0 || panel.loading} onClick={savePanel}>Save</Button>
               <DialogTrigger disableButtonEnhancement >
-                <Button appearance="secondary" onClick={() => setPanel({...panel, open: false, invalidArray: []})} >Close</Button>
+                <Button appearance="secondary" disabled={panel.loading} onClick={() => setPanel({...panel, open: false, invalidArray: []})} >Close</Button>
               </DialogTrigger>
 
               {error &&

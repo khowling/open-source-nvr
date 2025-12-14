@@ -12,10 +12,10 @@ import {
   DataGridCell,
   DataGridHeaderCell,
 } from "@fluentui-contrib/react-data-grid-react-window";
-import { ArrowMove20Regular, AccessibilityCheckmark20Regular, AccessTime20Regular, Settings16Regular, ArrowDownload16Regular, DataUsageSettings20Regular, Tv16Regular, Video20Regular, VideoAdd20Regular, ArrowRepeatAll20Regular, Filter20Regular, MoreVertical20Regular } from "@fluentui/react-icons";
+import { ArrowMove20Regular, AccessibilityCheckmark20Regular, AccessTime20Regular, Settings16Regular, ArrowDownload16Regular, DataUsageSettings20Regular, Tv16Regular, Video20Regular, VideoAdd20Regular, ArrowRepeatAll20Regular, Filter20Regular, MoreVertical20Regular, Checkmark12Regular, Dismiss12Regular, Clock12Regular, ScanDash12Regular } from "@fluentui/react-icons";
 
 
-export const VideoJS = ({options, onReady, play}) => {
+export const VideoJS = ({options, onReady, play, imageUrl}) => {
   const videoRef = React.useRef(null);
   const hlsRef = React.useRef(null);
   const [isLive, setIsLive] = React.useState(false);
@@ -120,14 +120,21 @@ export const VideoJS = ({options, onReady, play}) => {
 
   return (
     <div className="video-container">
-      <video 
-        ref={videoRef}
-        controls
-        autoPlay
-        muted
-        className={isLive ? 'live-stream' : ''}
-      />
-      {isLive && (
+      {imageUrl ? (
+        <img 
+          src={imageUrl} 
+          alt="Detection frame"
+        />
+      ) : (
+        <video 
+          ref={videoRef}
+          controls
+          autoPlay
+          muted
+          className={isLive ? 'live-stream' : ''}
+        />
+      )}
+      {isLive && !imageUrl && (
         <div style={{
           position: 'absolute',
           top: '10px',
@@ -150,11 +157,18 @@ export const VideoJS = ({options, onReady, play}) => {
 function App() {
 
   const [currentPlaying, setCurrentPlaying] = React.useState(null)
+  const [displayImage, setDisplayImage] = React.useState(null)
   //const videoElement = document.getElementById("video");
   
   const playerRef = React.useRef(null);
   
+  function showImage(imageUrl) {
+    setDisplayImage(imageUrl);
+    setCurrentPlaying(null); // Stop video when showing image
+  }
+  
   function playVideo(cKey, mKey, mStartSegment, mSeconds, segments_prior_to_movement, segments_post_movement) {
+    setDisplayImage(null); // Clear image when playing video
     console.log (`App() : playVideo :   cameraKey=${cKey} mKey=${mKey} (${mStartSegment}/${mSeconds}) (prior:${segments_prior_to_movement}/post:${segments_post_movement})`)
     const mPlayer = playerRef.current
     //console.log ("playVideo data: ", data)
@@ -202,9 +216,9 @@ function App() {
 */
   return (
     <div className="container">
-          <VideoJS onReady={handlePlayerReady} play={currentPlaying}/>
+          <VideoJS onReady={handlePlayerReady} play={currentPlaying} imageUrl={displayImage}/>
         <div>
-          <CCTVControl playVideo={playVideo} currentPlaying={currentPlaying}/>
+          <CCTVControl playVideo={playVideo} currentPlaying={currentPlaying} showImage={showImage}/>
         </div>
       </div>
   )
@@ -212,7 +226,7 @@ function App() {
   
 }
 
-function CCTVControl({currentPlaying, playVideo}) {
+function CCTVControl({currentPlaying, playVideo, showImage}) {
 
   const [panel, setPanel] = React.useState({open: false, invalidArray: []});
   const [infoDialog, setInfoDialog] = React.useState({open: false, item: null});
@@ -633,8 +647,39 @@ const onSelectionChange = (_, d) => {
           createTableColumn({
             columnId: "seconds",
             renderCell: (item) => {
-              const isProcessing = item.processing_state === 'processing' || item.processing_state === 'pending';
+              const isPending = item.processing_state === 'pending';
+              const isProcessing = item.processing_state === 'processing';
+              const isCompleted = item.processing_state === 'completed';
               const isFailed = item.processing_state === 'failed';
+              const hasDetections = item.detection_output?.tags?.length > 0;
+              
+              // Status icon based on processing state and detection output
+              let StatusIcon = null;
+              let statusColor = '#888';
+              let statusTitle = '';
+              
+              if (isPending) {
+                StatusIcon = Clock12Regular;
+                statusColor = '#888';
+                statusTitle = 'Waiting to process';
+              } else if (isProcessing) {
+                statusTitle = item.detection_status === 'extracting' ? 'Extracting frames' : 'Processing';
+              } else if (isFailed) {
+                StatusIcon = Dismiss12Regular;
+                statusColor = '#d13438';
+                statusTitle = item.processing_error || 'Processing failed';
+              } else if (isCompleted) {
+                if (hasDetections) {
+                  StatusIcon = Checkmark12Regular;
+                  statusColor = '#0e700e';
+                  statusTitle = 'Detection complete';
+                } else {
+                  StatusIcon = ScanDash12Regular;
+                  statusColor = '#888';
+                  statusTitle = 'No objects detected';
+                }
+              }
+              
               return (
                 <TableCellLayout>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
@@ -642,17 +687,15 @@ const onSelectionChange = (_, d) => {
                     {isProcessing && (
                       <Spinner 
                         size="extra-tiny" 
-                        title={item.processing_state === 'pending' ? 'Waiting to process' : 'Processing frames'}
+                        title={statusTitle}
                       />
                     )}
-                    {isFailed && (
-                      <Badge 
-                        appearance="filled"
-                        color="danger"
-                        style={{ fontSize: '11px', padding: '2px 6px' }}
-                      >
-                        Error
-                      </Badge>
+                    {StatusIcon && (
+                      <Tooltip content={statusTitle} relationship="label">
+                        <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+                          <StatusIcon style={{ color: statusColor }} />
+                        </span>
+                      </Tooltip>
                     )}
                   </span>
                 </TableCellLayout>
@@ -709,7 +752,7 @@ const onSelectionChange = (_, d) => {
                               <MenuItem onClick={(e) => {
                                 e.stopPropagation();
                                 setOpenMenuKey(null);
-                                window.open(frameUrl, '_blank');
+                                showImage(frameUrl);
                               }}>
                                 Open {t.tag} image
                               </MenuItem>
@@ -744,7 +787,7 @@ const onSelectionChange = (_, d) => {
             key: m.key,
             ...m.movement, 
             startDate_en_GB: m.startDate_en_GB, 
-            ...(camera && {  cameraName: camera.name })
+            ...(camera && {  cameraName: camera.name, camera })
           }})} 
         
           
@@ -796,58 +839,65 @@ const onSelectionChange = (_, d) => {
           <DialogBody>
             <DialogTitle>Movement Information</DialogTitle>
             <DialogContent>
-              {infoDialog.item && (
-                <div style={{ fontFamily: 'monospace', fontSize: '13px' }}>
-                  <div style={{ marginBottom: '8px' }}>
-                    <strong>Movement Key:</strong> {infoDialog.item.key}
-                  </div>
-                  <div style={{ marginBottom: '8px' }}>
-                    <strong>Camera:</strong> {infoDialog.item.cameraName}
-                  </div>
-                  <div style={{ marginBottom: '8px' }}>
-                    <strong>Camera Key:</strong> {infoDialog.item.cameraKey}
-                  </div>
-                  <div style={{ marginBottom: '8px' }}>
-                    <strong>Time:</strong> {infoDialog.item.startDate_en_GB}
-                  </div>
-                  <div style={{ marginBottom: '8px' }}>
-                    <strong>Duration:</strong> {infoDialog.item.seconds}s
-                  </div>
-                  <div style={{ marginBottom: '8px' }}>
-                    <strong>Start Segment:</strong> {infoDialog.item.startSegment}
-                  </div>
-                  <div style={{ marginBottom: '8px' }}>
-                    <strong>Processing State:</strong> {infoDialog.item.processing_state || 'N/A'}
-                  </div>
-                  <div style={{ marginBottom: '8px' }}>
-                    <strong>Detection Status:</strong> {infoDialog.item.detection_status || 'N/A'}
-                  </div>
-                  {infoDialog.item.detection_output?.tags && (
-                    <div style={{ marginBottom: '8px' }}>
-                      <strong>Detected Objects:</strong>
-                      <div style={{ marginTop: '4px', paddingLeft: '12px' }}>
-                        {infoDialog.item.detection_output.tags.map((t, idx) => (
-                          <div key={idx}>{t.tag}: {(t.maxProbability * 100).toFixed(0)}% (count: {t.count})</div>
-                        ))}
+              {infoDialog.item && (() => {
+                const item = infoDialog.item;
+                const startTime = new Date(parseInt(item.key));
+                const endTime = new Date(startTime.getTime() + (item.seconds * 1000));
+                const formatTime = (d) => d.toLocaleString('en-GB', { 
+                  day: '2-digit', month: '2-digit', year: 'numeric',
+                  hour: '2-digit', minute: '2-digit', second: '2-digit'
+                });
+                const camera = item.camera;
+                
+                return (
+                  <div style={{ fontFamily: 'monospace', fontSize: '13px' }}>
+                    <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+                      <tbody>
+                        <tr><td style={{ padding: '3px 8px 3px 0', whiteSpace: 'nowrap', verticalAlign: 'top' }}><strong>Movement Key:</strong></td><td style={{ padding: '3px 0' }}>{item.key}</td></tr>
+                        <tr><td style={{ padding: '3px 8px 3px 0', whiteSpace: 'nowrap', verticalAlign: 'top' }}><strong>Camera:</strong></td><td style={{ padding: '3px 0' }}>{item.cameraName}</td></tr>
+                        <tr><td style={{ padding: '3px 8px 3px 0', whiteSpace: 'nowrap', verticalAlign: 'top' }}><strong>Camera Key:</strong></td><td style={{ padding: '3px 0' }}>{item.cameraKey}</td></tr>
+                        <tr><td style={{ padding: '3px 8px 3px 0', whiteSpace: 'nowrap', verticalAlign: 'top' }}><strong>Start Time:</strong></td><td style={{ padding: '3px 0' }}>{formatTime(startTime)}</td></tr>
+                        <tr><td style={{ padding: '3px 8px 3px 0', whiteSpace: 'nowrap', verticalAlign: 'top' }}><strong>End Time:</strong></td><td style={{ padding: '3px 0' }}>{formatTime(endTime)}</td></tr>
+                        <tr><td style={{ padding: '3px 8px 3px 0', whiteSpace: 'nowrap', verticalAlign: 'top' }}><strong>Duration:</strong></td><td style={{ padding: '3px 0' }}>{item.seconds}s</td></tr>
+                        <tr><td style={{ padding: '3px 8px 3px 0', whiteSpace: 'nowrap', verticalAlign: 'top' }}><strong>Start Segment:</strong></td><td style={{ padding: '3px 0' }}>{item.startSegment}</td></tr>
+                        {camera && (
+                          <>
+                            <tr><td style={{ padding: '3px 8px 3px 0', whiteSpace: 'nowrap', verticalAlign: 'top' }}><strong>Poll Frequency:</strong></td><td style={{ padding: '3px 0' }}>{camera.mSPollFrequency/1000}s</td></tr>
+                            <tr><td style={{ padding: '3px 8px 3px 0', whiteSpace: 'nowrap', verticalAlign: 'top' }}><strong>Extend After No Movement:</strong></td><td style={{ padding: '3px 0' }}>{camera.pollsWithoutMovement} poll(s)</td></tr>
+                            <tr><td style={{ padding: '3px 8px 3px 0', whiteSpace: 'nowrap', verticalAlign: 'top' }}><strong>Max Single Movement:</strong></td><td style={{ padding: '3px 0' }}>{camera.secMaxSingleMovement}s</td></tr>
+                          </>
+                        )}
+                        <tr><td style={{ padding: '3px 8px 3px 0', whiteSpace: 'nowrap', verticalAlign: 'top' }}><strong>Processing State:</strong></td><td style={{ padding: '3px 0' }}>{item.processing_state || 'N/A'}</td></tr>
+                        <tr><td style={{ padding: '3px 8px 3px 0', whiteSpace: 'nowrap', verticalAlign: 'top' }}><strong>Detection Status:</strong></td><td style={{ padding: '3px 0' }}>{item.detection_status || 'N/A'}</td></tr>
+                        {item.detection_output?.tags && (
+                          <tr>
+                            <td style={{ padding: '3px 8px 3px 0', whiteSpace: 'nowrap', verticalAlign: 'top' }}><strong>Detected Objects:</strong></td>
+                            <td style={{ padding: '3px 0' }}>
+                              {item.detection_output.tags.map((t, idx) => (
+                                <div key={idx}>{t.tag}: {(t.maxProbability * 100).toFixed(0)}% (count: {t.count})</div>
+                              ))}
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                    {item.processing_error && (
+                      <div style={{ 
+                        marginTop: '12px',
+                        padding: '12px',
+                        backgroundColor: '#fff4f4',
+                        border: '1px solid #ffcccc',
+                        borderRadius: '4px'
+                      }}>
+                        <strong style={{ color: '#d13438' }}>Error:</strong>
+                        <div style={{ marginTop: '4px', color: '#333' }}>
+                          {item.processing_error}
+                        </div>
                       </div>
-                    </div>
-                  )}
-                  {infoDialog.item.processing_error && (
-                    <div style={{ 
-                      marginTop: '12px',
-                      padding: '12px',
-                      backgroundColor: '#fff4f4',
-                      border: '1px solid #ffcccc',
-                      borderRadius: '4px'
-                    }}>
-                      <strong style={{ color: '#d13438' }}>Error:</strong>
-                      <div style={{ marginTop: '4px', color: '#333' }}>
-                        {infoDialog.item.processing_error}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
+                    )}
+                  </div>
+                );
+              })()}
             </DialogContent>
             <DialogActions>
               <Button appearance="secondary" onClick={() => setInfoDialog({open: false, item: null})}>Close</Button>

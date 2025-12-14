@@ -98,6 +98,20 @@ The app includes a YOLO11n ONNX model at `./ai/model/yolo11n.onnx` for real-time
 5. Configure object detection labels to filter (e.g., ignore "car" detections)
 
 The detector will automatically run when motion is detected, tagging objects found in the frames.
+
+### Movement Status Indicators
+
+Each movement in the list displays a small status icon next to the duration, indicating its processing and detection state:
+
+| Icon | Color | Meaning |
+|------|-------|---------|
+| 🕐 Clock | Gray | Waiting to process (pending) |
+| ⏳ Spinner | Blue | Currently processing/extracting frames |
+| ✓ Checkmark | Green | Detection complete (objects found) |
+| ⊟ Scan | Gray | Complete, no objects detected |
+| ✕ X | Red | Processing failed (hover for error details) |
+
+Hover over any icon for a tooltip with additional details.
   
 
   
