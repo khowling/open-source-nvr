@@ -61,6 +61,14 @@ export interface MovementEntry {
     updated?: number;
     movement_key?: string;
     camera_key?: string;
+    // Detection timing (camera movement detection)
+    detection_started_at?: number;  // When movement was first detected
+    detection_ended_at?: number;    // When movement ended (ENDLIST written)
+    // Processing statistics (ML frame processing)
+    frames_sent_to_ml?: number;     // Number of frames sent to ML detector
+    frames_received_from_ml?: number; // Number of ML results received
+    ml_total_processing_time_ms?: number; // Sum of all ML processing times
+    ml_max_processing_time_ms?: number;   // Max single frame processing time
 }
 
 export interface MLTag {
@@ -670,7 +678,17 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
                                     detection_status: value.detection_status || 'complete',
                                     processing_state: value.processing_state,
                                     ...(value.processing_error && { processing_error: value.processing_error }),
-                                    ...(tags && tags.length > 0 && { detection_output: { tags } })
+                                    ...(tags && tags.length > 0 && { detection_output: { tags } }),
+                                    // Timing fields
+                                    ...(value.detection_started_at && { detection_started_at: value.detection_started_at }),
+                                    ...(value.detection_ended_at && { detection_ended_at: value.detection_ended_at }),
+                                    ...(value.processing_started_at && { processing_started_at: value.processing_started_at }),
+                                    ...(value.processing_completed_at && { processing_completed_at: value.processing_completed_at }),
+                                    // ML stats
+                                    ...(value.frames_sent_to_ml !== undefined && { frames_sent_to_ml: value.frames_sent_to_ml }),
+                                    ...(value.frames_received_from_ml !== undefined && { frames_received_from_ml: value.frames_received_from_ml }),
+                                    ...(value.ml_total_processing_time_ms !== undefined && { ml_total_processing_time_ms: value.ml_total_processing_time_ms }),
+                                    ...(value.ml_max_processing_time_ms !== undefined && { ml_max_processing_time_ms: value.ml_max_processing_time_ms })
                                 }
                             });
                         }

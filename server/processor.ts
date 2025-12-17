@@ -75,6 +75,8 @@ let _inmem_currentProcessingMovement: {
     ffmpegExited: boolean;  // Track if ffmpeg has exited
     framesSentToML: number;  // Count of frames sent to ML detector
     framesReceivedFromML: number;  // Count of ML results received
+    mlTotalProcessingTimeMs: number;  // Sum of all ML processing times
+    mlMaxProcessingTimeMs: number;    // Max single frame processing time
     onAllFramesProcessed?: () => void;  // Callback when all frames are processed
 } | null = null;
 
@@ -653,7 +655,8 @@ async function handleMovementDetected(
             seconds: 0,
             pollCount: 0,
             consecutivePollsWithoutMovement: 0,
-            processing_state: 'pending'
+            processing_state: 'pending',
+            detection_started_at: startDate  // Track when detection started
         };
 
         // Get segment information from HLS playlist
@@ -888,6 +891,15 @@ async function finalizeMovement(
         duration: elapsedSeconds
     });
 
+    // Update movement with detection_ended_at timestamp
+    const detectionEndedAt = Date.now();
+    const updatedMovement = {
+        ...movement,
+        seconds: elapsedSeconds,
+        detection_ended_at: detectionEndedAt
+    };
+    await deps.movementdb.put(movement_key, updatedMovement);
+
     // Finalize playlist with ENDLIST
     if (movement.playlist_path) {
         try {
@@ -1066,13 +1078,16 @@ export async function triggerProcessMovement(): Promise<void> {
     const maxMovementSeconds = cameraEntry.secMaxSingleMovement || 90;
     
     // ffmpeg args with live HLS support - will wait for new segments until ENDLIST or timeout
+    // For local file HLS, we need to force the HLS demuxer and enable live mode
     const ffmpegArgs = [
         '-hide_banner', '-loglevel', 'info',
+        '-f', 'hls',                        // Force HLS demuxer for proper live handling
         '-live_start_index', '0',           // Start from first segment in playlist
+        '-allowed_extensions', 'ALL',       // Allow .ts segments with absolute paths
         '-rw_timeout', `${(maxMovementSeconds + 30) * 1000000}`,  // Microseconds timeout for reading
         '-progress', 'pipe:1',
         '-i', movement.playlist_path!,
-        '-vf', 'fps=1,scale=640:640:force_original_aspect_ratio=decrease,pad=640:640:(ow-iw)/2:(oh-ih)/2',
+        '-vf', 'fps=2,scale=640:640:force_original_aspect_ratio=decrease,pad=640:640:(ow-iw)/2:(oh-ih)/2',
         `${framesPath}/mov${movement_key}_%04d.jpg`
     ];
 
@@ -1143,6 +1158,14 @@ export async function triggerProcessMovement(): Promise<void> {
                 
                 // Set up the finalization callback
                 _inmem_currentProcessingMovement.onAllFramesProcessed = async () => {
+                    // Capture ML stats before clearing tracking
+                    const mlStats = _inmem_currentProcessingMovement ? {
+                        frames_sent_to_ml: _inmem_currentProcessingMovement.framesSentToML,
+                        frames_received_from_ml: _inmem_currentProcessingMovement.framesReceivedFromML,
+                        ml_total_processing_time_ms: _inmem_currentProcessingMovement.mlTotalProcessingTimeMs,
+                        ml_max_processing_time_ms: _inmem_currentProcessingMovement.mlMaxProcessingTimeMs
+                    } : null;
+                    
                     // Wrap async logic in a tracked promise for graceful shutdown
                     const closeHandler = async () => {
                         // Clear tracking now that we're finalizing
@@ -1180,7 +1203,14 @@ export async function triggerProcessMovement(): Promise<void> {
                                 processing_state: hasFailed ? 'failed' as const : 'completed' as const,
                                 detection_status: hasFailed ? 'failed' : 'complete',
                                 processing_completed_at: Date.now(),
-                                ...(hasFailed && { processing_error: errorMsg })
+                                ...(hasFailed && { processing_error: errorMsg }),
+                                // Include ML processing stats
+                                ...(mlStats && {
+                                    frames_sent_to_ml: mlStats.frames_sent_to_ml,
+                                    frames_received_from_ml: mlStats.frames_received_from_ml,
+                                    ml_total_processing_time_ms: mlStats.ml_total_processing_time_ms,
+                                    ml_max_processing_time_ms: mlStats.ml_max_processing_time_ms
+                                })
                             };
                             await deps.movementdb.put(movement_key, finalMovement);
 
@@ -1241,7 +1271,9 @@ export async function triggerProcessMovement(): Promise<void> {
         process: ffmpeg,
         ffmpegExited: false,
         framesSentToML: 0,
-        framesReceivedFromML: 0
+        framesReceivedFromML: 0,
+        mlTotalProcessingTimeMs: 0,
+        mlMaxProcessingTimeMs: 0
     };
 }
 
@@ -1479,10 +1511,18 @@ async function processDetectionResult(line: string): Promise<void> {
         } finally {
             _inmem_pendingUpdates.delete(parseInt(movement_key));
             
-            // Track frames received for the current processing movement
+            // Track frames received and ML timing for the current processing movement
             if (_inmem_currentProcessingMovement && 
                 _inmem_currentProcessingMovement.movement_key === movement_key) {
                 _inmem_currentProcessingMovement.framesReceivedFromML++;
+                
+                // Track ML processing time stats
+                if (processingTimeMs !== null) {
+                    _inmem_currentProcessingMovement.mlTotalProcessingTimeMs += processingTimeMs;
+                    if (processingTimeMs > _inmem_currentProcessingMovement.mlMaxProcessingTimeMs) {
+                        _inmem_currentProcessingMovement.mlMaxProcessingTimeMs = processingTimeMs;
+                    }
+                }
                 
                 deps.logger.debug('ML frame received, checking completion', {
                     movement_key,

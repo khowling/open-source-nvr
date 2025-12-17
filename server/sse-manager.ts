@@ -229,7 +229,17 @@ export function formatMovementForSSE(key: string, movement: any): any {
             ...(movement.processing_error && { processing_error: movement.processing_error }),
             ...(movement.detection_output && {
                 detection_output: { tags: movement.detection_output.tags || [] }
-            })
+            }),
+            // Timing fields
+            ...(movement.detection_started_at && { detection_started_at: movement.detection_started_at }),
+            ...(movement.detection_ended_at && { detection_ended_at: movement.detection_ended_at }),
+            ...(movement.processing_started_at && { processing_started_at: movement.processing_started_at }),
+            ...(movement.processing_completed_at && { processing_completed_at: movement.processing_completed_at }),
+            // ML stats
+            ...(movement.frames_sent_to_ml !== undefined && { frames_sent_to_ml: movement.frames_sent_to_ml }),
+            ...(movement.frames_received_from_ml !== undefined && { frames_received_from_ml: movement.frames_received_from_ml }),
+            ...(movement.ml_total_processing_time_ms !== undefined && { ml_total_processing_time_ms: movement.ml_total_processing_time_ms }),
+            ...(movement.ml_max_processing_time_ms !== undefined && { ml_max_processing_time_ms: movement.ml_max_processing_time_ms })
         }
     };
 }

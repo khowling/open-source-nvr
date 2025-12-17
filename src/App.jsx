@@ -653,30 +653,38 @@ const onSelectionChange = (_, d) => {
               const isFailed = item.processing_state === 'failed';
               const hasDetections = item.detection_output?.tags?.length > 0;
               
-              // Status icon based on processing state and detection output
-              let StatusIcon = null;
-              let statusColor = '#888';
-              let statusTitle = '';
+              // Detection icon (top) - based on detection_ended_at
+              const detectionEnded = !!item.detection_ended_at;
+              const DetectionIcon = detectionEnded ? Checkmark12Regular : Clock12Regular;
+              const detectionColor = detectionEnded ? '#0e700e' : '#888';
+              const detectionTitle = detectionEnded ? 'Detection complete' : 'Detecting movement';
+              
+              // Processing icon (bottom) - based on processing state
+              let ProcessingIcon = null;
+              let processingColor = '#888';
+              let processingTitle = '';
+              let showProcessingSpinner = false;
               
               if (isPending) {
-                StatusIcon = Clock12Regular;
-                statusColor = '#888';
-                statusTitle = 'Waiting to process';
+                ProcessingIcon = Clock12Regular;
+                processingColor = '#888';
+                processingTitle = 'Waiting to process';
               } else if (isProcessing) {
-                statusTitle = item.detection_status === 'extracting' ? 'Extracting frames' : 'Processing';
+                showProcessingSpinner = true;
+                processingTitle = item.detection_status === 'extracting' ? 'Extracting frames' : 'Processing';
               } else if (isFailed) {
-                StatusIcon = Dismiss12Regular;
-                statusColor = '#d13438';
-                statusTitle = item.processing_error || 'Processing failed';
+                ProcessingIcon = Dismiss12Regular;
+                processingColor = '#d13438';
+                processingTitle = item.processing_error || 'Processing failed';
               } else if (isCompleted) {
                 if (hasDetections) {
-                  StatusIcon = Checkmark12Regular;
-                  statusColor = '#0e700e';
-                  statusTitle = 'Detection complete';
+                  ProcessingIcon = Checkmark12Regular;
+                  processingColor = '#0e700e';
+                  processingTitle = 'ML detection complete';
                 } else {
-                  StatusIcon = ScanDash12Regular;
-                  statusColor = '#888';
-                  statusTitle = 'No objects detected';
+                  ProcessingIcon = ScanDash12Regular;
+                  processingColor = '#888';
+                  processingTitle = 'No objects detected';
                 }
               }
               
@@ -684,19 +692,27 @@ const onSelectionChange = (_, d) => {
                 <TableCellLayout>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                     <span>{item.seconds}s</span>
-                    {isProcessing && (
-                      <Spinner 
-                        size="extra-tiny" 
-                        title={statusTitle}
-                      />
-                    )}
-                    {StatusIcon && (
-                      <Tooltip content={statusTitle} relationship="label">
-                        <span style={{ display: 'inline-flex', alignItems: 'center' }}>
-                          <StatusIcon style={{ color: statusColor }} />
+                    <span style={{ display: 'inline-flex', flexDirection: 'column', gap: '1px' }}>
+                      {/* Detection icon (top) */}
+                      <Tooltip content={detectionTitle} relationship="label">
+                        <span style={{ display: 'inline-flex', alignItems: 'center', lineHeight: 1 }}>
+                          <DetectionIcon style={{ color: detectionColor }} />
                         </span>
                       </Tooltip>
-                    )}
+                      {/* Processing icon (bottom) */}
+                      {showProcessingSpinner ? (
+                        <Spinner 
+                          size="extra-tiny" 
+                          title={processingTitle}
+                        />
+                      ) : ProcessingIcon && (
+                        <Tooltip content={processingTitle} relationship="label">
+                          <span style={{ display: 'inline-flex', alignItems: 'center', lineHeight: 1 }}>
+                            <ProcessingIcon style={{ color: processingColor }} />
+                          </span>
+                        </Tooltip>
+                      )}
+                    </span>
                   </span>
                 </TableCellLayout>
               )
@@ -847,37 +863,81 @@ const onSelectionChange = (_, d) => {
                   day: '2-digit', month: '2-digit', year: 'numeric',
                   hour: '2-digit', minute: '2-digit', second: '2-digit'
                 });
+                const formatTimeShort = (ts) => ts ? new Date(ts).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'N/A';
                 const camera = item.camera;
+                
+                // Calculate detection duration
+                const detectionDuration = item.detection_started_at && item.detection_ended_at 
+                  ? ((item.detection_ended_at - item.detection_started_at) / 1000).toFixed(1) + 's'
+                  : item.detection_started_at && !item.detection_ended_at 
+                    ? 'ongoing' 
+                    : 'N/A';
+                
+                // Calculate processing duration
+                const processingDuration = item.processing_started_at && item.processing_completed_at 
+                  ? ((item.processing_completed_at - item.processing_started_at) / 1000).toFixed(1) + 's'
+                  : item.processing_started_at && !item.processing_completed_at 
+                    ? 'ongoing' 
+                    : 'N/A';
+                
+                // Calculate ML average time
+                const mlAvgTime = item.frames_received_from_ml && item.ml_total_processing_time_ms 
+                  ? Math.round(item.ml_total_processing_time_ms / item.frames_received_from_ml) 
+                  : null;
+                
+                const tdStyle = { padding: '3px 8px 3px 0', whiteSpace: 'nowrap', verticalAlign: 'top' };
+                const sectionHeader = { padding: '10px 0 3px 0', borderTop: '1px solid #eee', marginTop: '6px' };
                 
                 return (
                   <div style={{ fontFamily: 'monospace', fontSize: '13px' }}>
                     <table style={{ borderCollapse: 'collapse', width: '100%' }}>
                       <tbody>
-                        <tr><td style={{ padding: '3px 8px 3px 0', whiteSpace: 'nowrap', verticalAlign: 'top' }}><strong>Movement Key:</strong></td><td style={{ padding: '3px 0' }}>{item.key}</td></tr>
-                        <tr><td style={{ padding: '3px 8px 3px 0', whiteSpace: 'nowrap', verticalAlign: 'top' }}><strong>Camera:</strong></td><td style={{ padding: '3px 0' }}>{item.cameraName}</td></tr>
-                        <tr><td style={{ padding: '3px 8px 3px 0', whiteSpace: 'nowrap', verticalAlign: 'top' }}><strong>Camera Key:</strong></td><td style={{ padding: '3px 0' }}>{item.cameraKey}</td></tr>
-                        <tr><td style={{ padding: '3px 8px 3px 0', whiteSpace: 'nowrap', verticalAlign: 'top' }}><strong>Start Time:</strong></td><td style={{ padding: '3px 0' }}>{formatTime(startTime)}</td></tr>
-                        <tr><td style={{ padding: '3px 8px 3px 0', whiteSpace: 'nowrap', verticalAlign: 'top' }}><strong>End Time:</strong></td><td style={{ padding: '3px 0' }}>{formatTime(endTime)}</td></tr>
-                        <tr><td style={{ padding: '3px 8px 3px 0', whiteSpace: 'nowrap', verticalAlign: 'top' }}><strong>Duration:</strong></td><td style={{ padding: '3px 0' }}>{item.seconds}s</td></tr>
-                        <tr><td style={{ padding: '3px 8px 3px 0', whiteSpace: 'nowrap', verticalAlign: 'top' }}><strong>Start Segment:</strong></td><td style={{ padding: '3px 0' }}>{item.startSegment}</td></tr>
+                        {/* Basic Info */}
+                        <tr><td style={tdStyle}><strong>Movement Key:</strong></td><td style={{ padding: '3px 0' }}>{item.key}</td></tr>
+                        <tr><td style={tdStyle}><strong>Camera:</strong></td><td style={{ padding: '3px 0' }}>{item.cameraName}</td></tr>
+                        <tr><td style={tdStyle}><strong>Camera Key:</strong></td><td style={{ padding: '3px 0' }}>{item.cameraKey}</td></tr>
+                        <tr><td style={tdStyle}><strong>Start Segment:</strong></td><td style={{ padding: '3px 0' }}>{item.startSegment}</td></tr>
                         {camera && (
                           <>
-                            <tr><td style={{ padding: '3px 8px 3px 0', whiteSpace: 'nowrap', verticalAlign: 'top' }}><strong>Poll Frequency:</strong></td><td style={{ padding: '3px 0' }}>{camera.mSPollFrequency/1000}s</td></tr>
-                            <tr><td style={{ padding: '3px 8px 3px 0', whiteSpace: 'nowrap', verticalAlign: 'top' }}><strong>Extend After No Movement:</strong></td><td style={{ padding: '3px 0' }}>{camera.pollsWithoutMovement} poll(s)</td></tr>
-                            <tr><td style={{ padding: '3px 8px 3px 0', whiteSpace: 'nowrap', verticalAlign: 'top' }}><strong>Max Single Movement:</strong></td><td style={{ padding: '3px 0' }}>{camera.secMaxSingleMovement}s</td></tr>
+                            <tr><td style={tdStyle}><strong>Poll Frequency:</strong></td><td style={{ padding: '3px 0' }}>{camera.mSPollFrequency/1000}s</td></tr>
+                            <tr><td style={tdStyle}><strong>Extend After No Movement:</strong></td><td style={{ padding: '3px 0' }}>{camera.pollsWithoutMovement} poll(s)</td></tr>
+                            <tr><td style={tdStyle}><strong>Max Single Movement:</strong></td><td style={{ padding: '3px 0' }}>{camera.secMaxSingleMovement}s</td></tr>
                           </>
                         )}
-                        <tr><td style={{ padding: '3px 8px 3px 0', whiteSpace: 'nowrap', verticalAlign: 'top' }}><strong>Processing State:</strong></td><td style={{ padding: '3px 0' }}>{item.processing_state || 'N/A'}</td></tr>
-                        <tr><td style={{ padding: '3px 8px 3px 0', whiteSpace: 'nowrap', verticalAlign: 'top' }}><strong>Detection Status:</strong></td><td style={{ padding: '3px 0' }}>{item.detection_status || 'N/A'}</td></tr>
+                        
+                        {/* Detection Section */}
+                        <tr><td colSpan="2" style={sectionHeader}><strong style={{ color: '#666' }}>📹 Detection (Camera Movement)</strong></td></tr>
+                        <tr><td style={tdStyle}><strong>Start Time:</strong></td><td style={{ padding: '3px 0' }}>{formatTime(startTime)}</td></tr>
+                        <tr><td style={tdStyle}><strong>End Time:</strong></td><td style={{ padding: '3px 0' }}>{item.detection_ended_at ? formatTime(new Date(item.detection_ended_at)) : formatTime(endTime)}</td></tr>
+                        <tr><td style={tdStyle}><strong>Duration:</strong></td><td style={{ padding: '3px 0' }}>{detectionDuration}</td></tr>
+                        
+                        {/* Processing Section */}
+                        <tr><td colSpan="2" style={sectionHeader}><strong style={{ color: '#666' }}>⚙️ Processing (ML Detection)</strong></td></tr>
+                        <tr><td style={tdStyle}><strong>Processing State:</strong></td><td style={{ padding: '3px 0' }}>{item.processing_state || 'N/A'}</td></tr>
+                        <tr><td style={tdStyle}><strong>Start Time:</strong></td><td style={{ padding: '3px 0' }}>{formatTimeShort(item.processing_started_at)}</td></tr>
+                        <tr><td style={tdStyle}><strong>End Time:</strong></td><td style={{ padding: '3px 0' }}>{formatTimeShort(item.processing_completed_at)}</td></tr>
+                        <tr><td style={tdStyle}><strong>Duration:</strong></td><td style={{ padding: '3px 0' }}>{processingDuration}</td></tr>
+                        <tr><td style={tdStyle}><strong>Frames Sent:</strong></td><td style={{ padding: '3px 0' }}>{item.frames_sent_to_ml ?? 'N/A'}</td></tr>
+                        <tr><td style={tdStyle}><strong>Frames Received:</strong></td><td style={{ padding: '3px 0' }}>{item.frames_received_from_ml ?? 'N/A'}</td></tr>
+                        {mlAvgTime !== null && (
+                          <>
+                            <tr><td style={tdStyle}><strong>Avg ML Time:</strong></td><td style={{ padding: '3px 0' }}>{mlAvgTime}ms</td></tr>
+                            <tr><td style={tdStyle}><strong>Max ML Time:</strong></td><td style={{ padding: '3px 0' }}>{item.ml_max_processing_time_ms}ms</td></tr>
+                          </>
+                        )}
+                        
+                        {/* Results Section */}
                         {item.detection_output?.tags && (
-                          <tr>
-                            <td style={{ padding: '3px 8px 3px 0', whiteSpace: 'nowrap', verticalAlign: 'top' }}><strong>Detected Objects:</strong></td>
-                            <td style={{ padding: '3px 0' }}>
-                              {item.detection_output.tags.map((t, idx) => (
-                                <div key={idx}>{t.tag}: {(t.maxProbability * 100).toFixed(0)}% (count: {t.count})</div>
-                              ))}
-                            </td>
-                          </tr>
+                          <>
+                            <tr><td colSpan="2" style={sectionHeader}><strong style={{ color: '#666' }}>🏷️ Detected Objects</strong></td></tr>
+                            <tr>
+                              <td colSpan="2" style={{ padding: '3px 0' }}>
+                                {item.detection_output.tags.map((t, idx) => (
+                                  <div key={idx}>{t.tag}: {(t.maxProbability * 100).toFixed(0)}% (count: {t.count})</div>
+                                ))}
+                              </td>
+                            </tr>
+                          </>
                         )}
                       </tbody>
                     </table>
