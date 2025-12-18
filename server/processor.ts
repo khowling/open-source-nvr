@@ -75,12 +75,16 @@ let _inmem_currentProcessingMovement: {
     pid: number;  // Store PID for logging and debugging
     killedAt?: number;  // Timestamp when kill signal was sent (to detect orphaned processes)
     ffmpegExited: boolean;  // Track if ffmpeg has exited
+    ffmpegExitedAt?: number;  // Timestamp when ffmpeg exited (for ML timeout detection)
     framesSentToML: number;  // Count of frames sent to ML detector
     framesReceivedFromML: number;  // Count of ML results received
     mlTotalProcessingTimeMs: number;  // Sum of all ML processing times
     mlMaxProcessingTimeMs: number;    // Max single frame processing time
     onAllFramesProcessed?: () => void;  // Callback when all frames are processed
 } | null = null;
+
+// Timeout for waiting for ML results after ffmpeg exits (30 seconds)
+const ML_RESULTS_TIMEOUT_MS = 30000;
 
 // Max ffmpeg processing time in seconds (default: 300s = 5 minutes)
 const FFMPEG_MAX_PROCESSING_TIME_MS = 300 * 1000;
@@ -1181,6 +1185,7 @@ export async function triggerProcessMovement(): Promise<void> {
             if (_inmem_currentProcessingMovement && 
                 _inmem_currentProcessingMovement.movement_key === movement_key) {
                 _inmem_currentProcessingMovement.ffmpegExited = true;
+                _inmem_currentProcessingMovement.ffmpegExitedAt = Date.now();
                 
                 const { framesSentToML, framesReceivedFromML } = _inmem_currentProcessingMovement;
                 deps.logger.info('ffmpeg exited, waiting for ML results', {
@@ -1454,6 +1459,14 @@ async function processDetectionResult(line: string): Promise<void> {
             return;
         }
 
+        // Log ML-side errors (file not found, read failures, etc.)
+        if (result.error) {
+            deps.logger.warn('ML detection error', { 
+                image: result.image, 
+                error: result.error 
+            });
+        }
+
         const imagePath = result.image;
         const imageName = imagePath.split('/').pop() || imagePath;
         const movementKeyMatch = imageName.match(/^mov(\d+)_/);
@@ -1531,6 +1544,7 @@ async function processDetectionResult(line: string): Promise<void> {
 
             deps.logger.info('Movement updated with ML results', {
                 movement: movement_key,
+                frame: imageName,
                 tagCount: updatedTags.length,
                 tags: updatedTags.map(t => `${t.tag}(${(t.maxProbability * 100).toFixed(1)}%)`).join(', ')
             });
@@ -1577,14 +1591,18 @@ async function processDetectionResult(line: string): Promise<void> {
 
 /**
  * Check if movement processing is complete (ffmpeg exited + all ML results received)
- * If so, trigger the completion callback
+ * If so, trigger the completion callback.
+ * Also handles timeout if ML results are missing after ffmpeg exits.
  */
 function checkAndFinalizeMovement(): void {
     if (!_inmem_currentProcessingMovement) return;
     
-    const { ffmpegExited, framesSentToML, framesReceivedFromML, onAllFramesProcessed, movement_key } = _inmem_currentProcessingMovement;
+    const { ffmpegExited, ffmpegExitedAt, framesSentToML, framesReceivedFromML, onAllFramesProcessed, movement_key } = _inmem_currentProcessingMovement;
     
-    if (ffmpegExited && framesSentToML === framesReceivedFromML) {
+    if (!ffmpegExited) return;
+    
+    // Check if all ML frames received
+    if (framesSentToML === framesReceivedFromML) {
         deps.logger.info('All ML frames processed, finalizing movement', {
             movement_key,
             framesSent: framesSentToML,
@@ -1593,6 +1611,25 @@ function checkAndFinalizeMovement(): void {
         
         if (onAllFramesProcessed) {
             onAllFramesProcessed();
+        }
+        return;
+    }
+    
+    // Check if timeout has elapsed since ffmpeg exited - finalize anyway with missing frames
+    if (ffmpegExitedAt) {
+        const timeSinceExit = Date.now() - ffmpegExitedAt;
+        if (timeSinceExit > ML_RESULTS_TIMEOUT_MS) {
+            deps.logger.warn('ML results timeout, finalizing movement with missing frames', {
+                movement_key,
+                framesSent: framesSentToML,
+                framesReceived: framesReceivedFromML,
+                missing: framesSentToML - framesReceivedFromML,
+                timeSinceExit_ms: timeSinceExit
+            });
+            
+            if (onAllFramesProcessed) {
+                onAllFramesProcessed();
+            }
         }
     }
 }
@@ -1678,6 +1715,9 @@ export async function runControlLoop(): Promise<void> {
 
     // Process pending movements (one at a time, across all cameras)
     await triggerProcessMovement();
+    
+    // Check for ML timeout (in case ML results are missing)
+    checkAndFinalizeMovement();
 
     // SSE keep-alive (every 30 seconds)
     sseKeepAlive();

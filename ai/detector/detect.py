@@ -205,11 +205,26 @@ def main():
             img_counter += 1
 
             if not os.path.exists(img_path):
-                print("{} is not found", img_name)
+                # File doesn't exist - still send a response so the server doesn't hang
+                result = {
+                    "image": img_path,
+                    "detections": [],
+                    "error": "File not found"
+                }
+                print(json.dumps(result))
+                sys.stdout.flush()
                 continue
 
             img_src = cv2.imread(img_path)
             if img_src is None:
+                # Failed to read image - still send a response
+                result = {
+                    "image": img_path,
+                    "detections": [],
+                    "error": "Failed to read image"
+                }
+                print(json.dumps(result))
+                sys.stdout.flush()
                 continue
 
             # Image should already be 640x640 from ffmpeg letterboxing
