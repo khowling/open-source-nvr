@@ -460,17 +460,41 @@ const onSelectionChange = (_, d) => {
       // Sort tags by maxProbability descending and format with percentage
       const sortedTags = [...detection_output.tags].sort((a, b) => b.maxProbability - a.maxProbability)
       return (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "5px" }}>
-          {sortedTags.map((t, idx) => (
-            <Badge 
-              key={idx}
-              appearance="filled"
-              color="brand"
-              style={{ whiteSpace: 'nowrap' }}
-            >
-              {t.tag} {(t.maxProbability * 100).toFixed(0)}%
-            </Badge>
-          ))}
+        <div style={{ 
+          display: "flex", 
+          flexDirection: "row",
+          flexWrap: "wrap", 
+          gap: "3px",
+          alignItems: "center",
+          alignContent: "flex-start",
+          maxHeight: "44px",
+          overflow: "hidden"
+        }}>
+          {sortedTags.map((t, idx) => {
+            const frameUrl = t.maxProbabilityImage 
+              ? `/frame/${key}/${t.maxProbabilityImage}`
+              : img;
+            return (
+              <Badge 
+                key={idx}
+                appearance="filled"
+                color="brand"
+                style={{ 
+                  whiteSpace: 'nowrap',
+                  fontSize: '11px',
+                  padding: '2px 6px',
+                  lineHeight: '1.2',
+                  cursor: 'pointer'
+                }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  showImage(frameUrl);
+                }}
+              >
+                {t.tag} {(t.maxProbability * 100).toFixed(0)}%
+              </Badge>
+            );
+          })}
         </div>
       );
     }
@@ -757,22 +781,13 @@ const onSelectionChange = (_, d) => {
                           Information
                         </MenuItem>
                         {sortedTags.length > 0 && sortedTags.map((t, idx) => {
-                          const frameUrl = t.maxProbabilityImage 
-                            ? `/frame/${key}/${t.maxProbabilityImage}`
-                            : img;
                           const currentFilters = data.config.settings.detection_tag_filters || [];
                           const existingFilter = currentFilters.find(f => f.tag === t.tag);
                           
                           return (
-                            <React.Fragment key={idx}>
-                              <MenuItem onClick={(e) => {
-                                e.stopPropagation();
-                                setOpenMenuKey(null);
-                                showImage(frameUrl);
-                              }}>
-                                Open {t.tag} image
-                              </MenuItem>
-                              <MenuItem onClick={(e) => {
+                            <MenuItem 
+                              key={idx}
+                              onClick={(e) => {
                                 e.stopPropagation();
                                 setOpenMenuKey(null);
                                 if (!existingFilter) {
@@ -783,10 +798,10 @@ const onSelectionChange = (_, d) => {
                                   setPanel({...panel, open: true, key: 'settings', invalidArray:[], heading: 'General Settings', 
                                     values: { ...data.config.settings }})
                                 }
-                              }}>
-                                {existingFilter ? `Edit ${t.tag} filter...` : `Add ${t.tag} to filter (≥${Math.round(t.maxProbability * 100)}%)`}
-                              </MenuItem>
-                            </React.Fragment>
+                              }}
+                            >
+                              {existingFilter ? `Edit ${t.tag} filter...` : `Add ${t.tag} to filter (≥${Math.round(t.maxProbability * 100)}%)`}
+                            </MenuItem>
                           );
                         })}
                       </MenuList>

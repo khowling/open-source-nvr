@@ -335,35 +335,39 @@ export function createFFmpegFrameProcessor(movement_key: string, framesPath: str
                 if (frameMatch) {
                     const frameNumber = parseInt(frameMatch[1]);
                     if (frameNumber > lastFrameNumber) {
-                        lastFrameNumber = frameNumber;
-                        const framePath = `${framesPath}/mov${movement_key}_${frameNumber.toString().padStart(4, '0')}.jpg`;
-                        
-                        logger.info('createFFmpegFrameProcessor: Frame extracted', { 
-                            camera: cameraName, 
-                            movement: movement_key, 
-                            frame: frameNumber,
-                            path: framePath
-                        });
-                        
-                        // Send to ML detection pipeline
-                        if (settingsCache.settings.detection_enable) {
-                            sendImageToMLDetection(framePath, movement_key);
-                        }
-                        
-                        // Update ML status to 'analyzing' after first frame
-                        if (frameNumber === 1) {
-
-                            movementdb.get(movement_key).then((movement: any) => {
-                                movementdb.put(movement_key, {
-                                    ...movement,
-                                    detection_status: 'analyzing'
-                                }).catch((err: Error) => {
-                                    logger.warn('Failed to update ML status', { movement: movement_key, error: String(err) });
-                                });
-                            }).catch((err: Error) => {
-                                logger.warn('Failed to get movement for ML status update', { movement: movement_key, error: String(err) });
+                        // Send ALL frames from lastFrameNumber+1 to frameNumber
+                        // ffmpeg progress output can skip frames (e.g., report frame=10 then frame=12)
+                        // but the actual frame files are still created sequentially
+                        for (let f = lastFrameNumber + 1; f <= frameNumber; f++) {
+                            const framePath = `${framesPath}/mov${movement_key}_${f.toString().padStart(4, '0')}.jpg`;
+                            
+                            logger.info('createFFmpegFrameProcessor: Frame extracted', { 
+                                camera: cameraName, 
+                                movement: movement_key, 
+                                frame: f,
+                                path: framePath
                             });
+                            
+                            // Send to ML detection pipeline
+                            if (settingsCache.settings.detection_enable) {
+                                sendImageToMLDetection(framePath, movement_key);
+                            }
+                            
+                            // Update ML status to 'analyzing' after first frame
+                            if (f === 1) {
+                                movementdb.get(movement_key).then((movement: any) => {
+                                    movementdb.put(movement_key, {
+                                        ...movement,
+                                        detection_status: 'analyzing'
+                                    }).catch((err: Error) => {
+                                        logger.warn('Failed to update ML status', { movement: movement_key, error: String(err) });
+                                    });
+                                }).catch((err: Error) => {
+                                    logger.warn('Failed to get movement for ML status update', { movement: movement_key, error: String(err) });
+                                });
+                            }
                         }
+                        lastFrameNumber = frameNumber;
                     }
                 }
             }

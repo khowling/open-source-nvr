@@ -674,8 +674,9 @@ async function handleMovementDetected(
             const targetduration = hls.match(/#EXT-X-TARGETDURATION:([\d])/);
             lhs_seg_duration_seq = parseInt(targetduration && targetduration.length > 1 ? targetduration[1] : "2");
 
+            // Look back by poll frequency to capture video from before movement was reported
             const segmentsToLookBack = Math.ceil(cameraEntry.mSPollFrequency / (lhs_seg_duration_seq * 1000));
-            startSegment = parseInt(hls_segments[hls_segments.length - 1]) - segmentsToLookBack + 1;
+            startSegment = parseInt(hls_segments[hls_segments.length - 1]) - segmentsToLookBack;
             const playlist_last_segment = parseInt(hls_segments[hls_segments.length - 1]);
 
             movementEntry = {
@@ -1117,8 +1118,10 @@ export async function triggerProcessMovement(): Promise<void> {
         '-rw_timeout', `${(maxMovementSeconds + 30) * 1000000}`,  // Microseconds timeout for reading
         '-progress', 'pipe:1',
         '-i', movement.playlist_path!,
+        '-an',                              // Disable audio - we only need video frames, prevents audio codec errors
         '-t', `${hardDurationLimit}`,       // Hard OUTPUT duration limit (after -i) to prevent indefinite processing
         '-vf', 'fps=2,scale=640:640:force_original_aspect_ratio=decrease,pad=640:640:(ow-iw)/2:(oh-ih)/2',
+        '-q:v', '2',                        // High quality JPEG output (1-31, lower is better)
         `${framesPath}/mov${movement_key}_%04d.jpg`
     ];
 

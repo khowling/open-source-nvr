@@ -30,7 +30,7 @@ async function lsOrderTime(folder: string): Promise<Array<[size: number, filenam
 
     return new Promise((acc,rej) => {
         let mv_stdout = '', mv_stderr = '', mv_error = ''
-        const mv_task = spawn('ls', ['-trks', '--ignore=\'*[^.jpg|^.ts]\'' , folder], { timeout: 5000 })
+        const mv_task = spawn('ls', ['-trks', folder], { timeout: 5000 })
 
         // only take the first page of the results, otherwise TOO LONG!
         mv_task.stdout.on('data', (data: string) => { /*if (!mv_stdout) */ mv_stdout += data })
@@ -113,7 +113,7 @@ export async function diskCheck(rootFolder: string, cameraFolders: Array<string>
 
                 ret.folderStats[folder] = {removedMB: 0, removedFiles: 0} as DiskDeleteStats
 
-                flist[folder] = (await lsOrderTime(folder)).filter(([,f]) => f.match(/(\.ts|\.jpg)$/))
+                flist[folder] = (await lsOrderTime(folder)).filter(([,f]) => f.match(/(\.ts|\.jpg|\.m3u8)$/))
                 if (flist[folder].length) {
                     flist_pointer[folder] = {idx: 0, age: (await fs.stat(`${folder}/${flist[folder][0][1]}`)).ctimeMs}
                 }
