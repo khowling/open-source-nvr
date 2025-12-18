@@ -72,6 +72,8 @@ let _inmem_currentProcessingMovement: {
     movement_key: string;
     startedAt: number;
     process: ChildProcessWithoutNullStreams;
+    pid: number;  // Store PID for logging and debugging
+    killedAt?: number;  // Timestamp when kill signal was sent (to detect orphaned processes)
     ffmpegExited: boolean;  // Track if ffmpeg has exited
     framesSentToML: number;  // Count of frames sent to ML detector
     framesReceivedFromML: number;  // Count of ML results received
@@ -757,6 +759,9 @@ async function handleMovementDetected(
         const elapsedSeconds = Math.floor((now - existing.startDate) / 1000);
         const secMaxSingleMovement = cameraEntry.secMaxSingleMovement || 600;
 
+        // Track the latest segment for proper update at the end
+        let latestPlaylistSegment = existing.playlist_last_segment;
+
         // Update playlist with new segments
         if (existing.playlist_path && existing.playlist_last_segment) {
             try {
@@ -772,12 +777,9 @@ async function handleMovementDetected(
                     }
 
                     await fs.appendFile(existing.playlist_path, '\n' + newSegments.join('\n'));
-
-                    await deps.movementdb.put(current_movement_key, {
-                        ...existing,
-                        playlist_last_segment: currentSegment,
-                        seconds: elapsedSeconds
-                    });
+                    
+                    // Track the updated segment for the final db write
+                    latestPlaylistSegment = currentSegment;
                 }
             } catch (e) {
                 deps.logger.warn('Failed to update playlist', {
@@ -792,12 +794,13 @@ async function handleMovementDetected(
             // Max duration reached - finalize
             await finalizeMovement(cameraKey, current_movement_key, existing, elapsedSeconds, cameraEntry, control, 'max duration');
         } else {
-            // Normal continuation
+            // Normal continuation - single db write with all updates including playlist_last_segment
             const updated: MovementEntry = {
                 ...existing,
                 seconds: elapsedSeconds,
                 pollCount: (existing.pollCount || 0) + 1,
-                consecutivePollsWithoutMovement: 0
+                consecutivePollsWithoutMovement: 0,
+                playlist_last_segment: latestPlaylistSegment  // Include updated segment to avoid overwrite
             };
 
             await deps.movementdb.put(current_movement_key, updated);
@@ -952,21 +955,45 @@ export async function triggerProcessMovement(): Promise<void> {
     // If already processing a movement, check for timeout
     if (_inmem_currentProcessingMovement) {
         const elapsed = Date.now() - _inmem_currentProcessingMovement.startedAt;
+        const { movement_key, process, pid, killedAt } = _inmem_currentProcessingMovement;
+        
+        // If we've already sent kill signal, check if enough time has passed
+        if (killedAt) {
+            const timeSinceKill = Date.now() - killedAt;
+            // If process hasn't exited after 10 seconds post-kill, force clear tracking
+            // The orphaned process will be handled by OS or manual cleanup
+            if (timeSinceKill > 10000) {
+                deps.logger.error('triggerProcessMovement: ffmpeg still running after kill, forcibly clearing tracking', {
+                    movement_key,
+                    pid,
+                    timeSinceKill_ms: timeSinceKill
+                });
+                _inmem_currentProcessingMovement = null;
+            }
+            return; // Still waiting for killed process to exit
+        }
         
         if (elapsed > FFMPEG_MAX_PROCESSING_TIME_MS) {
-            const { movement_key, process } = _inmem_currentProcessingMovement;
             deps.logger.warn('triggerProcessMovement: ffmpeg timeout, killing process', {
                 movement_key,
+                pid,
                 elapsed_ms: elapsed,
                 max_ms: FFMPEG_MAX_PROCESSING_TIME_MS
             });
+            
+            // Mark that we've initiated kill - don't clear tracking until process exits or force timeout
+            _inmem_currentProcessingMovement.killedAt = Date.now();
             
             try {
                 process.kill('SIGTERM');
                 // Force kill after 2 seconds if still running
                 setTimeout(() => {
                     try {
-                        if (!process.killed) {
+                        if (process.exitCode === null) {
+                            deps.logger.warn('triggerProcessMovement: SIGTERM did not work, sending SIGKILL', {
+                                movement_key,
+                                pid
+                            });
                             process.kill('SIGKILL');
                         }
                     } catch (e) {
@@ -976,6 +1003,7 @@ export async function triggerProcessMovement(): Promise<void> {
             } catch (e) {
                 deps.logger.error('triggerProcessMovement: Failed to kill timed out ffmpeg', {
                     movement_key,
+                    pid,
                     error: String(e)
                 });
             }
@@ -1001,15 +1029,15 @@ export async function triggerProcessMovement(): Promise<void> {
             } catch (e) {
                 deps.logger.error('triggerProcessMovement: Failed to mark timed out movement as failed', {
                     movement_key,
+                    pid,
                     error: String(e)
                 });
             }
             
-            // Clear the tracking - onClose handler will also run but we've already updated DB
-            _inmem_currentProcessingMovement = null;
+            // DON'T clear tracking here - wait for onClose or force timeout
         }
         
-        // Still processing (or just killed for timeout), don't start another
+        // Still processing (or waiting for killed process to exit), don't start another
         return;
     }
     
@@ -1079,6 +1107,8 @@ export async function triggerProcessMovement(): Promise<void> {
     
     // ffmpeg args with live HLS support - will wait for new segments until ENDLIST or timeout
     // For local file HLS, we need to force the HLS demuxer and enable live mode
+    // Add hard duration limit to prevent ffmpeg from hanging indefinitely on malformed/incomplete playlists
+    const hardDurationLimit = maxMovementSeconds + 60;  // Allow extra time for processing but enforce limit
     const ffmpegArgs = [
         '-hide_banner', '-loglevel', 'info',
         '-f', 'hls',                        // Force HLS demuxer for proper live handling
@@ -1087,6 +1117,7 @@ export async function triggerProcessMovement(): Promise<void> {
         '-rw_timeout', `${(maxMovementSeconds + 30) * 1000000}`,  // Microseconds timeout for reading
         '-progress', 'pipe:1',
         '-i', movement.playlist_path!,
+        '-t', `${hardDurationLimit}`,       // Hard OUTPUT duration limit (after -i) to prevent indefinite processing
         '-vf', 'fps=2,scale=640:640:force_original_aspect_ratio=decrease,pad=640:640:(ow-iw)/2:(oh-ih)/2',
         `${framesPath}/mov${movement_key}_%04d.jpg`
     ];
@@ -1269,6 +1300,7 @@ export async function triggerProcessMovement(): Promise<void> {
         movement_key,
         startedAt: Date.now(),
         process: ffmpeg,
+        pid: ffmpeg.pid!,
         ffmpegExited: false,
         framesSentToML: 0,
         framesReceivedFromML: 0,
