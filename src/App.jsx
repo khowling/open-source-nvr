@@ -602,7 +602,7 @@ const onSelectionChange = (_, d) => {
             <MenuPopover>
               <MenuList>
                 <MenuItem key="general" icon={<DataUsageSettings20Regular />}  onClick={() => {
-                      setPanel({...panel, open: true, key: 'settings', invalidArray:[], heading: 'General Settings', values: { ...data.config.settings }})
+                      setPanel({...panel, open: true, key: 'settings', invalidArray:[], heading: 'General Settings', values: { ...data.config?.settings }})
                 }}>General</MenuItem>
 
                 { data.cameras.map(c => 
@@ -628,7 +628,7 @@ const onSelectionChange = (_, d) => {
                         pollsWithoutMovement: 0,
                         secMaxSingleMovement: 600,
                         mSPollFrequency: 1000,
-                        disk: data.config.settings.disk_base_dir,
+                        disk: data.config?.settings?.disk_base_dir,
                         segments_prior_to_movement: 10, // 20 seconds (2second segments)
                         segments_post_movement: 10, // 20 seconds (2second segments)
                         enable_streaming: true,
@@ -780,7 +780,7 @@ const onSelectionChange = (_, d) => {
                         }}>
                           Information
                         </MenuItem>
-                        {sortedTags.length > 0 && sortedTags.map((t, idx) => {
+                        {sortedTags.length > 0 && data.config?.settings && sortedTags.map((t, idx) => {
                           const currentFilters = data.config.settings.detection_tag_filters || [];
                           const existingFilter = currentFilters.find(f => f.tag === t.tag);
                           
@@ -793,10 +793,10 @@ const onSelectionChange = (_, d) => {
                                 if (!existingFilter) {
                                   const newFilters = [...currentFilters, { tag: t.tag, minProbability: t.maxProbability }];
                                   setPanel({...panel, open: true, key: 'settings', invalidArray:[], heading: 'General Settings', 
-                                    values: { ...data.config.settings, detection_tag_filters: newFilters }})
+                                    values: { ...data.config?.settings, detection_tag_filters: newFilters }})
                                 } else {
                                   setPanel({...panel, open: true, key: 'settings', invalidArray:[], heading: 'General Settings', 
-                                    values: { ...data.config.settings }})
+                                    values: { ...data.config?.settings }})
                                 }
                               }}
                             >
