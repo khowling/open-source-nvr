@@ -1,18 +1,10 @@
 //import logo from './logo.svg';
 import './App.css';
-import React, { useEffect }  from 'react';
+import React, { useEffect, useMemo }  from 'react';
 import Hls from 'hls.js'
 import { PanelSettings } from './PanelSettings.jsx'
-import { ToolbarGroup, Badge, Text, Button, Portal, Toolbar, Menu, MenuTrigger, Tooltip, SplitButton, MenuPopover, MenuList, MenuItem, ToolbarButton, ToolbarDivider, createTableColumn, TableCellLayout, Spinner, tokens, Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions } from "@fluentui/react-components";
-import {
-  DataGridBody,
-  DataGrid,
-  DataGridRow,
-  DataGridHeader,
-  DataGridCell,
-  DataGridHeaderCell,
-} from "@fluentui-contrib/react-data-grid-react-window";
-import { ArrowMove20Regular, AccessibilityCheckmark20Regular, AccessTime20Regular, Settings16Regular, ArrowDownload16Regular, DataUsageSettings20Regular, Tv16Regular, Video20Regular, VideoAdd20Regular, ArrowRepeatAll20Regular, Filter20Regular, MoreVertical20Regular, Checkmark12Regular, Dismiss12Regular, Clock12Regular, ScanDash12Regular } from "@fluentui/react-icons";
+import { ToolbarGroup, Badge, Text, Button, Portal, Toolbar, Menu, MenuTrigger, Tooltip, SplitButton, MenuPopover, MenuList, MenuItem, ToolbarButton, ToolbarDivider, Spinner, tokens, Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions } from "@fluentui/react-components";
+import { ArrowMove20Regular, AccessibilityCheckmark20Regular, AccessTime20Regular, Settings16Regular, ArrowDownload16Regular, DataUsageSettings20Regular, Tv16Regular, Video20Regular, VideoAdd20Regular, ArrowRepeatAll20Regular, Filter20Regular, MoreVertical20Regular, Checkmark12Regular, Dismiss12Regular, Clock12Regular, Clock16Regular, ScanDash12Regular, Play20Filled, CalendarLtr16Regular } from "@fluentui/react-icons";
 
 
 export const VideoJS = ({options, onReady, play, imageUrl}) => {
@@ -226,6 +218,206 @@ function App() {
   
 }
 
+/**
+ * Movement Timeline Component
+ * Displays movements as a scrollable vertical timeline with hour markers
+ */
+function MovementTimeline({ movements, cameras, currentPlaying, highlightedKeys, playVideo, showImage, setInfoDialog, config, panel, setPanel }) {
+  
+  // Build timeline data with hour markers on the hour
+  const timelineData = useMemo(() => {
+    if (!movements || movements.length === 0) return [];
+    
+    // Prepare movement items with camera info
+    const items = movements.map(m => {
+      const camera = cameras?.find(c => c.key === m.movement?.cameraKey);
+      return {
+        key: m.key,
+        startDate: parseInt(m.key),
+        startDate_en_GB: m.startDate_en_GB,
+        cameraName: camera?.name || 'Unknown',
+        camera,
+        ...m.movement
+      };
+    });
+    
+    // Sort by date descending (newest first)
+    items.sort((a, b) => b.startDate - a.startDate);
+    
+    // Group movements by hour (on the hour)
+    const hourGroups = new Map();
+    let previousDayKey = null;
+    
+    for (const item of items) {
+      const itemDate = new Date(item.startDate);
+      // Create hour key representing the start of the hour
+      const hourStart = new Date(itemDate.getFullYear(), itemDate.getMonth(), itemDate.getDate(), itemDate.getHours(), 0, 0);
+      const hourKey = hourStart.getTime();
+      const dayKey = `${itemDate.getFullYear()}-${itemDate.getMonth()}-${itemDate.getDate()}`;
+      
+      if (!hourGroups.has(hourKey)) {
+        // Check if this is a day change
+        const isDayChange = previousDayKey !== null && previousDayKey !== dayKey;
+        previousDayKey = dayKey;
+        
+        hourGroups.set(hourKey, {
+          hourKey,
+          hourStart,
+          isDayChange: isDayChange || hourGroups.size === 0, // First item always shows day
+          movements: []
+        });
+      }
+      
+      hourGroups.get(hourKey).movements.push(item);
+    }
+    
+    // Build result with hour markers
+    const result = [];
+    
+    for (const [hourKey, group] of hourGroups) {
+      const hourDate = group.hourStart;
+      
+      // Add hour marker (show day info if it's a day change or first group)
+      result.push({
+        type: 'hour-marker',
+        key: `hour-${hourKey}`,
+        date: hourDate,
+        isDayChange: group.isDayChange,
+        label: hourDate.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
+        dayLabel: hourDate.toLocaleDateString('en-GB', { 
+          weekday: 'short',
+          day: '2-digit', 
+          month: 'short'
+        })
+      });
+      
+      // Add movements for this hour
+      for (const item of group.movements) {
+        result.push({
+          type: 'movement',
+          ...item
+        });
+      }
+    }
+    
+    return result;
+  }, [movements, cameras]);
+
+  const handlePlayClick = (e, item) => {
+    e.stopPropagation();
+    const camera = cameras?.find(c => c.key === item.cameraKey);
+    if (camera && item.startSegment) {
+      playVideo(item.cameraKey, item.key, item.startSegment, item.seconds, camera.segments_prior_to_movement, camera.segments_post_movement);
+    }
+  };
+
+  const handleBadgeClick = (e, item, tag) => {
+    e.stopPropagation();
+    const frameUrl = tag.maxProbabilityImage 
+      ? `/frame/${item.key}/${tag.maxProbabilityImage}`
+      : `/image/${item.key}`;
+    showImage(frameUrl);
+  };
+
+  const handleItemClick = (item) => {
+    setInfoDialog({ open: true, item });
+  };
+
+  const renderBadges = (item) => {
+    const tags = item.detection_output?.tags;
+    
+    if (!tags || tags.length === 0) {
+      // Show processing state when no tags yet
+      if (item.processing_state === 'processing' || item.processing_state === 'pending') {
+        return <Spinner size="extra-tiny" />;
+      }
+      return <Badge appearance="tint" color="subtle" style={{ fontSize: '10px' }}>No detections</Badge>;
+    }
+    
+    // Sort and display tags
+    const sortedTags = [...tags].sort((a, b) => b.maxProbability - a.maxProbability);
+    
+    return sortedTags.slice(0, 5).map((tag, idx) => (
+      <Badge
+        key={idx}
+        appearance="filled"
+        color="brand"
+        style={{
+          fontSize: '10px',
+          padding: '2px 5px',
+          cursor: 'pointer'
+        }}
+        onClick={(e) => handleBadgeClick(e, item, tag)}
+      >
+        {tag.tag} {(tag.maxProbability * 100).toFixed(0)}%
+      </Badge>
+    ));
+  };
+
+  if (timelineData.length === 0) {
+    return (
+      <div className="timeline-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#888' }}>
+        <Text>No movements to display</Text>
+      </div>
+    );
+  }
+
+  return (
+    <div className="timeline-container">
+      <div className="timeline-line" />
+      
+      {timelineData.map((item) => {
+        if (item.type === 'hour-marker') {
+          return (
+            <div key={item.key} className={`timeline-hour-marker ${item.isDayChange ? 'day-change' : ''}`}>
+              {item.isDayChange && (
+                <span className="timeline-day-label">
+                  <CalendarLtr16Regular style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+                  {item.dayLabel}
+                </span>
+              )}
+              <span className="timeline-hour-label">
+                <Clock16Regular style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+                {item.label}
+              </span>
+            </div>
+          );
+        }
+        
+        // Movement item
+        const isSelected = currentPlaying?.mKey === item.key;
+        const isProcessing = item.processing_state === 'processing' || item.processing_state === 'pending';
+        const hasDetections = item.detection_output?.tags?.length > 0;
+        const itemDate = new Date(item.startDate);
+        const timeStr = itemDate.toLocaleTimeString('en-GB', { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+        
+        return (
+          <div 
+            key={item.key}
+            className={`timeline-item ${isSelected ? 'selected' : ''} ${isProcessing ? 'processing' : ''} ${!hasDetections ? 'no-detection' : ''} ${highlightedKeys.has(item.key) ? 'highlighted-row' : ''}`}
+            onClick={() => handleItemClick(item)}
+          >
+            <span className="timeline-time">{timeStr}</span>
+            <span className="timeline-camera">{item.cameraName}</span>
+            <div className="timeline-badges">
+              {renderBadges(item)}
+            </div>
+            <Tooltip content="Play movement" relationship="label">
+              <button 
+                className="timeline-play-btn"
+                onClick={(e) => handlePlayClick(e, item)}
+                disabled={!item.startSegment}
+              >
+                <Play20Filled />
+              </button>
+            </Tooltip>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function CCTVControl({currentPlaying, playVideo, showImage}) {
 
   const [panel, setPanel] = React.useState({open: false, invalidArray: []});
@@ -414,124 +606,11 @@ function CCTVControl({currentPlaying, playVideo, showImage}) {
     };
   }, [mode]); // Only depend on mode - config changes shouldn't reconnect SSE
 
-  
-const onSelectionChange = (_, d) => {
-  console.log ('onselection')
-  if (d.selectedItems.size > 0) {
-    const {key, movement} = data.movements.find(m => m.key === [...d.selectedItems][0])
-    const { cameraKey, startSegment, seconds } = movement
-    const { segments_prior_to_movement, segments_post_movement } = data.cameras.find(c => c.key === cameraKey)
-    playVideo(cameraKey, key, startSegment, seconds, segments_prior_to_movement, segments_post_movement)
-  }
-}
-
-
-  function _debug(item) {
-    console.log (item)
-    alert (JSON.stringify(item, null, 4))
-  }
-
   function downloadMovement() {
     if (currentPlaying && currentPlaying.cKey && currentPlaying.mKey) {
       const c = data.cameras.find(c => c.key === currentPlaying.cKey)
       const m = data.movements.find(m => m.key === currentPlaying.mKey)
       window.open(`/mp4/${m.movement.startSegment}/${m.movement.seconds}/${m.movement.cameraKey}${(c && mode !== 'Time') ? `?preseq=${c.segments_prior_to_movement}&postseq=${c.segments_post_movement}` : ''}`, '_blank').focus()
-    }
-  }
-
-  function renderTags(selectedList, idx) {
-    const { key, cameraKey, detection_output, detection_status, ffmpeg } = selectedList
-    const img = `/image/${key}`
-
-    // Show results if we have them, even if still processing
-    if (detection_output && detection_output.tags) {
-      if (detection_output.tags.length === 0) {
-        return (
-          <Badge 
-            appearance="tint"
-            color="subtle"
-            style={{ fontSize: '12px' }}
-          >
-            None
-          </Badge>
-        );
-      }
-      
-      // Sort tags by maxProbability descending and format with percentage
-      const sortedTags = [...detection_output.tags].sort((a, b) => b.maxProbability - a.maxProbability)
-      return (
-        <div style={{ 
-          display: "flex", 
-          flexDirection: "row",
-          flexWrap: "wrap", 
-          gap: "3px",
-          alignItems: "center",
-          alignContent: "flex-start",
-          maxHeight: "44px",
-          overflow: "hidden"
-        }}>
-          {sortedTags.map((t, idx) => {
-            const frameUrl = t.maxProbabilityImage 
-              ? `/frame/${key}/${t.maxProbabilityImage}`
-              : img;
-            return (
-              <Badge 
-                key={idx}
-                appearance="filled"
-                color="brand"
-                style={{ 
-                  whiteSpace: 'nowrap',
-                  fontSize: '11px',
-                  padding: '2px 6px',
-                  lineHeight: '1.2',
-                  cursor: 'pointer'
-                }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  showImage(frameUrl);
-                }}
-              >
-                {t.tag} {(t.maxProbability * 100).toFixed(0)}%
-              </Badge>
-            );
-          })}
-        </div>
-      );
-    }
-
-    // Show precise status if ML processing is ongoing and no results yet
-    if (detection_status) {
-      const statusMessages = {
-        'starting': 'Starting',
-        'extracting': 'Processing',
-        'analyzing': 'Analyzing'
-      };
-      const message = detection_status ? statusMessages[detection_status] : 'Processing';
-      
-      return (
-        <Badge 
-          appearance="tint"
-          color="warning"
-          style={{ 
-            fontSize: '12px',
-            fontWeight: 'bold',
-            padding: '4px 8px'
-          }}
-        >
-          {message}...
-        </Badge>
-      )
-    }
-    
-    // Legacy fallback for old ffmpeg data structure (if any exists)
-    if (ffmpeg) {
-      if (ffmpeg.success) {
-        return <a key={idx} target="_blank" href={img}><Text variant="mediumPlus">Image</Text></a>
-      } else {
-        return <Text variant="mediumPlus">Error: {ffmpeg.stderr}</Text>
-      }
-    } else {
-      return <Text variant="mediumPlus">please wait..</Text>
     }
   }
 
@@ -643,223 +722,19 @@ const onSelectionChange = (_, d) => {
 
       </Toolbar>
 
-      
-
-      <DataGrid
-        size="small"
-        getRowId={(item) => item.key}
-        rowClassName={(item) => highlightedKeys.has(item.key) ? 'highlighted-row' : ''}
-        columns={[
-          createTableColumn({
-            columnId: "startDate_en_GB",
-            renderCell: (item) => {
-              return (
-                <TableCellLayout>{item.startDate_en_GB}</TableCellLayout>
-              )
-            }
-
-          }),
-          createTableColumn({
-            columnId: "cameraName",
-            renderCell: (item) => {
-              return (
-                <TableCellLayout>{item.cameraName}</TableCellLayout>
-              )
-            }
-
-          }),
-          createTableColumn({
-            columnId: "seconds",
-            renderCell: (item) => {
-              const isPending = item.processing_state === 'pending';
-              const isProcessing = item.processing_state === 'processing';
-              const isCompleted = item.processing_state === 'completed';
-              const isFailed = item.processing_state === 'failed';
-              const hasDetections = item.detection_output?.tags?.length > 0;
-              
-              // Detection icon (top) - based on detection_ended_at
-              const detectionEnded = !!item.detection_ended_at;
-              const DetectionIcon = detectionEnded ? Checkmark12Regular : Clock12Regular;
-              const detectionColor = detectionEnded ? '#0e700e' : '#888';
-              const detectionTitle = detectionEnded ? 'Detection complete' : 'Detecting movement';
-              
-              // Processing icon (bottom) - based on processing state
-              let ProcessingIcon = null;
-              let processingColor = '#888';
-              let processingTitle = '';
-              let showProcessingSpinner = false;
-              
-              if (isPending) {
-                ProcessingIcon = Clock12Regular;
-                processingColor = '#888';
-                processingTitle = 'Waiting to process';
-              } else if (isProcessing) {
-                showProcessingSpinner = true;
-                processingTitle = item.detection_status === 'extracting' ? 'Extracting frames' : 'Processing';
-              } else if (isFailed) {
-                ProcessingIcon = Dismiss12Regular;
-                processingColor = '#d13438';
-                processingTitle = item.processing_error || 'Processing failed';
-              } else if (isCompleted) {
-                if (hasDetections) {
-                  ProcessingIcon = Checkmark12Regular;
-                  processingColor = '#0e700e';
-                  processingTitle = 'ML detection complete';
-                } else {
-                  ProcessingIcon = ScanDash12Regular;
-                  processingColor = '#888';
-                  processingTitle = 'No objects detected';
-                }
-              }
-              
-              return (
-                <TableCellLayout>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                    <span>{item.seconds}s</span>
-                    <span style={{ display: 'inline-flex', flexDirection: 'column', gap: '1px' }}>
-                      {/* Detection icon (top) */}
-                      <Tooltip content={detectionTitle} relationship="label">
-                        <span style={{ display: 'inline-flex', alignItems: 'center', lineHeight: 1 }}>
-                          <DetectionIcon style={{ color: detectionColor }} />
-                        </span>
-                      </Tooltip>
-                      {/* Processing icon (bottom) */}
-                      {showProcessingSpinner ? (
-                        <Spinner 
-                          size="extra-tiny" 
-                          title={processingTitle}
-                        />
-                      ) : ProcessingIcon && (
-                        <Tooltip content={processingTitle} relationship="label">
-                          <span style={{ display: 'inline-flex', alignItems: 'center', lineHeight: 1 }}>
-                            <ProcessingIcon style={{ color: processingColor }} />
-                          </span>
-                        </Tooltip>
-                      )}
-                    </span>
-                  </span>
-                </TableCellLayout>
-              )
-            }
-
-          }),
-          createTableColumn({
-            columnId: "tags",
-            renderCell: (item) => {
-              return (
-                <TableCellLayout>{renderTags(item,0)}</TableCellLayout>
-              )
-            }
-
-          }),
-          createTableColumn({
-            columnId: "actions",
-            renderCell: (item) => {
-              const { key, detection_output } = item;
-              const img = `/image/${key}`;
-              const sortedTags = detection_output?.tags ? [...detection_output.tags].sort((a, b) => b.maxProbability - a.maxProbability) : [];
-              
-              return (
-                <TableCellLayout style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                  <Menu 
-                    positioning="below-end"
-                    open={openMenuKey === key}
-                    onOpenChange={(e, menuData) => setOpenMenuKey(menuData.open ? key : null)}
-                  >
-                    <div onClick={(e) => e.stopPropagation()}>
-                      <MenuTrigger disableButtonEnhancement>
-                        <Button appearance="subtle" icon={<MoreVertical20Regular />} />
-                      </MenuTrigger>
-                    </div>
-                    <MenuPopover>
-                      <MenuList>
-                        <MenuItem onClick={(e) => {
-                          e.stopPropagation();
-                          setOpenMenuKey(null);
-                          setInfoDialog({open: true, item});
-                        }}>
-                          Information
-                        </MenuItem>
-                        {sortedTags.length > 0 && data.config?.settings && sortedTags.map((t, idx) => {
-                          const currentFilters = data.config.settings.detection_tag_filters || [];
-                          const existingFilter = currentFilters.find(f => f.tag === t.tag);
-                          
-                          return (
-                            <MenuItem 
-                              key={idx}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setOpenMenuKey(null);
-                                if (!existingFilter) {
-                                  const newFilters = [...currentFilters, { tag: t.tag, minProbability: t.maxProbability }];
-                                  setPanel({...panel, open: true, key: 'settings', invalidArray:[], heading: 'General Settings', 
-                                    values: { ...data.config?.settings, detection_tag_filters: newFilters }})
-                                } else {
-                                  setPanel({...panel, open: true, key: 'settings', invalidArray:[], heading: 'General Settings', 
-                                    values: { ...data.config?.settings }})
-                                }
-                              }}
-                            >
-                              {existingFilter ? `Edit ${t.tag} filter...` : `Add ${t.tag} to filter (≥${Math.round(t.maxProbability * 100)}%)`}
-                            </MenuItem>
-                          );
-                        })}
-                      </MenuList>
-                    </MenuPopover>
-                  </Menu>
-                </TableCellLayout>
-              )
-            }
-          })
-        ]}
-        items={data.movements.map(m => { 
-          const camera =  data.cameras.find(c => c.key === m.movement.cameraKey)
-          return  {
-            key: m.key,
-            ...m.movement, 
-            startDate_en_GB: m.startDate_en_GB, 
-            ...(camera && {  cameraName: camera.name, camera })
-          }})} 
-        
-          
-          >
-
-          <DataGridBody itemSize={50} height={700}>
-            {({ item, rowId }, style) => {
-              const isProcessing = item.processing_state === 'processing' || item.processing_state === 'pending';
-              const className = isProcessing ? 'processing-row' : (highlightedKeys.has(item.key) ? 'highlighted-row' : '');
-              
-              return (
-              <DataGridRow 
-                key={rowId} 
-                className={className}
-                style={{ 
-                  ...style, 
-                  cursor: 'pointer',
-                  ...(currentPlaying?.mKey === item.key && { backgroundColor: tokens.colorNeutralBackground1Selected })
-                }}
-                onClick={() => {
-                  const { cameraKey, startSegment, seconds } = item;
-                  console.log('Row clicked:', { cameraKey, startSegment, seconds, itemKey: item.key, fullItem: item });
-                  const camera = data.cameras.find(c => c.key === cameraKey);
-                  if (camera) {
-                    if (!startSegment) {
-                      console.error('startSegment is missing!', item);
-                    }
-                    playVideo(cameraKey, item.key, startSegment, seconds, camera.segments_prior_to_movement, camera.segments_post_movement);
-                  } else {
-                    console.error('Camera not found for key:', cameraKey);
-                  }
-                }}
-              >
-                {({ renderCell }) => (
-                  <DataGridCell>{renderCell(item)}</DataGridCell>
-                )}
-              </DataGridRow>
-            )}
-            }
-          </DataGridBody>
-      </DataGrid>
+      {/* Timeline Component */}
+      <MovementTimeline 
+        movements={data.movements}
+        cameras={data.cameras}
+        currentPlaying={currentPlaying}
+        highlightedKeys={highlightedKeys}
+        playVideo={playVideo}
+        showImage={showImage}
+        setInfoDialog={setInfoDialog}
+        config={data.config}
+        panel={panel}
+        setPanel={setPanel}
+      />
 
       {/* Movement Information Dialog */}
       <Dialog 
