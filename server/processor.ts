@@ -223,6 +223,38 @@ export function getMovementCloseHandlers(): Map<string, Promise<void>> {
     return _inmem_movementCloseHandlers;
 }
 
+/**
+ * Finalize any ongoing movements during shutdown.
+ * Calls finalizeMovement for each camera with an active movement.
+ */
+export async function finalizeOngoingMovementsForShutdown(): Promise<void> {
+    const cameraCache = deps.getCameraCache();
+    
+    for (const cameraKey of Object.keys(cameraCache)) {
+        const cacheEntry = cameraCache[cameraKey];
+        if (!cacheEntry?.movementDetectionStatus?.current_movement_key) continue;
+        
+        const movement_key = cacheEntry.movementDetectionStatus.current_movement_key;
+        try {
+            const movement = await deps.movementdb.get(movement_key);
+            if (!movement.detection_ended_at) {
+                const elapsedSeconds = Math.round((Date.now() - movement.detection_started_at) / 1000);
+                await finalizeMovement(
+                    cameraKey,
+                    movement_key,
+                    movement,
+                    elapsedSeconds,
+                    cacheEntry.cameraEntry,
+                    { fn_not_finished: false, fail: false },
+                    'shutdown'
+                );
+            }
+        } catch (e) {
+            deps.logger.warn('Failed to finalize movement on shutdown', { movement_key, error: String(e) });
+        }
+    }
+}
+
 // Test helpers for ML restart functionality
 export function getMLRestartState(): { 
     startedAt: number; 
@@ -1155,47 +1187,13 @@ export async function triggerProcessMovement(cameraKey: string): Promise<void> {
                 continue;
             }
             
-            // Check if playlist file exists and validate its segments
-            let playlistContent: string;
+            // Check if playlist file exists
             try {
-                playlistContent = await fs.readFile(movement.playlist_path, 'utf-8');
+                await fs.access(movement.playlist_path);
             } catch (e) {
                 deps.logger.warn('triggerProcessMovement: Playlist file not accessible', {
                     camera: cameraEntry.name, movement_key: encodedKey, 
                     playlist_path: movement.playlist_path, error: String(e)
-                });
-                continue;
-            }
-            
-            // Validate that at least the first segment exists (segments may have been deleted by disk cleanup)
-            const segmentLines = playlistContent.split('\n').filter(line => line.endsWith('.ts'));
-            if (segmentLines.length === 0) {
-                deps.logger.warn('triggerProcessMovement: Playlist has no segments', {
-                    camera: cameraEntry.name, movement_key: encodedKey, 
-                    playlist_path: movement.playlist_path
-                });
-                // Mark as failed since segments are gone
-                await deps.movementdb.put(encodedKey, {
-                    ...movement,
-                    processing_state: 'failed',
-                    processing_error: 'Playlist contains no segments'
-                });
-                continue;
-            }
-            
-            const firstSegment = segmentLines[0];
-            try {
-                await fs.access(firstSegment);
-            } catch (e) {
-                deps.logger.warn('triggerProcessMovement: Segment file deleted by disk cleanup', {
-                    camera: cameraEntry.name, movement_key: encodedKey, 
-                    playlist_path: movement.playlist_path, segment: firstSegment
-                });
-                // Mark as failed since segments are gone
-                await deps.movementdb.put(encodedKey, {
-                    ...movement,
-                    processing_state: 'failed',
-                    processing_error: 'Segment files deleted by disk cleanup'
                 });
                 continue;
             }

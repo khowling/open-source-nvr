@@ -28,7 +28,8 @@ import {
     getMLDetectionProcess,
     getMovementFFmpegProcesses,
     getMovementCloseHandlers,
-    resetProcessorState
+    resetProcessorState,
+    finalizeOngoingMovementsForShutdown
 } from './processor.js';
 import { sseManager } from './sse-manager.js';
 import { setLogger } from './process-utils.js';
@@ -270,6 +271,9 @@ export async function createServer(config: ServerConfig = {}): Promise<ServerHan
 
         // Wait for all processes to terminate
         await Promise.all(shutdownPromises);
+
+        // Finalize any ongoing movements (add ENDLIST to playlists, set detection_ended_at)
+        await finalizeOngoingMovementsForShutdown();
 
         // Wait for any in-flight movement close handlers
         const closeHandlers = getMovementCloseHandlers();
