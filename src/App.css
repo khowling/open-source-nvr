@@ -302,8 +302,8 @@ html, body, #root {
 .timeline-camera {
   font-size: 10px;
   color: #999;
-  min-width: 60px;
-  max-width: 60px;
+  min-width: 70px;
+  max-width: 70px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -380,7 +380,9 @@ html, body, #root {
   }
   
   .timeline-camera {
-    display: none;
+    min-width: 55px;
+    max-width: 55px;
+    font-size: 9px;
   }
   
   .timeline-time {

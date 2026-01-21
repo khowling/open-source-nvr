@@ -222,8 +222,30 @@ function App() {
  * Movement Timeline Component
  * Displays movements as a scrollable vertical timeline with hour markers
  */
-function MovementTimeline({ movements, cameras, currentPlaying, highlightedKeys, playVideo, showImage, setInfoDialog, config, panel, setPanel }) {
+function MovementTimeline({ movements, cameras, currentPlaying, highlightedKeys, playVideo, showImage, setInfoDialog, config, panel, setPanel, hasMore, loadingMore, loadMoreMovements }) {
   
+  // Ref for the scroll container
+  const containerRef = React.useRef(null);
+
+  // Scroll handler for infinite scroll
+  React.useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const handleScroll = () => {
+      // Load more when scrolled to within 200px of bottom
+      const { scrollTop, scrollHeight, clientHeight } = container;
+      if (scrollHeight - scrollTop - clientHeight < 200) {
+        if (hasMore && !loadingMore && loadMoreMovements) {
+          loadMoreMovements();
+        }
+      }
+    };
+
+    container.addEventListener('scroll', handleScroll);
+    return () => container.removeEventListener('scroll', handleScroll);
+  }, [hasMore, loadingMore, loadMoreMovements]);
+
   // Build timeline data with hour markers on the hour
   const timelineData = useMemo(() => {
     if (!movements || movements.length === 0) return [];
@@ -363,7 +385,7 @@ function MovementTimeline({ movements, cameras, currentPlaying, highlightedKeys,
   }
 
   return (
-    <div className="timeline-container">
+    <div className="timeline-container" ref={containerRef}>
       <div className="timeline-line" />
       
       {timelineData.map((item) => {
@@ -398,7 +420,7 @@ function MovementTimeline({ movements, cameras, currentPlaying, highlightedKeys,
             onClick={() => handleItemClick(item)}
           >
             <span className="timeline-time">{timeStr}</span>
-            <span className="timeline-camera">{item.cameraName}</span>
+            <span className="timeline-camera">{item.cameraName} ({item.seconds}s)</span>
             <div className="timeline-badges">
               {renderBadges(item)}
             </div>
@@ -414,6 +436,21 @@ function MovementTimeline({ movements, cameras, currentPlaying, highlightedKeys,
           </div>
         );
       })}
+      
+      {/* Loading indicator for infinite scroll */}
+      {loadingMore && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px', gap: '8px' }}>
+          <Spinner size="tiny" />
+          <Text size={200}>Loading more movements...</Text>
+        </div>
+      )}
+      
+      {/* End of list indicator */}
+      {!hasMore && movements && movements.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px', color: '#888' }}>
+          <Text size={200}>Showing all {movements.length} movements</Text>
+        </div>
+      )}
     </div>
   );
 }
@@ -431,6 +468,11 @@ function CCTVControl({currentPlaying, playVideo, showImage}) {
   const [showPlayer, setShowPlayer] = React.useState(true)
   const [highlightedKeys, setHighlightedKeys] = React.useState(new Set())
 
+  // Pagination state for infinite scroll
+  const [hasMore, setHasMore] = React.useState(false)
+  const [nextCursor, setNextCursor] = React.useState(null)
+  const [loadingMore, setLoadingMore] = React.useState(false)
+
   // Use a ref to access latest config without triggering SSE reconnect
   const configRef = React.useRef(null);
   React.useEffect(() => {
@@ -446,13 +488,17 @@ function CCTVControl({currentPlaying, playVideo, showImage}) {
   function getServerData() {
     console.log ('getServerData, mode=', mode)
     setData({...init_data, status: 'fetching'})
-    fetch(`/api/movements?mode=${mode}`)
+    setHasMore(false)
+    setNextCursor(null)
+    fetch(`/api/movements?mode=${mode}&limit=1000`)
       .then(res => res.json())
       .then(
         (result) => {
           setData({...result, status: 'success'})
+          setHasMore(result.hasMore || false)
+          setNextCursor(result.nextCursor || null)
 
-          console.log (`got refresh, find first streaming enabled camera & play`)
+          console.log (`got refresh, find first streaming enabled camera & play, hasMore=${result.hasMore}`)
           const streamingCameras = result?.cameras.filter(c => c.enable_streaming)
 
           if (currentPlaying && streamingCameras.findIndex(c => c.key === currentPlaying.cKey) >= 0 && (!currentPlaying.mKey || result?.movements.findIndex(m => m.key === currentPlaying.mKey) >= 0)) {
@@ -469,6 +515,34 @@ function CCTVControl({currentPlaying, playVideo, showImage}) {
         (error) => {
           setData({...init_data, status: 'error', message: error})
           console.warn(error)
+        }
+      )
+  }
+
+  // Load more movements (next page)
+  function loadMoreMovements() {
+    if (!hasMore || !nextCursor || loadingMore) return;
+    
+    console.log('loadMoreMovements, cursor=', nextCursor)
+    setLoadingMore(true)
+    
+    fetch(`/api/movements?mode=${mode}&limit=1000&cursor=${nextCursor}`)
+      .then(res => res.json())
+      .then(
+        (result) => {
+          // Append new movements to existing ones
+          setData(prev => ({
+            ...prev,
+            movements: [...prev.movements, ...result.movements]
+          }))
+          setHasMore(result.hasMore || false)
+          setNextCursor(result.nextCursor || null)
+          setLoadingMore(false)
+          console.log(`loaded ${result.movements.length} more movements, hasMore=${result.hasMore}`)
+        },
+        (error) => {
+          console.warn('Failed to load more movements:', error)
+          setLoadingMore(false)
         }
       )
   }
@@ -734,6 +808,9 @@ function CCTVControl({currentPlaying, playVideo, showImage}) {
         config={data.config}
         panel={panel}
         setPanel={setPanel}
+        hasMore={hasMore}
+        loadingMore={loadingMore}
+        loadMoreMovements={loadMoreMovements}
       />
 
       {/* Movement Information Dialog */}
@@ -797,9 +874,20 @@ function CCTVControl({currentPlaying, playVideo, showImage}) {
                         
                         {/* Detection Section */}
                         <tr><td colSpan="2" style={sectionHeader}><strong style={{ color: '#666' }}>📹 Detection (Camera Movement)</strong></td></tr>
+                        <tr><td style={tdStyle}><strong>Status:</strong></td><td style={{ padding: '3px 0' }}>{item.detection_status || (item.detection_ended_at ? 'complete' : 'detecting')}</td></tr>
                         <tr><td style={tdStyle}><strong>Start Time:</strong></td><td style={{ padding: '3px 0' }}>{formatTime(startTime)}</td></tr>
-                        <tr><td style={tdStyle}><strong>End Time:</strong></td><td style={{ padding: '3px 0' }}>{item.detection_ended_at ? formatTime(new Date(item.detection_ended_at)) : formatTime(endTime)}</td></tr>
+                        <tr><td style={tdStyle}><strong>End Time:</strong></td><td style={{ padding: '3px 0' }}>{item.detection_ended_at ? formatTime(new Date(item.detection_ended_at)) : 'ongoing'}</td></tr>
                         <tr><td style={tdStyle}><strong>Duration:</strong></td><td style={{ padding: '3px 0' }}>{detectionDuration}</td></tr>
+                        <tr><td style={tdStyle}><strong>Poll Count:</strong></td><td style={{ padding: '3px 0' }}>{item.pollCount ?? 'N/A'}</td></tr>
+                        {item.consecutivePollsWithoutMovement !== undefined && (
+                          <tr><td style={tdStyle}><strong>Polls Without Movement:</strong></td><td style={{ padding: '3px 0' }}>{item.consecutivePollsWithoutMovement}</td></tr>
+                        )}
+                        {item.playlist_path && (
+                          <tr><td style={tdStyle}><strong>Playlist:</strong></td><td style={{ padding: '3px 0', wordBreak: 'break-all' }}>{item.playlist_path}</td></tr>
+                        )}
+                        {item.playlist_last_segment !== undefined && (
+                          <tr><td style={tdStyle}><strong>Last Segment:</strong></td><td style={{ padding: '3px 0' }}>{item.playlist_last_segment}</td></tr>
+                        )}
                         
                         {/* Processing Section */}
                         <tr><td colSpan="2" style={sectionHeader}><strong style={{ color: '#666' }}>⚙️ Processing (ML Detection)</strong></td></tr>

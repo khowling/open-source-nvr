@@ -79,8 +79,9 @@ let _inmem_lastSSEKeepAlive = 0;
 // Disk cleanup tracking
 let _inmem_lastDiskCheck = 0;
 
-// Current ffmpeg processing state (only one movement processed at a time)
-let _inmem_currentProcessingMovement: {
+// Processing state type for ffmpeg movement processing
+type ProcessingMovementState = {
+    cameraKey: string;
     movement_key: string;
     startedAt: number;
     process: ChildProcessWithoutNullStreams;
@@ -93,13 +94,16 @@ let _inmem_currentProcessingMovement: {
     mlTotalProcessingTimeMs: number;  // Sum of all ML processing times
     mlMaxProcessingTimeMs: number;    // Max single frame processing time
     onAllFramesProcessed?: () => void;  // Callback when all frames are processed
-} | null = null;
+};
+
+// Current ffmpeg processing state per camera (allows parallel processing across cameras)
+const _inmem_currentProcessingMovements = new Map<string, ProcessingMovementState>();
 
 // Timeout for waiting for ML results after ffmpeg exits (30 seconds)
 const ML_RESULTS_TIMEOUT_MS = 30000;
 
-// Max ffmpeg processing time in seconds (default: 300s = 5 minutes)
-const FFMPEG_MAX_PROCESSING_TIME_MS = 300 * 1000;
+// Max ffmpeg processing time (default: 90s - should be enough for any movement + ML processing)
+const FFMPEG_MAX_PROCESSING_TIME_MS = 90 * 1000;
 
 // Regex for HLS segment parsing
 const re = new RegExp(`stream([\\d]+).ts`, 'g');
@@ -173,6 +177,7 @@ interface ProcessorDependencies {
     cameradb: any;
     movementdb: any;
     settingsdb: any;
+    diskstatusdb: any;
     getCameraCache: () => CameraCache;
     setCameraCache: (key: string, entry: CameraCacheEntry) => void;
     getSettingsCache: () => SettingsCache;
@@ -208,8 +213,8 @@ export function getMLDetectionProcess(): ChildProcessWithoutNullStreams | null {
 
 export function getMovementFFmpegProcesses(): Map<string, ChildProcessWithoutNullStreams> {
     const map = new Map<string, ChildProcessWithoutNullStreams>();
-    if (_inmem_currentProcessingMovement) {
-        map.set(_inmem_currentProcessingMovement.movement_key, _inmem_currentProcessingMovement.process);
+    for (const state of _inmem_currentProcessingMovements.values()) {
+        if (state.process) map.set(state.movement_key, state.process);
     }
     return map;
 }
@@ -265,7 +270,7 @@ export function resetProcessorState(): void {
     _inmem_pendingUpdates.clear();
     _inmem_lastSSEKeepAlive = 0;
     _inmem_lastDiskCheck = 0;
-    _inmem_currentProcessingMovement = null;
+    _inmem_currentProcessingMovements.clear();
     
     // Clear controller state objects
     for (const key of Object.keys(_inmem_controllerFFmpeg_inprogress)) {
@@ -1062,166 +1067,177 @@ async function finalizeMovement(
 }
 
 /**
- * triggerProcessMovement - Processes pending movements with ML detection
+ * triggerProcessMovement - Processes pending movements with ML detection for a specific camera
  * 
- * Idempotent function called by the control loop. Processes ONE movement at a time:
- * 1. If already processing, check for timeout and return
- * 2. Find the oldest 'pending' movement with a finalized playlist
+ * Idempotent function called by the control loop per camera. Processes ONE movement at a time per camera:
+ * 1. If this camera is already processing, check for timeout and return
+ * 2. Find the oldest 'pending' movement for this camera after its pointer
  * 3. Start ffmpeg to extract frames
- * 4. On ffmpeg close, mark movement as completed/failed
+ * 4. On ffmpeg close, mark movement as completed/failed and advance pointer
  * 
- * Entry criteria: Called by control loop, processes movements sequentially
+ * Entry criteria: Called by control loop per camera, allows one movement per camera in parallel
  */
-export async function triggerProcessMovement(): Promise<void> {
-    // If already processing a movement, check for timeout
-    if (_inmem_currentProcessingMovement) {
-        const elapsed = Date.now() - _inmem_currentProcessingMovement.startedAt;
-        const { movement_key, process, pid, killedAt } = _inmem_currentProcessingMovement;
+export async function triggerProcessMovement(cameraKey: string): Promise<void> {
+    const cameraCache = deps.getCameraCache();
+    const camCacheEntry = cameraCache[cameraKey];
+    if (!camCacheEntry) return;  // Camera not found
+    
+    const cameraEntry = camCacheEntry.cameraEntry;
+    if (cameraEntry.delete) return;  // Camera deleted
+    
+    // Check if this camera is already processing - handle timeout
+    const currentState = _inmem_currentProcessingMovements.get(cameraKey);
+    if (currentState) {
+        const elapsed = Date.now() - currentState.startedAt;
+        const { movement_key, process, pid, killedAt } = currentState;
         
         // If we've already sent kill signal, check if enough time has passed
         if (killedAt) {
             const timeSinceKill = Date.now() - killedAt;
-            // If process hasn't exited after 10 seconds post-kill, force clear tracking
-            // The orphaned process will be handled by OS or manual cleanup
             if (timeSinceKill > 10000) {
                 deps.logger.error('triggerProcessMovement: ffmpeg still running after kill, forcibly clearing tracking', {
-                    movement_key,
-                    pid,
-                    timeSinceKill_ms: timeSinceKill
+                    movement_key, pid, cameraKey, timeSinceKill_ms: timeSinceKill
                 });
-                _inmem_currentProcessingMovement = null;
+                _inmem_currentProcessingMovements.delete(cameraKey);
             }
-            return; // Still waiting for killed process to exit
+            return;  // Still waiting for killed process
         }
         
         if (elapsed > FFMPEG_MAX_PROCESSING_TIME_MS) {
             deps.logger.warn('triggerProcessMovement: ffmpeg timeout, killing process', {
-                movement_key,
-                pid,
-                elapsed_ms: elapsed,
-                max_ms: FFMPEG_MAX_PROCESSING_TIME_MS
+                movement_key, pid, cameraKey, elapsed_ms: elapsed, max_ms: FFMPEG_MAX_PROCESSING_TIME_MS
             });
-            
-            // Mark that we've initiated kill - don't clear tracking until process exits or force timeout
-            _inmem_currentProcessingMovement.killedAt = Date.now();
+            currentState.killedAt = Date.now();
             
             try {
                 process.kill('SIGTERM');
-                // Force kill after 2 seconds if still running
                 setTimeout(() => {
-                    try {
-                        if (process.exitCode === null) {
-                            deps.logger.warn('triggerProcessMovement: SIGTERM did not work, sending SIGKILL', {
-                                movement_key,
-                                pid
-                            });
-                            process.kill('SIGKILL');
-                        }
-                    } catch (e) {
-                        // Process already terminated
-                    }
+                    try { if (process.exitCode === null) process.kill('SIGKILL'); } catch {}
                 }, 2000);
             } catch (e) {
-                deps.logger.error('triggerProcessMovement: Failed to kill timed out ffmpeg', {
-                    movement_key,
-                    pid,
-                    error: String(e)
-                });
+                deps.logger.error('triggerProcessMovement: Failed to kill timed out ffmpeg', { movement_key, pid, error: String(e) });
             }
             
-            // Mark as failed due to timeout
             try {
                 const m = await deps.movementdb.get(movement_key);
                 const updatedMovement = {
-                    ...m,
-                    processing_state: 'failed' as const,
-                    detection_status: 'failed',
+                    ...m, processing_state: 'failed' as const, detection_status: 'failed',
                     processing_completed_at: Date.now(),
                     processing_error: `Processing timeout after ${Math.floor(elapsed / 1000)}s`
                 };
                 await deps.movementdb.put(movement_key, updatedMovement);
-                
                 if (sseManager.getClientCount() > 0) {
-                    sseManager.broadcastMovementUpdate({
-                        type: 'movement_update',
-                        movement: formatMovementForSSE(movement_key, updatedMovement)
-                    });
+                    sseManager.broadcastMovementUpdate({ type: 'movement_update', movement: formatMovementForSSE(movement_key, updatedMovement) });
                 }
             } catch (e) {
-                deps.logger.error('triggerProcessMovement: Failed to mark timed out movement as failed', {
-                    movement_key,
-                    pid,
-                    error: String(e)
-                });
+                deps.logger.error('triggerProcessMovement: Failed to mark timed out movement as failed', { movement_key, pid, error: String(e) });
             }
-            
-            // DON'T clear tracking here - wait for onClose or force timeout
         }
-        
-        // Still processing (or waiting for killed process to exit), don't start another
-        return;
+        return;  // Camera is busy processing
     }
     
-    // Find the oldest pending movement with a playlist
-    let nextMovement: { key: string; movement: MovementEntry; cameraEntry: CameraEntry } | null = null;
+    // Find the oldest pending movement for this camera after its pointer
+    const pointer = cameraEntry.state_lastProcessedMovementKey || '0';
+    let nextMovement: { key: string; movement: MovementEntry } | null = null;
     
     try {
-        for await (const [encodedKey, movement] of deps.movementdb.iterator()) {
-            // Skip non-pending movements
-            if (movement.processing_state !== 'pending') {
-                continue;
-            }
+        for await (const [encodedKey, movement] of deps.movementdb.iterator({ gt: pointer })) {
+            // Only consider movements for this camera
+            if (movement.cameraKey !== cameraKey) continue;
             
-            // Must have a playlist path
+            // Skip already completed/failed movements
+            if (movement.processing_state !== 'pending') continue;
+            
             if (!movement.playlist_path) {
                 deps.logger.debug('triggerProcessMovement: Skipping movement without playlist', { 
-                    movement_key: encodedKey 
+                    camera: cameraEntry.name, movement_key: encodedKey 
                 });
                 continue;
             }
             
-            // Verify playlist file exists
+            // Check if playlist file exists and validate its segments
+            let playlistContent: string;
             try {
-                await fs.access(movement.playlist_path);
+                playlistContent = await fs.readFile(movement.playlist_path, 'utf-8');
             } catch (e) {
                 deps.logger.warn('triggerProcessMovement: Playlist file not accessible', {
-                    movement_key: encodedKey,
-                    playlist_path: movement.playlist_path,
-                    error: String(e)
+                    camera: cameraEntry.name, movement_key: encodedKey, 
+                    playlist_path: movement.playlist_path, error: String(e)
                 });
                 continue;
             }
             
-            // Get camera entry
-            const cameraCache = deps.getCameraCache();
-            const cameraEntry = cameraCache[movement.cameraKey]?.cameraEntry;
-            if (!cameraEntry) {
-                deps.logger.warn('triggerProcessMovement: Camera not found for movement', {
-                    movement_key: encodedKey,
-                    cameraKey: movement.cameraKey
+            // Validate that at least the first segment exists (segments may have been deleted by disk cleanup)
+            const segmentLines = playlistContent.split('\n').filter(line => line.endsWith('.ts'));
+            if (segmentLines.length === 0) {
+                deps.logger.warn('triggerProcessMovement: Playlist has no segments', {
+                    camera: cameraEntry.name, movement_key: encodedKey, 
+                    playlist_path: movement.playlist_path
+                });
+                // Mark as failed since segments are gone
+                await deps.movementdb.put(encodedKey, {
+                    ...movement,
+                    processing_state: 'failed',
+                    processing_error: 'Playlist contains no segments'
                 });
                 continue;
             }
             
-            nextMovement = { key: encodedKey, movement, cameraEntry };
-            break; // Take the first (oldest) pending movement
+            const firstSegment = segmentLines[0];
+            try {
+                await fs.access(firstSegment);
+            } catch (e) {
+                deps.logger.warn('triggerProcessMovement: Segment file deleted by disk cleanup', {
+                    camera: cameraEntry.name, movement_key: encodedKey, 
+                    playlist_path: movement.playlist_path, segment: firstSegment
+                });
+                // Mark as failed since segments are gone
+                await deps.movementdb.put(encodedKey, {
+                    ...movement,
+                    processing_state: 'failed',
+                    processing_error: 'Segment files deleted by disk cleanup'
+                });
+                continue;
+            }
+            
+            nextMovement = { key: encodedKey, movement };
+            break;  // Take the first valid pending movement
         }
     } catch (e) {
-        deps.logger.error('triggerProcessMovement: Failed to iterate movements', { error: String(e) });
+        deps.logger.error('triggerProcessMovement: Failed to iterate movements', { 
+            camera: cameraEntry.name, error: String(e) 
+        });
         return;
     }
     
     if (!nextMovement) {
-        // No pending movements to process
+        // No pending movements for this camera
         return;
     }
     
-    const { key: movement_key, movement, cameraEntry } = nextMovement;
+    const { key: movement_key, movement } = nextMovement;
     
-    // Setup paths
-    const settingsCache = deps.getSettingsCache();
-    const framesPath = getFramesPath(settingsCache.settings, cameraEntry.disk, cameraEntry.folder);
-    await ensureDir(framesPath);
+    // CRITICAL: Immediately claim the processing slot for this camera to prevent race conditions.
+    // This prevents another control loop iteration from also finding a movement for this camera
+    // during the async operations below (path setup, DB update, ffmpeg spawn).
+    _inmem_currentProcessingMovements.set(cameraKey, {
+        cameraKey,
+        movement_key,
+        startedAt: Date.now(),
+        process: null as any,  // Will be set after spawn
+        pid: 0,                // Will be set after spawn
+        ffmpegExited: false,
+        framesSentToML: 0,
+        framesReceivedFromML: 0,
+        mlTotalProcessingTimeMs: 0,
+        mlMaxProcessingTimeMs: 0
+    });
+    
+    try {
+        // Setup paths
+        const settingsCache = deps.getSettingsCache();
+        const framesPath = getFramesPath(settingsCache.settings, cameraEntry.disk, cameraEntry.folder);
+        await ensureDir(framesPath);
     
     // Calculate max wait time based on camera's max single movement setting
     const maxMovementSeconds = cameraEntry.secMaxSingleMovement || 90;
@@ -1298,12 +1314,12 @@ export async function triggerProcessMovement(): Promise<void> {
             });
 
             // Mark ffmpeg as exited - don't clear tracking yet
-            if (_inmem_currentProcessingMovement && 
-                _inmem_currentProcessingMovement.movement_key === movement_key) {
-                _inmem_currentProcessingMovement.ffmpegExited = true;
-                _inmem_currentProcessingMovement.ffmpegExitedAt = Date.now();
+            const state = _inmem_currentProcessingMovements.get(cameraKey);
+            if (state && state.movement_key === movement_key) {
+                state.ffmpegExited = true;
+                state.ffmpegExitedAt = Date.now();
                 
-                const { framesSentToML, framesReceivedFromML } = _inmem_currentProcessingMovement;
+                const { framesSentToML, framesReceivedFromML } = state;
                 deps.logger.info('ffmpeg exited, waiting for ML results', {
                     movement_key,
                     framesSent: framesSentToML,
@@ -1312,19 +1328,20 @@ export async function triggerProcessMovement(): Promise<void> {
                 });
                 
                 // Set up the finalization callback
-                _inmem_currentProcessingMovement.onAllFramesProcessed = async () => {
+                state.onAllFramesProcessed = async () => {
                     // Capture ML stats before clearing tracking
-                    const mlStats = _inmem_currentProcessingMovement ? {
-                        frames_sent_to_ml: _inmem_currentProcessingMovement.framesSentToML,
-                        frames_received_from_ml: _inmem_currentProcessingMovement.framesReceivedFromML,
-                        ml_total_processing_time_ms: _inmem_currentProcessingMovement.mlTotalProcessingTimeMs,
-                        ml_max_processing_time_ms: _inmem_currentProcessingMovement.mlMaxProcessingTimeMs
+                    const currentState = _inmem_currentProcessingMovements.get(cameraKey);
+                    const mlStats = currentState ? {
+                        frames_sent_to_ml: currentState.framesSentToML,
+                        frames_received_from_ml: currentState.framesReceivedFromML,
+                        ml_total_processing_time_ms: currentState.mlTotalProcessingTimeMs,
+                        ml_max_processing_time_ms: currentState.mlMaxProcessingTimeMs
                     } : null;
                     
                     // Wrap async logic in a tracked promise for graceful shutdown
                     const closeHandler = async () => {
                         // Clear tracking now that we're finalizing
-                        _inmem_currentProcessingMovement = null;
+                        _inmem_currentProcessingMovements.delete(cameraKey);
 
                         // Mark as completed or failed (unless already marked by timeout handler)
                         try {
@@ -1391,6 +1408,33 @@ export async function triggerProcessMovement(): Promise<void> {
                                     movement_key
                                 });
                             }
+                            
+                            // Update camera's processing pointer (advance regardless of success/failure)
+                            try {
+                                const currentCam = await deps.cameradb.get(cameraKey);
+                                await deps.cameradb.put(cameraKey, {
+                                    ...currentCam,
+                                    state_lastProcessedMovementKey: movement_key
+                                });
+                                // Also update in-memory cache
+                                const camCache = deps.getCameraCache()[cameraKey];
+                                if (camCache) {
+                                    deps.setCameraCache(cameraKey, {
+                                        ...camCache,
+                                        cameraEntry: {
+                                            ...camCache.cameraEntry,
+                                            state_lastProcessedMovementKey: movement_key
+                                        }
+                                    });
+                                }
+                                deps.logger.debug('Updated camera processing pointer', {
+                                    cameraKey, movement_key
+                                });
+                            } catch (e) {
+                                deps.logger.error('Failed to update camera processing pointer', {
+                                    cameraKey, movement_key, error: String(e)
+                                });
+                            }
                         } catch (error) {
                             deps.logger.error('Failed to mark movement as completed', {
                                 camera: cameraEntry.name,
@@ -1409,7 +1453,7 @@ export async function triggerProcessMovement(): Promise<void> {
                 };
                 
                 // Check if all frames already processed (e.g., no frames sent, or all already received)
-                checkAndFinalizeMovement();
+                checkAndFinalizeMovement(cameraKey);
             } else {
                 // Movement tracking was already cleared (e.g., by timeout), just log
                 deps.logger.debug('ffmpeg closed but movement tracking already cleared', {
@@ -1419,18 +1463,23 @@ export async function triggerProcessMovement(): Promise<void> {
         }
     });
 
-    // Track the process with frame counters
-    _inmem_currentProcessingMovement = {
-        movement_key,
-        startedAt: Date.now(),
-        process: ffmpeg,
-        pid: ffmpeg.pid!,
-        ffmpegExited: false,
-        framesSentToML: 0,
-        framesReceivedFromML: 0,
-        mlTotalProcessingTimeMs: 0,
-        mlMaxProcessingTimeMs: 0
-    };
+    // Update the tracking with the actual process now that it's spawned
+    // (The slot was claimed earlier to prevent race conditions)
+    const processingState = _inmem_currentProcessingMovements.get(cameraKey);
+    if (processingState && processingState.movement_key === movement_key) {
+        processingState.process = ffmpeg;
+        processingState.pid = ffmpeg.pid!;
+    }
+    } catch (error) {
+        // Release the processing slot if something goes wrong before ffmpeg spawns
+        deps.logger.error('triggerProcessMovement: Failed to start processing, releasing slot', {
+            movement_key,
+            cameraKey,
+            error: String(error)
+        });
+        _inmem_currentProcessingMovements.delete(cameraKey);
+        throw error;  // Re-throw so caller knows about the failure
+    }
 }
 
 /**
@@ -1485,7 +1534,26 @@ export async function controllerClearDownDisk(): Promise<void> {
                 const diskres = await diskCheck(settings.disk_base_dir, foldersToClean, settings.disk_cleanup_capacity);
                 deps.logger.info('Disk check complete', diskres);
 
+                const now = Date.now();
+                const nowFormatted = new Intl.DateTimeFormat('en-GB', { 
+                    dateStyle: 'short', timeStyle: 'short', hour12: true 
+                }).format(new Date(now));
+
+                // Track per-camera stats for disk status
+                const perCameraStats: { [key: string]: { filesDeleted: number; bytesDeleted: number; movementsDeleted: number; cutoffDate: number } } = {};
+                for (const cameraKey of cameraKeys) {
+                    const folder = `${settings.disk_base_dir}/${cameraCache[cameraKey].cameraEntry.folder}`;
+                    const folderStats = diskres.folderStats[folder];
+                    perCameraStats[cameraKey] = {
+                        filesDeleted: folderStats?.removedFiles || 0,
+                        bytesDeleted: folderStats?.removedMB || 0,
+                        cutoffDate: folderStats?.lastRemovedctimeMs || 0,
+                        movementsDeleted: 0
+                    };
+                }
+
                 if (diskres.revmovedMBTotal > 0) {
+                    // Find the most recent file deletion timestamp across all folders
                     const mostRecentctimMs = Object.keys(diskres.folderStats).reduce(
                         (acc, cur) => diskres.folderStats[cur].lastRemovedctimeMs
                             ? (diskres.folderStats[cur].lastRemovedctimeMs > acc ? diskres.folderStats[cur].lastRemovedctimeMs : acc)
@@ -1494,21 +1562,70 @@ export async function controllerClearDownDisk(): Promise<void> {
                     );
 
                     if (mostRecentctimMs > 0) {
-                        const keytoDeleteTo = encodeMovementKey((mostRecentctimMs / 1000 | 0) - MOVEMENT_KEY_EPOCH);
+                        // Movement keys are stored as millisecond timestamps (e.g., "1766090503015")
+                        // Delete all movements with startDate <= mostRecentctimMs
+                        const keytoDeleteTo = mostRecentctimMs.toString();
                         const deleteKeys: string[] = [];
 
                         for await (const [encodedKey, value] of deps.movementdb.iterator({ lte: keytoDeleteTo })) {
                             if (cameraKeys.includes(value.cameraKey)) {
                                 deleteKeys.push(encodedKey);
+                                // Track per-camera deletion count
+                                if (perCameraStats[value.cameraKey]) {
+                                    perCameraStats[value.cameraKey].movementsDeleted++;
+                                }
                             }
                         }
 
                         if (deleteKeys.length > 0) {
-                            deps.logger.info('Deleting old movements', { count: deleteKeys.length });
+                            deps.logger.info('Deleting old movements from database', { 
+                                count: deleteKeys.length, 
+                                oldestDeletedKey: deleteKeys[0],
+                                newestDeletedKey: deleteKeys[deleteKeys.length - 1]
+                            });
                             await deps.movementdb.batch(deleteKeys.map((k: string) => ({ type: 'del', key: k })) as any);
                         }
                     }
                 }
+
+                // Count remaining movements per camera
+                const movementsRemainingPerCamera: { [key: string]: number } = {};
+                for (const cameraKey of cameraKeys) {
+                    movementsRemainingPerCamera[cameraKey] = 0;
+                }
+                for await (const [, value] of deps.movementdb.iterator()) {
+                    if (cameraKeys.includes(value.cameraKey)) {
+                        movementsRemainingPerCamera[value.cameraKey] = (movementsRemainingPerCamera[value.cameraKey] || 0) + 1;
+                    }
+                }
+
+                // Save disk status per camera
+                for (const cameraKey of cameraKeys) {
+                    const stats = perCameraStats[cameraKey];
+                    const cutoffFormatted = stats.cutoffDate > 0 
+                        ? new Intl.DateTimeFormat('en-GB', { dateStyle: 'short', timeStyle: 'short', hour12: true }).format(new Date(stats.cutoffDate))
+                        : 'N/A';
+
+                    const diskStatusEntry = {
+                        cameraKey,
+                        cameraName: cameraCache[cameraKey].cameraEntry.name,
+                        lastRunAt: now,
+                        lastRunAt_en_GB: nowFormatted,
+                        filesDeleted: stats.filesDeleted,
+                        bytesDeleted: stats.bytesDeleted,
+                        cutoffDate: stats.cutoffDate,
+                        cutoffDate_en_GB: cutoffFormatted,
+                        movementsDeleted: stats.movementsDeleted,
+                        movementsRemaining: movementsRemainingPerCamera[cameraKey] || 0
+                    };
+
+                    await deps.diskstatusdb.put(cameraKey, diskStatusEntry);
+                }
+
+                deps.logger.info('Disk status saved', { 
+                    cameras: cameraKeys.length,
+                    totalMovementsRemaining: Object.values(movementsRemainingPerCamera).reduce((a, b) => a + b, 0)
+                });
 
                 deps.setSettingsCache({
                     ...settingsCache,
@@ -1552,9 +1669,11 @@ function sendImageToMLDetection(imagePath: string, movement_key: number): void {
             _inmem_mlDetectionProcess.stdin.write(`${imagePath}\n`);
             
             // Track frames sent for the current processing movement
-            if (_inmem_currentProcessingMovement && 
-                _inmem_currentProcessingMovement.movement_key === String(movement_key)) {
-                _inmem_currentProcessingMovement.framesSentToML++;
+            for (const state of _inmem_currentProcessingMovements.values()) {
+                if (state.movement_key === String(movement_key)) {
+                    state.framesSentToML++;
+                    break;
+                }
             }
             
             deps.logger.info('Frame sent to ML detector', { frame: imageName, movement: movement_key, path: imagePath });
@@ -1683,28 +1802,30 @@ async function processDetectionResult(line: string): Promise<void> {
         } finally {
             _inmem_pendingUpdates.delete(parseInt(movement_key));
             
-            // Track frames received and ML timing for the current processing movement
-            if (_inmem_currentProcessingMovement && 
-                _inmem_currentProcessingMovement.movement_key === movement_key) {
-                _inmem_currentProcessingMovement.framesReceivedFromML++;
-                
-                // Track ML processing time stats
-                if (processingTimeMs !== null) {
-                    _inmem_currentProcessingMovement.mlTotalProcessingTimeMs += processingTimeMs;
-                    if (processingTimeMs > _inmem_currentProcessingMovement.mlMaxProcessingTimeMs) {
-                        _inmem_currentProcessingMovement.mlMaxProcessingTimeMs = processingTimeMs;
+            // Track frames received and ML timing for the processing movement
+            for (const state of _inmem_currentProcessingMovements.values()) {
+                if (state.movement_key === movement_key) {
+                    state.framesReceivedFromML++;
+                    
+                    // Track ML processing time stats
+                    if (processingTimeMs !== null) {
+                        state.mlTotalProcessingTimeMs += processingTimeMs;
+                        if (processingTimeMs > state.mlMaxProcessingTimeMs) {
+                            state.mlMaxProcessingTimeMs = processingTimeMs;
+                        }
                     }
+                    
+                    deps.logger.debug('ML frame received, checking completion', {
+                        movement_key,
+                        ffmpegExited: state.ffmpegExited,
+                        framesSent: state.framesSentToML,
+                        framesReceived: state.framesReceivedFromML
+                    });
+                    
+                    // Check if all frames are processed and ffmpeg has exited
+                    checkAndFinalizeMovement(state.cameraKey);
+                    break;
                 }
-                
-                deps.logger.debug('ML frame received, checking completion', {
-                    movement_key,
-                    ffmpegExited: _inmem_currentProcessingMovement.ffmpegExited,
-                    framesSent: _inmem_currentProcessingMovement.framesSentToML,
-                    framesReceived: _inmem_currentProcessingMovement.framesReceivedFromML
-                });
-                
-                // Check if all frames are processed and ffmpeg has exited
-                checkAndFinalizeMovement();
             }
         }
     } catch (error) {
@@ -1717,10 +1838,11 @@ async function processDetectionResult(line: string): Promise<void> {
  * If so, trigger the completion callback.
  * Also handles timeout if ML results are missing after ffmpeg exits.
  */
-function checkAndFinalizeMovement(): void {
-    if (!_inmem_currentProcessingMovement) return;
+function checkAndFinalizeMovement(cameraKey: string): void {
+    const state = _inmem_currentProcessingMovements.get(cameraKey);
+    if (!state) return;
     
-    const { ffmpegExited, ffmpegExitedAt, framesSentToML, framesReceivedFromML, onAllFramesProcessed, movement_key } = _inmem_currentProcessingMovement;
+    const { ffmpegExited, ffmpegExitedAt, framesSentToML, framesReceivedFromML, onAllFramesProcessed, movement_key } = state;
     
     if (!ffmpegExited) return;
     
@@ -1832,15 +1954,17 @@ export async function runControlLoop(): Promise<void> {
                     deps.setCameraCache(cKey, { ...deps.getCameraCache()[cKey], lastMovementCheck: now });
                     await detectCameraMovement(cKey);
                 }
+                
+                // Trigger movement processing for this camera
+                await triggerProcessMovement(cKey);
             }
         }
     }
 
-    // Process pending movements (one at a time, across all cameras)
-    await triggerProcessMovement();
-    
-    // Check for ML timeout (in case ML results are missing)
-    checkAndFinalizeMovement();
+    // Check for ML timeout on all processing movements
+    for (const cameraKey of _inmem_currentProcessingMovements.keys()) {
+        checkAndFinalizeMovement(cameraKey);
+    }
 
     // SSE keep-alive (every 30 seconds)
     sseKeepAlive();

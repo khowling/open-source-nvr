@@ -34,7 +34,7 @@ import { sseManager } from './sse-manager.js';
 import { setLogger } from './process-utils.js';
 import { setLogger as setSSELogger } from './sse-manager.js';
 
-import type { CameraEntry, CameraCache, CameraCacheEntry, Settings, SettingsCache, MovementEntry } from './www.js';
+import type { CameraEntry, CameraCache, CameraCacheEntry, Settings, SettingsCache, MovementEntry, DiskStatusEntry } from './www.js';
 
 // ============================================================================
 // Server Configuration
@@ -105,9 +105,11 @@ export async function createServer(config: ServerConfig = {}): Promise<ServerHan
 
     // Database Setup
     const db = new Level(dbPath, { valueEncoding: 'json' });
+    await db.open(); // Ensure database is fully opened before using iterators
     const cameradb = db.sublevel<string, CameraEntry>('cameras', { valueEncoding: 'json' });
     const movementdb = db.sublevel<string, MovementEntry>('movements', { valueEncoding: 'json' });
     const settingsdb = db.sublevel<string, Settings>('settings', { valueEncoding: 'json' });
+    const diskstatusdb = db.sublevel<string, DiskStatusEntry>('diskstatus', { valueEncoding: 'json' });
 
     // In-Memory State
     let _inmem_cameraCache: CameraCache = {};
@@ -152,12 +154,27 @@ export async function createServer(config: ServerConfig = {}): Promise<ServerHan
         logger.info('No saved settings found, using defaults');
     }
 
+    // Recovery: Reset any movements stuck in 'processing' state back to 'pending'
+    // This handles server restarts mid-processing
+    let stuckCount = 0;
+    for await (const [key, movement] of movementdb.iterator()) {
+        if (movement.processing_state === 'processing') {
+            logger.warn('Recovering stuck processing movement', { movement_key: key, cameraKey: movement.cameraKey });
+            await movementdb.put(key, { ...movement, processing_state: 'pending' as const });
+            stuckCount++;
+        }
+    }
+    if (stuckCount > 0) {
+        logger.info('Recovered stuck processing movements', { count: stuckCount });
+    }
+
     // Initialize processor with dependencies
     initProcessor({
         logger,
         cameradb,
         movementdb,
         settingsdb,
+        diskstatusdb,
         getCameraCache,
         setCameraCache,
         getSettingsCache,
@@ -170,6 +187,7 @@ export async function createServer(config: ServerConfig = {}): Promise<ServerHan
         cameradb,
         movementdb,
         settingsdb,
+        diskstatusdb,
         cameraCache: _inmem_cameraCache,
         getSettingsCache,
         setSettingsCache

@@ -226,6 +226,11 @@ export function formatMovementForSSE(key: string, movement: any): any {
             seconds: movement.seconds,
             detection_status: movement.detection_status || 'complete',
             processing_state: movement.processing_state,
+            // Detection fields
+            ...(movement.pollCount !== undefined && { pollCount: movement.pollCount }),
+            ...(movement.consecutivePollsWithoutMovement !== undefined && { consecutivePollsWithoutMovement: movement.consecutivePollsWithoutMovement }),
+            ...(movement.playlist_path && { playlist_path: movement.playlist_path }),
+            ...(movement.playlist_last_segment !== undefined && { playlist_last_segment: movement.playlist_last_segment }),
             ...(movement.processing_error && { processing_error: movement.processing_error }),
             ...(movement.detection_output && {
                 detection_output: { tags: movement.detection_output.tags || [] }

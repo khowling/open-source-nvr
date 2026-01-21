@@ -84,6 +84,31 @@ export interface DetectionOutput {
     tags: MLTag[];
 }
 
+/** Disk cleanup status per camera, stored after each cleanup run */
+export interface DiskStatusEntry {
+    cameraKey: string;
+    cameraName: string;
+    lastRunAt: number;              // Timestamp when cleanup ran
+    lastRunAt_en_GB: string;        // Human readable date
+    filesDeleted: number;           // Number of files deleted for this camera
+    bytesDeleted: number;           // Bytes deleted (from diskCheck folderStats)
+    cutoffDate: number;             // Timestamp of newest deleted file
+    cutoffDate_en_GB: string;       // Human readable cutoff date
+    movementsDeleted: number;       // Number of movement records deleted
+    movementsRemaining: number;     // Number of movement records remaining for this camera
+}
+
+/** Aggregate disk status across all cameras */
+export interface DiskStatus {
+    lastRunAt: number;
+    lastRunAt_en_GB: string;
+    totalFilesDeleted: number;
+    totalBytesDeleted: number;
+    totalMovementsDeleted: number;
+    totalMovementsRemaining: number;
+    perCamera: DiskStatusEntry[];
+}
+
 export interface CameraEntry {
     delete: boolean;
     name: string;
@@ -112,6 +137,8 @@ export interface CameraEntry {
     segments_prior_to_movement: number;
     segments_post_movement: number;
     secMovementStartupDelay?: number;
+    /** Processing pointer - last movement key that was processed for this camera (state, not config) */
+    state_lastProcessedMovementKey?: string;
 }
 
 export interface CameraEntryClient extends Omit<CameraEntry, 'ip' | 'passwd'> {
@@ -229,7 +256,9 @@ async function clearDownDisk(
         );
         
         if (mostRecentctimMs > 0 || cleanupCapacity === -1) {
-            const keytoDeleteTo = cleanupCapacity === -1 ? null : encodeMovementKey((mostRecentctimMs / 1000 | 0) - MOVEMENT_KEY_EPOCH);
+            // Movement keys are stored as millisecond timestamps (e.g., "1766090503015")
+            // Delete all movements with startDate <= mostRecentctimMs
+            const keytoDeleteTo = cleanupCapacity === -1 ? null : mostRecentctimMs.toString();
             const deleteKeys: string[] = [];
             
             for await (const [encodedKey, value] of movementdb.iterator(keytoDeleteTo ? { lte: keytoDeleteTo } : {})) {
@@ -239,7 +268,11 @@ async function clearDownDisk(
             }
 
             if (deleteKeys.length > 0) {
-                logger.info('Deleting old movements', { count: deleteKeys.length });
+                logger.info('Deleting old movements from database', { 
+                    count: deleteKeys.length,
+                    oldestDeletedKey: deleteKeys[0],
+                    newestDeletedKey: deleteKeys[deleteKeys.length - 1]
+                });
                 await movementdb.batch(deleteKeys.map((k: string) => ({ type: 'del', key: k })) as any);
             }
         }
@@ -260,6 +293,7 @@ export interface WebServerDependencies {
     cameradb: any;
     movementdb: any;
     settingsdb: any;
+    diskstatusdb: any;
     cameraCache: CameraCache;
     getSettingsCache: () => SettingsCache;
     setSettingsCache: (cache: SettingsCache) => void;
@@ -269,7 +303,7 @@ export interface WebServerDependencies {
  * Initialize and start the web server
  */
 export async function initWeb(deps: WebServerDependencies, port: number = 8080): Promise<Server> {
-    const { logger, cameradb, movementdb, settingsdb, cameraCache, getSettingsCache, setSettingsCache } = deps;
+    const { logger, cameradb, movementdb, settingsdb, diskstatusdb, cameraCache, getSettingsCache, setSettingsCache } = deps;
 
     const assets = new Router()
         .get('/image/:moment', async (ctx) => {
@@ -461,6 +495,139 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
                 ctx.status = 500;
             }
         })
+        .get('/diskstatus', async (ctx) => {
+            // Return disk cleanup status for all cameras
+            try {
+                const perCamera: DiskStatusEntry[] = [];
+                let totalFilesDeleted = 0;
+                let totalBytesDeleted = 0;
+                let totalMovementsDeleted = 0;
+                let totalMovementsRemaining = 0;
+                let lastRunAt = 0;
+
+                for await (const [, entry] of diskstatusdb.iterator()) {
+                    perCamera.push(entry);
+                    totalFilesDeleted += entry.filesDeleted || 0;
+                    totalBytesDeleted += entry.bytesDeleted || 0;
+                    totalMovementsDeleted += entry.movementsDeleted || 0;
+                    totalMovementsRemaining += entry.movementsRemaining || 0;
+                    if (entry.lastRunAt > lastRunAt) {
+                        lastRunAt = entry.lastRunAt;
+                    }
+                }
+
+                const lastRunAt_en_GB = lastRunAt > 0 
+                    ? new Intl.DateTimeFormat('en-GB', { dateStyle: 'short', timeStyle: 'short', hour12: true }).format(new Date(lastRunAt))
+                    : 'Never';
+
+                const diskStatus: DiskStatus = {
+                    lastRunAt,
+                    lastRunAt_en_GB,
+                    totalFilesDeleted,
+                    totalBytesDeleted,
+                    totalMovementsDeleted,
+                    totalMovementsRemaining,
+                    perCamera
+                };
+
+                ctx.body = diskStatus;
+            } catch (e) {
+                logger.error('Error fetching disk status', { error: String(e) });
+                ctx.body = { error: String(e) };
+                ctx.status = 500;
+            }
+        })
+        .post('/diskcleanup', async (ctx) => {
+            // Force run disk cleanup with optional target capacity
+            const targetCapacity = ctx.request.query['target'] 
+                ? parseInt(ctx.request.query['target'] as string, 10) 
+                : null;
+            
+            const settingsCache = getSettingsCache();
+            const { settings } = settingsCache;
+            
+            if (!settings.disk_base_dir) {
+                ctx.body = { error: 'Disk base directory not configured' };
+                ctx.status = 400;
+                return;
+            }
+
+            // Use target from query param, or current setting, default to 90%
+            const cleanupCapacity = targetCapacity ?? settings.disk_cleanup_capacity ?? 90;
+            
+            logger.info('Manual disk cleanup triggered', { targetCapacity: cleanupCapacity });
+
+            try {
+                const cameraKeys = Object.keys(cameraCache).filter(
+                    c => (!cameraCache[c].cameraEntry.delete) && cameraCache[c].cameraEntry.enable_streaming
+                );
+
+                const diskres = await clearDownDisk(
+                    settings.disk_base_dir,
+                    cameraKeys,
+                    cleanupCapacity,
+                    cameraCache,
+                    settingsCache,
+                    movementdb,
+                    logger
+                );
+
+                // Count remaining movements per camera for status update
+                const movementsRemainingPerCamera: { [key: string]: number } = {};
+                for (const cameraKey of cameraKeys) {
+                    movementsRemainingPerCamera[cameraKey] = 0;
+                }
+                for await (const [, value] of movementdb.iterator()) {
+                    if (cameraKeys.includes(value.cameraKey)) {
+                        movementsRemainingPerCamera[value.cameraKey] = (movementsRemainingPerCamera[value.cameraKey] || 0) + 1;
+                    }
+                }
+
+                // Save disk status per camera
+                const now = Date.now();
+                const nowFormatted = new Intl.DateTimeFormat('en-GB', { 
+                    dateStyle: 'short', timeStyle: 'short', hour12: true 
+                }).format(new Date(now));
+
+                for (const cameraKey of cameraKeys) {
+                    const folder = `${settings.disk_base_dir}/${cameraCache[cameraKey].cameraEntry.folder}`;
+                    const folderStats = diskres.folderStats[folder];
+                    const cutoffDate = folderStats?.lastRemovedctimeMs || 0;
+                    const cutoffFormatted = cutoffDate > 0 
+                        ? new Intl.DateTimeFormat('en-GB', { dateStyle: 'short', timeStyle: 'short', hour12: true }).format(new Date(cutoffDate))
+                        : 'N/A';
+
+                    await diskstatusdb.put(cameraKey, {
+                        cameraKey,
+                        cameraName: cameraCache[cameraKey].cameraEntry.name,
+                        lastRunAt: now,
+                        lastRunAt_en_GB: nowFormatted,
+                        filesDeleted: folderStats?.removedFiles || 0,
+                        bytesDeleted: folderStats?.removedMB || 0,
+                        cutoffDate,
+                        cutoffDate_en_GB: cutoffFormatted,
+                        movementsDeleted: 0, // clearDownDisk handles this internally
+                        movementsRemaining: movementsRemainingPerCamera[cameraKey] || 0
+                    });
+                }
+
+                logger.info('Manual disk cleanup complete', { 
+                    removedMB: diskres.revmovedMBTotal,
+                    totalMovementsRemaining: Object.values(movementsRemainingPerCamera).reduce((a, b) => a + b, 0)
+                });
+
+                ctx.body = { 
+                    success: true, 
+                    targetCapacity: cleanupCapacity,
+                    removedMB: diskres.revmovedMBTotal,
+                    folderStats: diskres.folderStats
+                };
+            } catch (e: any) {
+                logger.error('Manual disk cleanup failed', { error: String(e) });
+                ctx.body = { error: String(e) };
+                ctx.status = 500;
+            }
+        })
         .post('/camera/:id', async (ctx) => {
             const cameraKey = ctx.params['id'];
             const deleteOption = ctx.request.query['delopt'];
@@ -474,7 +641,13 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
                     try {
                         await ensureDir(folder);
                         const new_key = "C" + ((Date.now() / 1000 | 0) - MOVEMENT_KEY_EPOCH);
-                        await cameradb.put(new_key, { delete: false, ...new_ce } as CameraEntry);
+                        // Initialize processing pointer for new camera
+                        const newCamera: CameraEntry = { 
+                            delete: false, 
+                            ...new_ce,
+                            state_lastProcessedMovementKey: '0'  // Start from beginning
+                        };
+                        await cameradb.put(new_key, newCamera);
                         cameraCache[new_key] = { cameraEntry: new_ce };
                         ctx.status = 201;
                     } catch (e) {
@@ -529,7 +702,14 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
                         }
 
                         if (!deleteOption) {
-                            const new_vals: CameraEntry = { ...old_cc.cameraEntry, ...new_ce };
+                            // Preserve state_ fields - don't let client overwrite them
+                            const { state_lastProcessedMovementKey: _drop, ...clientData } = new_ce as CameraEntry & { state_lastProcessedMovementKey?: string };
+                            const new_vals: CameraEntry = { 
+                                ...old_cc.cameraEntry, 
+                                ...clientData,
+                                // Preserve existing state fields
+                                state_lastProcessedMovementKey: old_cc.cameraEntry.state_lastProcessedMovementKey
+                            };
                             await cameradb.put(cameraKey, new_vals);
                             cameraCache[cameraKey] = { cameraEntry: new_vals };
 
@@ -622,6 +802,10 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
         })
         .get('/movements', async (ctx) => {
             const mode = ctx.query['mode'];
+            const limitParam = ctx.query['limit'];
+            const cursorParam = ctx.query['cursor']; // Last key from previous page for pagination
+            const limit = limitParam ? Math.min(parseInt(limitParam as string, 10) || 1000, 10000) : 1000;
+            
             const cameras: CameraEntryClient[] = Object.entries(cameraCache)
                 .filter(([_, value]) => !value.cameraEntry.delete)
                 .map(([key, value]) => {
@@ -633,15 +817,28 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
             ctx.response.set("content-type", "application/json");
             ctx.body = await new Promise(async (res) => {
                 let movements: MovementToClient[] = [];
+                let nextCursor: string | null = null;
+                let hasMore = false;
 
                 if (mode === "Time") {
                     for (const c of cameras) {
                         const listfiles = await catalogVideo(`${c.disk}/${c.folder}`);
                         // Time mode implementation - currently empty per original
                     }
-                    res({ config: getSettingsCache(), cameras, movements });
+                    res({ config: getSettingsCache(), cameras, movements, hasMore: false, nextCursor: null });
                 } else {
-                    for await (const [key, value] of movementdb.iterator({ reverse: true })) {
+                    // Build iterator options: reverse order, with optional cursor for pagination
+                    const iteratorOpts: { reverse: boolean; limit: number; lt?: string } = { 
+                        reverse: true, 
+                        limit: limit * 10  // Fetch extra to handle filtering
+                    };
+                    
+                    // If cursor provided, start from just before that key
+                    if (cursorParam && typeof cursorParam === 'string') {
+                        iteratorOpts.lt = cursorParam;
+                    }
+
+                    for await (const [key, value] of movementdb.iterator(iteratorOpts)) {
                         const { detection_output } = value;
 
                         let tags = detection_output?.tags || null;
@@ -664,6 +861,13 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
                             const startDate = new Date(value.startDate);
                             if (isNaN(startDate.getTime())) continue;
 
+                            // Check if we've reached the limit - if so, mark hasMore and set cursor
+                            if (movements.length >= limit) {
+                                hasMore = true;
+                                nextCursor = key;
+                                break;
+                            }
+
                             movements.push({
                                 key,
                                 startDate_en_GB: new Intl.DateTimeFormat('en-GB', {
@@ -679,6 +883,11 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
                                     seconds: value.seconds,
                                     detection_status: value.detection_status || 'complete',
                                     processing_state: value.processing_state,
+                                    // Detection fields
+                                    ...(value.pollCount !== undefined && { pollCount: value.pollCount }),
+                                    ...(value.consecutivePollsWithoutMovement !== undefined && { consecutivePollsWithoutMovement: value.consecutivePollsWithoutMovement }),
+                                    ...(value.playlist_path && { playlist_path: value.playlist_path }),
+                                    ...(value.playlist_last_segment !== undefined && { playlist_last_segment: value.playlist_last_segment }),
                                     ...(value.processing_error && { processing_error: value.processing_error }),
                                     ...(tags && tags.length > 0 && { detection_output: { tags } }),
                                     // Timing fields
@@ -695,7 +904,7 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
                             });
                         }
                     }
-                    res({ config: getSettingsCache(), cameras, movements });
+                    res({ config: getSettingsCache(), cameras, movements, hasMore, nextCursor });
                 }
             });
         });

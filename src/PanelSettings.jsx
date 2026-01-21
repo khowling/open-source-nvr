@@ -174,8 +174,27 @@ export const MySplitButton = ({label, items}) => (
 export function PanelSettings({panel, setPanel, data, getServerData}) {
 
     const [error, setError] = React.useState(null)
+    const [diskStatus, setDiskStatus] = React.useState(null)
+    const [diskStatusLoading, setDiskStatusLoading] = React.useState(false)
 
     const styles = useStyles();
+
+    // Fetch disk status when settings panel opens
+    React.useEffect(() => {
+        if (panel.open && panel.key === 'settings') {
+            setDiskStatusLoading(true)
+            fetch('/api/diskstatus')
+                .then(res => res.json())
+                .then(data => {
+                    setDiskStatus(data)
+                    setDiskStatusLoading(false)
+                })
+                .catch(err => {
+                    console.error('Failed to fetch disk status', err)
+                    setDiskStatusLoading(false)
+                })
+        }
+    }, [panel.open, panel.key])
 
     function updatePanelValues(field, value) {
         console.log (`updatePanelValues ${field} ${JSON.stringify(value)}`)
@@ -457,6 +476,63 @@ export function PanelSettings({panel, setPanel, data, getServerData}) {
                         defaultValue={panel.values.stream_verify_timeout_ms !== undefined ? panel.values.stream_verify_timeout_ms : 10000}  
                         onChange={(_,data) => updatePanelValues('stream_verify_timeout_ms', data.value)} />
                     </div>
+
+                    <Divider><b>Disk Status</b></Divider>
+                    
+                    {diskStatusLoading ? (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px' }}>
+                        <Spinner size="tiny" />
+                        <Text>Loading disk status...</Text>
+                      </div>
+                    ) : diskStatus && !diskStatus.error ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
+                          <div>
+                            <Text size={200} style={{ color: '#666' }}>Last Cleanup</Text>
+                            <Text block weight="semibold">{diskStatus.lastRunAt_en_GB || 'Never'}</Text>
+                          </div>
+                          <div>
+                            <Text size={200} style={{ color: '#666' }}>Total Movements</Text>
+                            <Text block weight="semibold">{diskStatus.totalMovementsRemaining?.toLocaleString() || '0'}</Text>
+                          </div>
+                        </div>
+                        
+                        {diskStatus.perCamera && diskStatus.perCamera.length > 0 ? (
+                          <div style={{ border: '1px solid #e0e0e0', borderRadius: '4px', overflow: 'hidden' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                              <thead>
+                                <tr style={{ background: '#f5f5f5' }}>
+                                  <th style={{ padding: '8px', textAlign: 'left', borderBottom: '1px solid #e0e0e0' }}>Camera</th>
+                                  <th style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #e0e0e0' }}>Files Deleted</th>
+                                  <th style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #e0e0e0' }}>Movements Deleted</th>
+                                  <th style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #e0e0e0' }}>Remaining</th>
+                                  <th style={{ padding: '8px', textAlign: 'left', borderBottom: '1px solid #e0e0e0' }}>Cutoff Date</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {diskStatus.perCamera.map((cam, idx) => (
+                                  <tr key={cam.cameraKey} style={{ background: idx % 2 === 0 ? '#fff' : '#fafafa' }}>
+                                    <td style={{ padding: '8px', borderBottom: '1px solid #eee' }}>{cam.cameraName}</td>
+                                    <td style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #eee' }}>{cam.filesDeleted?.toLocaleString() || '0'}</td>
+                                    <td style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #eee' }}>{cam.movementsDeleted?.toLocaleString() || '0'}</td>
+                                    <td style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #eee' }}>{cam.movementsRemaining?.toLocaleString() || '0'}</td>
+                                    <td style={{ padding: '8px', borderBottom: '1px solid #eee' }}>{cam.cutoffDate_en_GB || 'N/A'}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : (
+                          <Text style={{ fontStyle: 'italic', color: '#666' }}>
+                            No disk cleanup has run yet. Status will appear after the first cleanup cycle.
+                          </Text>
+                        )}
+                      </div>
+                    ) : (
+                      <Text style={{ fontStyle: 'italic', color: '#666' }}>
+                        {diskStatus?.error || 'No disk status available. Enable disk cleanup to see statistics.'}
+                      </Text>
+                    )}
 
                     <div className={styles.root}></div>
 
