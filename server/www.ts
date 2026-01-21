@@ -26,6 +26,8 @@ export interface Settings {
     detection_target_hw: string;
     detection_frames_path: string;
     detection_tag_filters: TagFilter[];
+    /** ML process restart schedule in cron-like format: "HH:MM" (24-hour). Empty = disabled. Default: "01:00" */
+    ml_restart_schedule?: string;
     /** Timeout for graceful process shutdown in ms (default: 5000) */
     shutdown_timeout_ms?: number;
     /** Timeout for stream verification in ms (default: 10000) */

@@ -46,6 +46,18 @@ let _inmem_isShuttingDown = false;
 // Global ML detection process
 let _inmem_mlDetectionProcess: ChildProcessWithoutNullStreams | null = null;
 
+// Track when ML process was started (for proactive restart to prevent memory leaks)
+let _inmem_mlProcessStartedAt: number = 0;
+
+// Track last restart date to avoid multiple restarts on same day
+let _inmem_mlLastRestartDate: string = '';
+
+// ML restart is pending - pause sending new frames
+let _inmem_mlRestartPending: boolean = false;
+
+// Default ML restart schedule (1am)
+const DEFAULT_ML_RESTART_SCHEDULE = '01:00';
+
 // Track in-flight movement close handlers (for graceful shutdown)
 const _inmem_movementCloseHandlers: Map<string, Promise<void>> = new Map();
 
@@ -206,12 +218,48 @@ export function getMovementCloseHandlers(): Map<string, Promise<void>> {
     return _inmem_movementCloseHandlers;
 }
 
+// Test helpers for ML restart functionality
+export function getMLRestartState(): { 
+    startedAt: number; 
+    lastRestartDate: string; 
+    restartPending: boolean;
+    framesInFlight: number;
+} {
+    return {
+        startedAt: _inmem_mlProcessStartedAt,
+        lastRestartDate: _inmem_mlLastRestartDate,
+        restartPending: _inmem_mlRestartPending,
+        framesInFlight: _inmem_mlFrameSentTimes.size
+    };
+}
+
+export function setMLRestartStateForTest(state: { 
+    startedAt?: number; 
+    lastRestartDate?: string; 
+    restartPending?: boolean;
+}): void {
+    if (state.startedAt !== undefined) _inmem_mlProcessStartedAt = state.startedAt;
+    if (state.lastRestartDate !== undefined) _inmem_mlLastRestartDate = state.lastRestartDate;
+    if (state.restartPending !== undefined) _inmem_mlRestartPending = state.restartPending;
+}
+
+export function addMLFrameInFlightForTest(frameName: string): void {
+    _inmem_mlFrameSentTimes.set(frameName, Date.now());
+}
+
+export function clearMLFramesInFlightForTest(): void {
+    _inmem_mlFrameSentTimes.clear();
+}
+
 /**
  * Reset all in-memory state. Used by tests to ensure isolation.
  */
 export function resetProcessorState(): void {
     _inmem_isShuttingDown = false;
     _inmem_mlDetectionProcess = null;
+    _inmem_mlProcessStartedAt = 0;
+    _inmem_mlLastRestartDate = '';
+    _inmem_mlRestartPending = false;
     _inmem_movementCloseHandlers.clear();
     _inmem_mlFrameSentTimes.clear();
     _inmem_pendingUpdates.clear();
@@ -250,14 +298,68 @@ export async function controllerDetector(): Promise<void> {
         return;
     }
 
+    // Proactive restart: Check if it's the scheduled restart time
+    // Only restart once per day, wait for in-flight frames to complete
+    if (_inmem_mlDetectionProcess && _inmem_mlDetectionProcess.exitCode === null && _inmem_mlProcessStartedAt > 0) {
+        const restartSchedule = settings.ml_restart_schedule ?? DEFAULT_ML_RESTART_SCHEDULE;
+        
+        // Parse schedule (format: "HH:MM")
+        const scheduleParts = restartSchedule.split(':');
+        const scheduleHour = parseInt(scheduleParts[0], 10);
+        const scheduleMinute = parseInt(scheduleParts[1] || '0', 10);
+        
+        // Skip if invalid schedule or explicitly disabled (empty string)
+        if (restartSchedule === '' || isNaN(scheduleHour)) {
+            // Restart disabled, do nothing
+        } else {
+            const now = new Date();
+            const currentHour = now.getHours();
+            const currentMinute = now.getMinutes();
+            const todayDate = now.toISOString().split('T')[0]; // YYYY-MM-DD
+            // Match the hour and be within the first 30 minutes to avoid repeated triggers
+            const isRestartTime = currentHour === scheduleHour && currentMinute >= scheduleMinute && currentMinute < scheduleMinute + 30;
+            const notRestartedToday = _inmem_mlLastRestartDate !== todayDate;
+            const framesInFlight = _inmem_mlFrameSentTimes.size;
+            
+            // Phase 1: Start restart process - set pending flag to pause new frames
+            if (isRestartTime && notRestartedToday && !_inmem_mlRestartPending) {
+                _inmem_mlRestartPending = true;
+                deps.logger.info('ML detection restart scheduled - pausing new frames', {
+                    framesInFlight,
+                    pid: _inmem_mlDetectionProcess.pid,
+                    schedule: restartSchedule
+                });
+            }
+            
+            // Phase 2: When pending and all frames drained, perform restart
+            if (_inmem_mlRestartPending && framesInFlight === 0) {
+                const runningTimeMs = Date.now() - _inmem_mlProcessStartedAt;
+                deps.logger.info('ML detection process restarting (scheduled maintenance)', {
+                    runningTimeHours: Math.round(runningTimeMs / (60 * 60 * 1000) * 10) / 10,
+                    pid: _inmem_mlDetectionProcess.pid
+                });
+                _inmem_mlDetectionProcess.kill();
+                _inmem_mlDetectionProcess = null;
+                _inmem_mlProcessStartedAt = 0;
+                _inmem_mlLastRestartDate = todayDate;
+                // _inmem_mlRestartPending stays true until process is confirmed running below
+            }
+        }
+    }
+
     // If enabled and not running, start it
     if (!_inmem_mlDetectionProcess || _inmem_mlDetectionProcess.exitCode !== null) {
         try {
             const baseDir = process.env['PWD'];
             const aiDir = `${baseDir}/ai`;
-            const cmdArgs = ['-u', '-m', 'detector.detect', '--model_path', settings.detection_model];
+            
+            // Use stub detector for testing (doesn't require OpenCV/ONNX)
+            const isStub = settings.detection_model === 'stub';
+            const cmdArgs = isStub 
+                ? ['-u', '-m', 'detector.detect_stub']
+                : ['-u', '-m', 'detector.detect', '--model_path', settings.detection_model];
 
-            if (settings.detection_target_hw) {
+            if (!isStub && settings.detection_target_hw) {
                 cmdArgs.push('--target', settings.detection_target_hw);
             }
 
@@ -287,6 +389,20 @@ export async function controllerDetector(): Promise<void> {
                     _inmem_mlDetectionProcess = null;
                 }
             });
+
+            // Handle stdin errors (EPIPE) to prevent uncaught exceptions when process dies
+            _inmem_mlDetectionProcess.stdin.on('error', (error: Error) => {
+                deps.logger.warn('ML detection stdin error', { error: error.message });
+            });
+
+            // Track when process started for proactive restart
+            _inmem_mlProcessStartedAt = Date.now();
+            
+            // Clear restart pending flag - process is now running
+            if (_inmem_mlRestartPending) {
+                _inmem_mlRestartPending = false;
+                deps.logger.info('ML detection restart complete - resuming frame processing');
+            }
 
             deps.logger.info('ML detection pipeline initialized', {
                 pid: _inmem_mlDetectionProcess.pid,
@@ -1422,7 +1538,14 @@ export async function controllerClearDownDisk(): Promise<void> {
  * Send image path to ML detection process
  */
 function sendImageToMLDetection(imagePath: string, movement_key: number): void {
-    if (_inmem_mlDetectionProcess && _inmem_mlDetectionProcess.stdin && !_inmem_mlDetectionProcess.killed) {
+    // Don't send new frames if restart is pending (waiting for drain or restart)
+    if (_inmem_mlRestartPending) {
+        deps.logger.debug('ML restart pending - frame skipped', { frame: imagePath.split('/').pop() });
+        return;
+    }
+    
+    if (_inmem_mlDetectionProcess && _inmem_mlDetectionProcess.stdin && 
+        !_inmem_mlDetectionProcess.killed && _inmem_mlDetectionProcess.stdin.writable) {
         try {
             const imageName = imagePath.split('/').pop() || imagePath;
             _inmem_mlFrameSentTimes.set(imageName, Date.now());
