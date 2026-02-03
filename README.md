@@ -71,18 +71,24 @@ npx tsc
 npm run-script build
 
 # install Python ML detector dependencies
-cd ai
-pip install -e .
-cd ..
+# Create a virtual environment to avoid PEP 668 "externally-managed-environment" errors
+# (Modern Linux distributions prevent direct pip installs to the system Python)
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -e ./ai
+deactivate
 ```
 
 ### To manually run the server
 
 ```
-LOG_LEVEL=info node ./lib/index.js
+PATH="$PWD/.venv/bin:$PATH" LOG_LEVEL=info node ./lib/index.js
 ```
 
 Set `LOG_LEVEL` to `debug` for verbose logging, or `error` for minimal output.
+
+**Note:** The `PATH` prefix ensures that when the Node server spawns `python3`, it uses the Python from the virtual environment (`.venv`) instead of the system Python.
 
 Then open a browser and navigate to `http://<hostname>:8080`.  You are free to use a proxy like nginx and add TLS/DNS, authentication, then expose your app to the internet so you can monitor your home when away
 
@@ -121,7 +127,7 @@ Create a executable `web.sh` file containing the following (the paths need to be
 
 ```
 #!/bin/bash
-LOG_LEVEL=info WEBPATH="/home/<user>/open-source-nvr/build" DBPATH="/home/<user>/open-source-nvr/mydb" node /home/<user>/open-source-nvr/lib/index.js
+PATH="/home/<user>/open-source-nvr/.venv/bin:$PATH" LOG_LEVEL=info WEBPATH="/home/<user>/open-source-nvr/build" DBPATH="/home/<user>/open-source-nvr/mydb" node /home/<user>/open-source-nvr/lib/index.js
 ```
 
 Now, create a `open-source-nvr.service` file for Linux Systemd service managers, to ensure your website starts when the machine starts & will be kept running
@@ -136,7 +142,7 @@ After=network-online.target
 User=<user>
 Group=<user>
 Type=simple
-Environment="PATH=/usr/local/bin:/usr/bin"
+Environment="PATH=/home/<user>/open-source-nvr/.venv/bin:/usr/local/bin:/usr/bin"
 WorkingDirectory=/home/<user>
 ExecStart=/home/<user>/open-source-nvr/web.sh
 
