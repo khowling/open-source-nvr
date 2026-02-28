@@ -55,7 +55,7 @@ See the [ROADMAP.md](./ROADMAP.md) for planned features and future development.
 
 ### Build & Run Web App
 
-Ensure you have `nodejs` (recommended version >= 16 LTS), `python3`, and `ffmpeg` (latest version) installed.
+Ensure you have `nodejs` (recommended version >= 22 LTS), `python3`, and `ffmpeg` (latest version) installed.
 
 Clone this repo onto a Linux machine, then build the app by running these commands: 
 
@@ -140,8 +140,8 @@ Useful commands:
 systemctl --user status open-source-nvr     # check status
 systemctl --user restart open-source-nvr    # restart after code changes
 systemctl --user stop open-source-nvr       # stop
-journalctl --user -u open-source-nvr -f     # view logs
-journalctl --user -u open-source-nvr -n 100 --no-pager  # last 100 lines
+journalctl --user-unit=open-source-nvr -f     # view logs
+journalctl --user-unit=open-source-nvr -n 100 --no-pager  # last 100 lines
 ```
 
 After making code changes, rebuild and restart:
