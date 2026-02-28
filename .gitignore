@@ -1,5 +1,7 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
+.venv
+
 .vscode
 
 # dependencies
@@ -32,3 +34,4 @@ video
 *.service
 .env
 web.sh
+
