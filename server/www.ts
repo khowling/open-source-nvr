@@ -95,7 +95,6 @@ export interface DiskStatusEntry {
     cutoffDate: number;             // Timestamp of newest deleted file
     cutoffDate_en_GB: string;       // Human readable cutoff date
     movementsDeleted: number;       // Number of movement records deleted
-    movementsRemaining: number;     // Number of movement records remaining for this camera
 }
 
 /** Aggregate disk status across all cameras */
@@ -105,7 +104,6 @@ export interface DiskStatus {
     totalFilesDeleted: number;
     totalBytesDeleted: number;
     totalMovementsDeleted: number;
-    totalMovementsRemaining: number;
     perCamera: DiskStatusEntry[];
 }
 
@@ -394,7 +392,8 @@ export async function initWeb(deps: WebServerDependencies, port: number = 8080):
                 } else {
                     const preseq: number = ctx.query['preseq'] ? parseInt(ctx.query['preseq'] as any) : 0;
                     const postseq: number = ctx.query['postseq'] ? parseInt(ctx.query['postseq'] as any) : 0;
-                    const numSegments = Math.max(1, Math.round(secondsInt / 2) + preseq + postseq);
+                    const segDuration = 2;
+                    const numSegments = Math.max(1, Math.round(secondsInt / segDuration) + preseq + postseq);
 
                     logger.debug('Generating playlist', {
                         cameraKey,
@@ -409,8 +408,8 @@ export async function initWeb(deps: WebServerDependencies, port: number = 8080):
 
                     const body = `#EXTM3U
 #EXT-X-VERSION:3
-#EXT-X-TARGETDURATION:2
-` + [...Array(numSegments).keys()].map(n => `#EXTINF:2.000000,
+#EXT-X-TARGETDURATION:${segDuration}
+` + [...Array(numSegments).keys()].map(n => `#EXTINF:${segDuration}.000000,
 stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
 
                     ctx.set('content-type', 'application/x-mpegURL');
@@ -502,7 +501,6 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
                 let totalFilesDeleted = 0;
                 let totalBytesDeleted = 0;
                 let totalMovementsDeleted = 0;
-                let totalMovementsRemaining = 0;
                 let lastRunAt = 0;
 
                 for await (const [, entry] of diskstatusdb.iterator()) {
@@ -510,7 +508,6 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
                     totalFilesDeleted += entry.filesDeleted || 0;
                     totalBytesDeleted += entry.bytesDeleted || 0;
                     totalMovementsDeleted += entry.movementsDeleted || 0;
-                    totalMovementsRemaining += entry.movementsRemaining || 0;
                     if (entry.lastRunAt > lastRunAt) {
                         lastRunAt = entry.lastRunAt;
                     }
@@ -526,13 +523,60 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
                     totalFilesDeleted,
                     totalBytesDeleted,
                     totalMovementsDeleted,
-                    totalMovementsRemaining,
                     perCamera
                 };
 
                 ctx.body = diskStatus;
             } catch (e) {
                 logger.error('Error fetching disk status', { error: String(e) });
+                ctx.body = { error: String(e) };
+                ctx.status = 500;
+            }
+        })
+        .get('/stats', async (ctx) => {
+            // On-demand DB stats — scans movementdb to compute per-camera and per-day counts
+            try {
+                const perCamera: { [cameraKey: string]: { total: number, oldest: number, newest: number, perDay: { [day: string]: number } } } = {};
+
+                for await (const [key, value] of movementdb.iterator()) {
+                    const cam = value.cameraKey || 'unknown';
+                    if (!perCamera[cam]) {
+                        perCamera[cam] = { total: 0, oldest: Number(key), newest: Number(key), perDay: {} };
+                    }
+                    const entry = perCamera[cam];
+                    entry.total++;
+                    const ts = Number(key);
+                    if (ts < entry.oldest) entry.oldest = ts;
+                    if (ts > entry.newest) entry.newest = ts;
+                    const day = new Intl.DateTimeFormat('en-GB', { dateStyle: 'short' }).format(new Date(ts));
+                    entry.perDay[day] = (entry.perDay[day] || 0) + 1;
+                }
+
+                // Add camera names from cache
+                const cameras: { cameraKey: string, cameraName: string, total: number, oldest: string, newest: string, perDay: { date: string, count: number }[] }[] = [];
+                for (const [cameraKey, stats] of Object.entries(perCamera)) {
+                    const cameraName = cameraCache[cameraKey]?.cameraEntry?.name || cameraKey;
+                    const fmt = (ts: number) => ts > 0 
+                        ? new Intl.DateTimeFormat('en-GB', { dateStyle: 'short', timeStyle: 'short', hour12: true }).format(new Date(ts))
+                        : 'N/A';
+                    cameras.push({
+                        cameraKey,
+                        cameraName,
+                        total: stats.total,
+                        oldest: fmt(stats.oldest),
+                        newest: fmt(stats.newest),
+                        perDay: Object.entries(stats.perDay)
+                            .sort(([a], [b]) => a.localeCompare(b))
+                            .map(([date, count]) => ({ date, count }))
+                    });
+                }
+
+                const totalMovements = cameras.reduce((sum, c) => sum + c.total, 0);
+                const totalCameras = Object.keys(cameraCache).filter(k => !cameraCache[k].cameraEntry.delete).length;
+
+                ctx.body = { totalCameras, totalMovements, cameras };
+            } catch (e) {
+                logger.error('Error computing stats', { error: String(e) });
                 ctx.body = { error: String(e) };
                 ctx.status = 500;
             }
@@ -572,17 +616,6 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
                     logger
                 );
 
-                // Count remaining movements per camera for status update
-                const movementsRemainingPerCamera: { [key: string]: number } = {};
-                for (const cameraKey of cameraKeys) {
-                    movementsRemainingPerCamera[cameraKey] = 0;
-                }
-                for await (const [, value] of movementdb.iterator()) {
-                    if (cameraKeys.includes(value.cameraKey)) {
-                        movementsRemainingPerCamera[value.cameraKey] = (movementsRemainingPerCamera[value.cameraKey] || 0) + 1;
-                    }
-                }
-
                 // Save disk status per camera
                 const now = Date.now();
                 const nowFormatted = new Intl.DateTimeFormat('en-GB', { 
@@ -606,15 +639,11 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
                         bytesDeleted: folderStats?.removedMB || 0,
                         cutoffDate,
                         cutoffDate_en_GB: cutoffFormatted,
-                        movementsDeleted: 0, // clearDownDisk handles this internally
-                        movementsRemaining: movementsRemainingPerCamera[cameraKey] || 0
+                        movementsDeleted: 0,
                     });
                 }
 
-                logger.info('Manual disk cleanup complete', { 
-                    removedMB: diskres.revmovedMBTotal,
-                    totalMovementsRemaining: Object.values(movementsRemainingPerCamera).reduce((a, b) => a + b, 0)
-                });
+                logger.info('Manual disk cleanup complete', { removedMB: diskres.revmovedMBTotal });
 
                 ctx.body = { 
                     success: true, 
@@ -749,8 +778,8 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
                                     }
                                 }
 
-                                for (const key of movementsToDelete) {
-                                    await movementdb.del(key);
+                                if (movementsToDelete.length > 0) {
+                                    await movementdb.batch(movementsToDelete.map((k: string) => ({ type: 'del', key: k })) as any);
                                 }
 
                                 logger.info('Camera movements deleted from database', {

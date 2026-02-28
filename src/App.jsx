@@ -3,8 +3,9 @@ import './App.css';
 import React, { useEffect, useMemo }  from 'react';
 import Hls from 'hls.js'
 import { PanelSettings } from './PanelSettings.jsx'
+import { PanelStats } from './PanelStats.jsx'
 import { ToolbarGroup, Badge, Text, Button, Portal, Toolbar, Menu, MenuTrigger, Tooltip, SplitButton, MenuPopover, MenuList, MenuItem, ToolbarButton, ToolbarDivider, Spinner, tokens, Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions } from "@fluentui/react-components";
-import { ArrowMove20Regular, AccessibilityCheckmark20Regular, AccessTime20Regular, Settings16Regular, ArrowDownload16Regular, DataUsageSettings20Regular, Tv16Regular, Video20Regular, VideoAdd20Regular, ArrowRepeatAll20Regular, Filter20Regular, MoreVertical20Regular, Checkmark12Regular, Dismiss12Regular, Clock12Regular, Clock16Regular, ScanDash12Regular, Play20Filled, CalendarLtr16Regular } from "@fluentui/react-icons";
+import { ArrowMove20Regular, AccessibilityCheckmark20Regular, AccessTime20Regular, Settings16Regular, ArrowDownload16Regular, DataUsageSettings20Regular, Tv16Regular, Video20Regular, VideoAdd20Regular, ArrowRepeatAll20Regular, Filter20Regular, MoreVertical20Regular, Checkmark12Regular, Dismiss12Regular, Clock12Regular, Clock16Regular, ScanDash12Regular, Play20Filled, CalendarLtr16Regular, Database20Regular } from "@fluentui/react-icons";
 
 
 export const VideoJS = ({options, onReady, play, imageUrl}) => {
@@ -458,6 +459,7 @@ function MovementTimeline({ movements, cameras, currentPlaying, highlightedKeys,
 function CCTVControl({currentPlaying, playVideo, showImage}) {
 
   const [panel, setPanel] = React.useState({open: false, invalidArray: []});
+  const [statsOpen, setStatsOpen] = React.useState(false);
   const [infoDialog, setInfoDialog] = React.useState({open: false, item: null});
   const [openMenuKey, setOpenMenuKey] = React.useState(null);
 
@@ -692,6 +694,7 @@ function CCTVControl({currentPlaying, playVideo, showImage}) {
 
       <Portal>
         <PanelSettings data={data} panel={panel} setPanel={setPanel} getServerData={getServerData}/>
+        <PanelStats open={statsOpen} onClose={() => setStatsOpen(false)} />
       </Portal>
 
       <Toolbar aria-label="Default" style={{"justifyContent": "space-between" }}>
@@ -757,6 +760,8 @@ function CCTVControl({currentPlaying, playVideo, showImage}) {
                 <MenuItem key="general" icon={<DataUsageSettings20Regular />}  onClick={() => {
                       setPanel({...panel, open: true, key: 'settings', invalidArray:[], heading: 'General Settings', values: { ...data.config?.settings }})
                 }}>General</MenuItem>
+
+                <MenuItem key="stats" icon={<Database20Regular />} onClick={() => setStatsOpen(true)}>Stats</MenuItem>
 
                 { data.cameras.map(c => 
                   <MenuItem key={c.key} icon={<Video20Regular />}  onClick={() => {

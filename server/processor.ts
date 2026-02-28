@@ -79,6 +79,9 @@ let _inmem_lastSSEKeepAlive = 0;
 // Disk cleanup tracking
 let _inmem_lastDiskCheck = 0;
 
+// ML frame cleanup tracking
+let _inmem_lastMlFrameCleanup = 0;
+
 // Processing state type for ffmpeg movement processing
 type ProcessingMovementState = {
     cameraKey: string;
@@ -303,6 +306,7 @@ export function resetProcessorState(): void {
     _inmem_lastSSEKeepAlive = 0;
     _inmem_lastDiskCheck = 0;
     _inmem_currentProcessingMovements.clear();
+    _inmem_lastMlFrameCleanup = 0;
     
     // Clear controller state objects
     for (const key of Object.keys(_inmem_controllerFFmpeg_inprogress)) {
@@ -312,10 +316,6 @@ export function resetProcessorState(): void {
         delete _inmem_controllerFFmpegConfirmation[key];
     }
 }
-
-// ============================================================================
-// Control Loop Functions
-// ============================================================================
 
 /**
  * controllerDetector - Manages ML detection process lifecycle (starts/stops Python detector)
@@ -387,7 +387,7 @@ export async function controllerDetector(): Promise<void> {
     // If enabled and not running, start it
     if (!_inmem_mlDetectionProcess || _inmem_mlDetectionProcess.exitCode !== null) {
         try {
-            const baseDir = process.env['PWD'];
+            const baseDir = process.cwd();
             const aiDir = `${baseDir}/ai`;
             
             // Use stub detector for testing (doesn't require OpenCV/ONNX)
@@ -530,6 +530,7 @@ export async function controllerFFmpeg(
             '-hide_banner',
             '-loglevel', 'error',
             '-vcodec', 'copy',
+            '-acodec', 'copy',
             '-f', 'hls',
             '-hls_time', '2',
             '-hls_list_size', '5',
@@ -1586,17 +1587,6 @@ export async function controllerClearDownDisk(): Promise<void> {
                     }
                 }
 
-                // Count remaining movements per camera
-                const movementsRemainingPerCamera: { [key: string]: number } = {};
-                for (const cameraKey of cameraKeys) {
-                    movementsRemainingPerCamera[cameraKey] = 0;
-                }
-                for await (const [, value] of deps.movementdb.iterator()) {
-                    if (cameraKeys.includes(value.cameraKey)) {
-                        movementsRemainingPerCamera[value.cameraKey] = (movementsRemainingPerCamera[value.cameraKey] || 0) + 1;
-                    }
-                }
-
                 // Save disk status per camera
                 for (const cameraKey of cameraKeys) {
                     const stats = perCameraStats[cameraKey];
@@ -1614,16 +1604,12 @@ export async function controllerClearDownDisk(): Promise<void> {
                         cutoffDate: stats.cutoffDate,
                         cutoffDate_en_GB: cutoffFormatted,
                         movementsDeleted: stats.movementsDeleted,
-                        movementsRemaining: movementsRemainingPerCamera[cameraKey] || 0
                     };
 
                     await deps.diskstatusdb.put(cameraKey, diskStatusEntry);
                 }
 
-                deps.logger.info('Disk status saved', { 
-                    cameras: cameraKeys.length,
-                    totalMovementsRemaining: Object.values(movementsRemainingPerCamera).reduce((a, b) => a + b, 0)
-                });
+                deps.logger.info('Disk status saved', { cameras: cameraKeys.length });
 
                 deps.setSettingsCache({
                     ...settingsCache,
@@ -1966,6 +1952,23 @@ export async function runControlLoop(): Promise<void> {
 
     // SSE keep-alive (every 30 seconds)
     sseKeepAlive();
+
+    // Periodic cleanup of stale ML frame tracking entries (every 60s)
+    const now = Date.now();
+    if (now - _inmem_lastMlFrameCleanup > 60_000) {
+        _inmem_lastMlFrameCleanup = now;
+        const staleThreshold = now - 30_000;
+        let cleaned = 0;
+        for (const [key, sentTime] of _inmem_mlFrameSentTimes) {
+            if (sentTime < staleThreshold) {
+                _inmem_mlFrameSentTimes.delete(key);
+                cleaned++;
+            }
+        }
+        if (cleaned > 0) {
+            deps.logger.info('Cleaned stale ML frame entries', { cleaned, remaining: _inmem_mlFrameSentTimes.size });
+        }
+    }
 }
 
 /**

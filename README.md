@@ -123,53 +123,84 @@ Hover over any icon for a tooltip with additional details.
   
 ## To run the server each time the machine starts
 
-Create a executable `web.sh` file containing the following (the paths need to be absolute):
+To start automatically on boot, enable the systemd user service:
 
-```
-#!/bin/bash
-PATH="/home/<user>/open-source-nvr/.venv/bin:$PATH" LOG_LEVEL=info WEBPATH="/home/<user>/open-source-nvr/build" DBPATH="/home/<user>/open-source-nvr/mydb" node /home/<user>/open-source-nvr/lib/index.js
-```
+```bash
+# Create the service (already provided at ~/.config/systemd/user/open-source-nvr.service)
+systemctl --user daemon-reload
+systemctl --user enable --now open-source-nvr
 
-Now, create a `open-source-nvr.service` file for Linux Systemd service managers, to ensure your website starts when the machine starts & will be kept running
-
-```
-[Unit]
-Description=open-source-nvr
-Wants=network-online.target
-After=network-online.target
-
-[Service]
-User=<user>
-Group=<user>
-Type=simple
-Environment="PATH=/home/<user>/open-source-nvr/.venv/bin:/usr/local/bin:/usr/bin"
-WorkingDirectory=/home/<user>
-ExecStart=/home/<user>/open-source-nvr/web.sh
-
-[Install]
-WantedBy=multi-user.target
+# Allow the service to start at boot (not just at login) — requires sudo once
+sudo loginctl enable-linger $USER
 ```
 
-Copy the `open-source-nvr.service` file to `/etc/systemd/system` , and replacing the `<user>`
+Useful commands:
 
-Enable & run the service
+```bash
+systemctl --user status open-source-nvr     # check status
+systemctl --user restart open-source-nvr    # restart after code changes
+systemctl --user stop open-source-nvr       # stop
+journalctl --user -u open-source-nvr -f     # view logs
+journalctl --user -u open-source-nvr -n 100 --no-pager  # last 100 lines
+```
 
-```
-sudo systemctl enable  open-source-nvr.service
-sudo systemctl start  open-source-nvr.service
+After making code changes, rebuild and restart:
+
+```bash
+npx tsc && systemctl --user restart open-source-nvr
 ```
 
+## Reverse proxy with nginx
 
-## Additional Systemd commands
+To serve the app behind nginx with SSL and basic auth:
 
-### list services
+1. Create an nginx site config:
+
+```nginx
+server {
+    server_name home.example.com;
+
+    location / {
+        auth_basic "Authorised Users Only";
+        auth_basic_user_file /etc/nginx/.htpasswd;
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_buffering off;
+        proxy_read_timeout 300s;
+    }
+
+    location /.well-known {
+        auth_basic off;
+    }
+
+    listen 80;
+}
 ```
-systemctl --type=service
+
+2. Enable and reload:
+
+```bash
+sudo ln -s /etc/nginx/sites-available/open-source-nvr /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
 ```
-### list logs
+
+3. Add an SSL certificate (e.g. with Certbot):
+
+```bash
+sudo certbot --nginx -d home.example.com
 ```
-sudo journalctl -u open-source-nvr.service -f
-sudo journalctl -u open-source-nvr.service -n 100 --no-pager
+
+4. Create the password file for basic auth:
+
+```bash
+sudo apt install apache2-utils
+sudo htpasswd -c /etc/nginx/.htpasswd <username>
 ```
 
 

@@ -201,23 +201,34 @@ export async function createServer(config: ServerConfig = {}): Promise<ServerHan
     const intervals: NodeJS.Timeout[] = [];
 
     // Start control loop (if interval > 0)
+    // Guard prevents overlapping async invocations that can accumulate closures/iterators
     if (controlLoopInterval > 0) {
+        let _inmem_controlLoopRunning = false;
         intervals.push(setInterval(async () => {
+            if (_inmem_controlLoopRunning) return;
+            _inmem_controlLoopRunning = true;
             try {
                 await runControlLoop();
             } catch (e) {
                 logger.error('Control loop error', { error: String(e) });
+            } finally {
+                _inmem_controlLoopRunning = false;
             }
         }, controlLoopInterval));
     }
 
     // Start disk cleanup loop (if interval > 0)
     if (diskCleanupInterval > 0) {
+        let _inmem_diskCleanupRunning = false;
         intervals.push(setInterval(async () => {
+            if (_inmem_diskCleanupRunning) return;
+            _inmem_diskCleanupRunning = true;
             try {
                 await runDiskCleanupLoop();
             } catch (e) {
                 logger.error('Disk cleanup loop error', { error: String(e) });
+            } finally {
+                _inmem_diskCleanupRunning = false;
             }
         }, diskCleanupInterval));
     }
