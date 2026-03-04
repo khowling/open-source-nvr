@@ -80,7 +80,7 @@ export const VideoJS = ({options, onReady, play, imageUrl}) => {
   React.useEffect(() => {
     if (!play) return;
 
-    const { cKey, mKey, mStartSegment, mSeconds, segments_prior_to_movement, segments_post_movement } = play;
+    const { cKey, mKey, mStartSegment, mSeconds, segments_prior_to_movement, segments_post_movement, segDuration } = play;
     const video = videoRef.current;
     const hls = hlsRef.current;
 
@@ -92,7 +92,12 @@ export const VideoJS = ({options, onReady, play, imageUrl}) => {
     const isLiveStream = !mKey; // Live streams don't have mKey
     setIsLive(isLiveStream);
 
-    const src = `/video/${mKey ? `${mStartSegment}/${mSeconds}` : 'live'}/${cKey}/stream.m3u8${(mKey && segments_prior_to_movement) ? `?preseq=${segments_prior_to_movement}&postseq=${segments_post_movement}` : ''}`;
+    const queryParams = mKey ? [
+      segments_prior_to_movement && `preseq=${segments_prior_to_movement}`,
+      segments_post_movement && `postseq=${segments_post_movement}`,
+      segDuration && `segDuration=${segDuration}`
+    ].filter(Boolean).join('&') : '';
+    const src = `/video/${mKey ? `${mStartSegment}/${mSeconds}` : 'live'}/${cKey}/stream.m3u8${queryParams ? `?${queryParams}` : ''}`;
 
     if (hls) {
       hls.loadSource(src);
@@ -160,7 +165,7 @@ function App() {
     setCurrentPlaying(null); // Stop video when showing image
   }
   
-  function playVideo(cKey, mKey, mStartSegment, mSeconds, segments_prior_to_movement, segments_post_movement) {
+  function playVideo(cKey, mKey, mStartSegment, mSeconds, segments_prior_to_movement, segments_post_movement, segDuration) {
     setDisplayImage(null); // Clear image when playing video
     console.log (`App() : playVideo :   cameraKey=${cKey} mKey=${mKey} (${mStartSegment}/${mSeconds}) (prior:${segments_prior_to_movement}/post:${segments_post_movement})`)
     const mPlayer = playerRef.current
@@ -168,7 +173,7 @@ function App() {
     //const camera = cKey && data.cameras.find(c => c.key === cKey)
     if (cKey && mPlayer && (!currentPlaying || (currentPlaying.cKey !== cKey || currentPlaying.mKey !== mKey))) {
 
-      setCurrentPlaying({ cKey, mKey, mStartSegment, mSeconds, segments_prior_to_movement, segments_post_movement})
+      setCurrentPlaying({ cKey, mKey, mStartSegment, mSeconds, segments_prior_to_movement, segments_post_movement, segDuration})
       
       
     } else {
@@ -330,7 +335,7 @@ function MovementTimeline({ movements, cameras, currentPlaying, highlightedKeys,
     e.stopPropagation();
     const camera = cameras?.find(c => c.key === item.cameraKey);
     if (camera && item.startSegment) {
-      playVideo(item.cameraKey, item.key, item.startSegment, item.seconds, camera.segments_prior_to_movement, camera.segments_post_movement);
+      playVideo(item.cameraKey, item.key, item.startSegment, item.seconds, camera.segments_prior_to_movement, camera.segments_post_movement, item.lhs_seg_duration_seq);
     }
   };
 

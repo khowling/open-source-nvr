@@ -392,7 +392,7 @@ export async function initWeb(deps: WebServerDependencies, port: number = 8080):
                 } else {
                     const preseq: number = ctx.query['preseq'] ? parseInt(ctx.query['preseq'] as any) : 0;
                     const postseq: number = ctx.query['postseq'] ? parseInt(ctx.query['postseq'] as any) : 0;
-                    const segDuration = 2;
+                    const segDuration: number = ctx.query['segDuration'] ? parseInt(ctx.query['segDuration'] as any) : 2;
                     const numSegments = Math.max(1, Math.round(secondsInt / segDuration) + preseq + postseq);
 
                     logger.debug('Generating playlist', {
@@ -444,12 +444,18 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
                 const cameraEntry: CameraEntry = cameraCache[cameraKey].cameraEntry;
                 const preseq: number = ctx.query['preseq'] ? parseInt(ctx.query['preseq'] as any) : 0;
                 const postseq: number = ctx.query['postseq'] ? parseInt(ctx.query['postseq'] as any) : 0;
+                const segDuration: number = ctx.query['segDuration'] ? parseInt(ctx.query['segDuration'] as any) : 0;
                 const serve = `${cameraEntry.disk}/${cameraEntry.folder}/save${startSegment}-${seconds}.mp4`;
+                const qs = [
+                    preseq > 0 && `preseq=${preseq}`,
+                    postseq > 0 && `postseq=${postseq}`,
+                    segDuration > 0 && `segDuration=${segDuration}`
+                ].filter(Boolean).join('&');
 
                 const result = await runProcess({
                     name: `mp4-gen-${cameraKey}-${startSegment}`,
                     cmd: '/usr/bin/ffmpeg',
-                    args: ['-y', '-i', `http://localhost:${port}/video/${startSegment}/${seconds}/${cameraKey}/stream.m3u8${preseq > 0 || postseq > 0 ? `?preseq=${preseq}&postseq=${postseq}` : ''}`, '-c', 'copy', serve],
+                    args: ['-y', '-i', `http://localhost:${port}/video/${startSegment}/${seconds}/${cameraKey}/stream.m3u8${qs ? `?${qs}` : ''}`, '-c', 'copy', serve],
                     timeout: 50000
                 });
 

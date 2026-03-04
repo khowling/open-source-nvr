@@ -166,7 +166,7 @@ export async function diskCheck(rootFolder: string, cameraFolders: Array<string>
     
 }
 
-export async function catalogVideo (cameraFolder: string): Promise<Array<{ctimeMs: number, startDate_en_GB: string, segmentStart: number, seqmentEnd: number, seconds: number}>> {
+export async function catalogVideo (cameraFolder: string, segDuration: number = 2): Promise<Array<{ctimeMs: number, startDate_en_GB: string, segmentStart: number, seqmentEnd: number, seconds: number}>> {
 
     const re = new RegExp(`stream([\\d]+).ts`, 'g');
 
@@ -191,10 +191,10 @@ export async function catalogVideo (cameraFolder: string): Promise<Array<{ctimeM
 
             if (currentRes) {
                 // If continuation of a series, and we are less than 1hour in length, and we are not on the last file
-                if (currentSeg === lastSeq+1 && ((currentSeg - currentRes.segmentStart)+1) <= ((60*60)/2) && (idx+1) < flist.length) {// got a continuation sequence that is under 30mins long
+                if (currentSeg === lastSeq+1 && ((currentSeg - currentRes.segmentStart)+1) <= ((60*60)/segDuration) && (idx+1) < flist.length) {// got a continuation sequence that is under 30mins long
                     lastSeq = currentSeg
                 } else { // must be new sequence, safe old, and start a new
-                    flist_result = flist_result.concat({...currentRes, seqmentEnd: lastSeq, seconds: ((lastSeq - currentRes.segmentStart) + 1)*2})
+                    flist_result = flist_result.concat({...currentRes, seqmentEnd: lastSeq, seconds: ((lastSeq - currentRes.segmentStart) + 1)*segDuration})
                     currentRes = null
                 }
             }
