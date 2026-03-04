@@ -318,6 +318,21 @@ export function resetProcessorState(): void {
 }
 
 /**
+ * Kill an ML detection process with SIGTERM, escalating to SIGKILL if it doesn't exit.
+ * RKNN runtime can block SIGTERM, so escalation is needed to avoid orphaned processes.
+ */
+function killMLProcess(proc: ChildProcessWithoutNullStreams): void {
+    const pid = proc.pid;
+    proc.kill('SIGTERM');
+    setTimeout(() => {
+        if (proc.exitCode === null) {
+            deps.logger.warn('ML detection process did not exit after SIGTERM, sending SIGKILL', { pid });
+            proc.kill('SIGKILL');
+        }
+    }, 3000);
+}
+
+/**
  * controllerDetector - Manages ML detection process lifecycle (starts/stops Python detector)
  * Entry criteria: None (always runs)
  */
@@ -329,7 +344,7 @@ export async function controllerDetector(): Promise<void> {
     if (!enabled) {
         if (_inmem_mlDetectionProcess && _inmem_mlDetectionProcess.exitCode === null) {
             deps.logger.info('ML detection disabled - stopping process', { pid: _inmem_mlDetectionProcess.pid });
-            _inmem_mlDetectionProcess.kill();
+            killMLProcess(_inmem_mlDetectionProcess);
             _inmem_mlDetectionProcess = null;
         }
         return;
@@ -375,7 +390,7 @@ export async function controllerDetector(): Promise<void> {
                     runningTimeHours: Math.round(runningTimeMs / (60 * 60 * 1000) * 10) / 10,
                     pid: _inmem_mlDetectionProcess.pid
                 });
-                _inmem_mlDetectionProcess.kill();
+                killMLProcess(_inmem_mlDetectionProcess);
                 _inmem_mlDetectionProcess = null;
                 _inmem_mlProcessStartedAt = 0;
                 _inmem_mlLastRestartDate = todayDate;
@@ -402,7 +417,7 @@ export async function controllerDetector(): Promise<void> {
 
             const mlProcessor = createMLResultProcessor(processDetectionResult);
 
-            _inmem_mlDetectionProcess = spawnProcess({
+            const newProcess = spawnProcess({
                 name: 'ML-Detection',
                 cmd: 'python3',
                 args: cmdArgs,
@@ -423,9 +438,13 @@ export async function controllerDetector(): Promise<void> {
                     } else {
                         deps.logger.info('ML detection process closed gracefully', { code, signal });
                     }
-                    _inmem_mlDetectionProcess = null;
+                    // Only clear the reference if it still points to this process
+                    if (_inmem_mlDetectionProcess === newProcess) {
+                        _inmem_mlDetectionProcess = null;
+                    }
                 }
             });
+            _inmem_mlDetectionProcess = newProcess;
 
             // Handle stdin errors (EPIPE) to prevent uncaught exceptions when process dies
             _inmem_mlDetectionProcess.stdin.on('error', (error: Error) => {
