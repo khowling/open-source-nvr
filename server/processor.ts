@@ -548,6 +548,7 @@ export async function controllerFFmpeg(
             '-i', streamSource,
             '-hide_banner',
             '-loglevel', 'error',
+            '-fflags', '+genpts',
             '-vcodec', 'copy',
             '-acodec', 'copy',
             '-f', 'hls',
