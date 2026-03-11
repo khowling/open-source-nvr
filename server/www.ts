@@ -15,6 +15,7 @@ import { runProcess } from './process-utils.js';
 import { sseManager, formatMovementForSSE } from './sse-manager.js';
 import { diskCheck, catalogVideo, DiskCheckReturn } from './diskcheck.js';
 import type { Logger } from 'winston';
+import { registry } from './metrics.js';
 
 // Types
 export interface Settings {
@@ -945,11 +946,9 @@ stream${n + segmentInt - preseq}.ts`).join("\n") + "\n" + "#EXT-X-ENDLIST\n";
         });
 
     const nav = new Router()
-        .get('/network', async (ctx) => {
-            ctx.redirect(`http://${ctx.headers.host ? ctx.headers.host.split(":")[0] : 'localhost'}:3998`);
-        })
         .get('/metrics', async (ctx) => {
-            ctx.redirect(`http://${ctx.headers.host ? ctx.headers.host.split(":")[0] : 'localhost'}:3000/d/T3OrKihMk/our-house?orgId=1`);
+            ctx.set('Content-Type', registry.contentType);
+            ctx.body = await registry.metrics();
         });
 
     const app = new Koa();

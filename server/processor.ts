@@ -23,6 +23,7 @@ import {
     setLogger
 } from './process-utils.js';
 import { sseManager, formatMovementForSSE } from './sse-manager.js';
+import * as metrics from './metrics.js';
 import { diskCheck, DiskCheckReturn } from './diskcheck.js';
 import type { Logger } from 'winston';
 import type {
@@ -346,6 +347,7 @@ export async function controllerDetector(): Promise<void> {
             deps.logger.info('ML detection disabled - stopping process', { pid: _inmem_mlDetectionProcess.pid });
             killMLProcess(_inmem_mlDetectionProcess);
             _inmem_mlDetectionProcess = null;
+            metrics.mlDetectorRunning.set(0);
         }
         return;
     }
@@ -393,6 +395,8 @@ export async function controllerDetector(): Promise<void> {
                 killMLProcess(_inmem_mlDetectionProcess);
                 _inmem_mlDetectionProcess = null;
                 _inmem_mlProcessStartedAt = 0;
+                metrics.mlDetectorRunning.set(0);
+                metrics.mlDetectorRestarts.inc({ reason: 'scheduled' });
                 _inmem_mlLastRestartDate = todayDate;
                 // _inmem_mlRestartPending stays true until process is confirmed running below
             }
@@ -435,9 +439,11 @@ export async function controllerDetector(): Promise<void> {
                             signal,
                             willRestart: 'on next interval'
                         });
+                        metrics.mlDetectorRestarts.inc({ reason: 'crash' });
                     } else {
                         deps.logger.info('ML detection process closed gracefully', { code, signal });
                     }
+                    metrics.mlDetectorRunning.set(0);
                     // Only clear the reference if it still points to this process
                     if (_inmem_mlDetectionProcess === newProcess) {
                         _inmem_mlDetectionProcess = null;
@@ -453,6 +459,7 @@ export async function controllerDetector(): Promise<void> {
 
             // Track when process started for proactive restart
             _inmem_mlProcessStartedAt = Date.now();
+            metrics.mlDetectorRunning.set(1);
             
             // Clear restart pending flag - process is now running
             if (_inmem_mlRestartPending) {
@@ -468,6 +475,7 @@ export async function controllerDetector(): Promise<void> {
         } catch (error) {
             deps.logger.error('Failed to start ML detection process', { error: String(error) });
             _inmem_mlDetectionProcess = null;
+            metrics.mlDetectorRunning.set(0);
         }
     }
 }
@@ -775,8 +783,10 @@ export async function detectCameraMovement(cameraKey: string): Promise<void> {
         const hasMovement = movementState === 1;
 
         if (hasMovement) {
+            metrics.movementDetectionApiCalls.inc({ camera: cameraEntry.name, result: 'detected' });
             await handleMovementDetected(cameraKey, current_movement_key, cameraEntry, control);
         } else {
+            metrics.movementDetectionApiCalls.inc({ camera: cameraEntry.name, result: 'none' });
             await handleNoMovement(cameraKey, current_movement_key, cameraEntry, movementDetectionStatus, control);
         }
 
@@ -786,6 +796,7 @@ export async function detectCameraMovement(cameraKey: string): Promise<void> {
             camera: cameraEntry.name,
             error: filtersensitive
         });
+        metrics.movementDetectionApiCalls.inc({ camera: cameraEntry.name, result: 'error' });
 
         deps.setCameraCache(cameraKey, {
             ...deps.getCameraCache()[cameraKey],
@@ -827,6 +838,7 @@ async function handleMovementDetected(
         deps.logger.info('detectCameraMovement: New movement, create movement record', {
             camera: cameraEntry.name, movement_key
         });
+        metrics.movementsCreated.inc({ camera: cameraEntry.name });
 
         let movementEntry: MovementEntry = {
             cameraKey,
@@ -1072,6 +1084,7 @@ async function finalizeMovement(
         movement_key,
         duration: elapsedSeconds
     });
+    metrics.movementDuration.observe({ camera: cameraEntry.name }, elapsedSeconds);
 
     // Update movement with detection_ended_at timestamp
     const detectionEndedAt = Date.now();
@@ -1179,6 +1192,7 @@ export async function triggerProcessMovement(cameraKey: string): Promise<void> {
                     processing_error: `Processing timeout after ${Math.floor(elapsed / 1000)}s`
                 };
                 await deps.movementdb.put(movement_key, updatedMovement);
+                metrics.movementProcessingResult.inc({ camera: cameraEntry.name, result: 'timeout' });
                 if (sseManager.getClientCount() > 0) {
                     sseManager.broadcastMovementUpdate({ type: 'movement_update', movement: formatMovementForSSE(movement_key, updatedMovement) });
                 }
@@ -1295,6 +1309,11 @@ export async function triggerProcessMovement(cameraKey: string): Promise<void> {
     };
     await deps.movementdb.put(movement_key, updatedMovement);
 
+    if (movement.detection_started_at) {
+        const lagSeconds = (Date.now() - movement.detection_started_at) / 1000;
+        metrics.movementDetectionToProcessingLag.observe({ camera: cameraEntry.name }, lagSeconds);
+    }
+
     if (sseManager.getClientCount() > 0) {
         sseManager.broadcastMovementUpdate({
             type: 'movement_update',
@@ -1404,6 +1423,15 @@ export async function triggerProcessMovement(cameraKey: string): Promise<void> {
                                 })
                             };
                             await deps.movementdb.put(movement_key, finalMovement);
+
+                            // Record processing metrics
+                            const processingDuration = (finalMovement.processing_completed_at - (m.processing_started_at || finalMovement.processing_completed_at)) / 1000;
+                            metrics.movementProcessingDuration.observe({ camera: cameraEntry.name }, processingDuration);
+                            metrics.movementProcessingResult.inc({ camera: cameraEntry.name, result: hasFailed ? 'failed' : 'completed' });
+                            if (mlStats) {
+                                metrics.movementFramesSent.inc({ camera: cameraEntry.name }, mlStats.frames_sent_to_ml);
+                                metrics.movementFramesReceived.inc({ camera: cameraEntry.name }, mlStats.frames_received_from_ml);
+                            }
 
                             // Broadcast completion state to UI
                             if (sseManager.getClientCount() > 0) {
@@ -1552,6 +1580,7 @@ export async function controllerClearDownDisk(): Promise<void> {
 
                 const diskres = await diskCheck(settings.disk_base_dir, foldersToClean, settings.disk_cleanup_capacity);
                 deps.logger.info('Disk check complete', diskres);
+                metrics.diskCleanupRuns.inc();
 
                 const now = Date.now();
                 const nowFormatted = new Intl.DateTimeFormat('en-GB', { 
@@ -1629,6 +1658,14 @@ export async function controllerClearDownDisk(): Promise<void> {
                     await deps.diskstatusdb.put(cameraKey, diskStatusEntry);
                 }
 
+                for (const cameraKey of cameraKeys) {
+                    const stats = perCameraStats[cameraKey];
+                    const camName = cameraCache[cameraKey].cameraEntry.name;
+                    if (stats.filesDeleted > 0) metrics.diskCleanupFilesDeleted.inc({ camera: camName }, stats.filesDeleted);
+                    if (stats.bytesDeleted > 0) metrics.diskCleanupBytesDeleted.inc({ camera: camName }, stats.bytesDeleted);
+                    if (stats.movementsDeleted > 0) metrics.diskCleanupMovementsDeleted.inc({ camera: camName }, stats.movementsDeleted);
+                }
+
                 deps.logger.info('Disk status saved', { cameras: cameraKeys.length });
 
                 deps.setSettingsCache({
@@ -1670,6 +1707,7 @@ function sendImageToMLDetection(imagePath: string, movement_key: number): void {
         try {
             const imageName = imagePath.split('/').pop() || imagePath;
             _inmem_mlFrameSentTimes.set(imageName, Date.now());
+            metrics.mlDetectorFramesInFlight.set(_inmem_mlFrameSentTimes.size);
             _inmem_mlDetectionProcess.stdin.write(`${imagePath}\n`);
             
             // Track frames sent for the current processing movement
@@ -1691,6 +1729,16 @@ function sendImageToMLDetection(imagePath: string, movement_key: number): void {
             processKilled: _inmem_mlDetectionProcess?.killed
         });
     }
+}
+
+function getCameraNameForMovement(movement_key: string): string | undefined {
+    for (const state of _inmem_currentProcessingMovements.values()) {
+        if (state.movement_key === movement_key) {
+            const cameraCache = deps.getCameraCache();
+            return cameraCache[state.cameraKey]?.cameraEntry?.name;
+        }
+    }
+    return undefined;
 }
 
 /**
@@ -1729,6 +1777,13 @@ async function processDetectionResult(line: string): Promise<void> {
         if (sentTime) {
             _inmem_mlFrameSentTimes.delete(imageName);
         }
+        metrics.mlDetectorFramesInFlight.set(_inmem_mlFrameSentTimes.size);
+        if (processingTimeMs !== null) {
+            const cameraName = getCameraNameForMovement(movement_key);
+            if (cameraName) {
+                metrics.mlFrameProcessingDuration.observe({ camera: cameraName }, processingTimeMs / 1000);
+            }
+        }
 
         // Skip if update already in progress
         if (_inmem_pendingUpdates.has(parseInt(movement_key))) {
@@ -1760,9 +1815,14 @@ async function processDetectionResult(line: string): Promise<void> {
             }
 
             // Process detections
+            const cameraName = getCameraNameForMovement(movement_key);
             for (const detection of result.detections) {
                 const objectType = detection.object;
                 const probability = detection.probability;
+
+                if (cameraName) {
+                    metrics.mlObjectsDetected.inc({ camera: cameraName, object_class: objectType });
+                }
 
                 const existing = tagsMap[objectType];
                 if (!existing || probability > existing.maxProbability) {
@@ -1891,6 +1951,7 @@ function checkAndFinalizeMovement(cameraKey: string): void {
  * Run the main control loop (called every second)
  */
 export async function runControlLoop(): Promise<void> {
+    const loopStart = performance.now();
     // Manage ML detection process lifecycle
     await controllerDetector();
 
@@ -1989,6 +2050,9 @@ export async function runControlLoop(): Promise<void> {
             deps.logger.info('Cleaned stale ML frame entries', { cleaned, remaining: _inmem_mlFrameSentTimes.size });
         }
     }
+
+    metrics.controlLoopDuration.observe((performance.now() - loopStart) / 1000);
+    metrics.activeCameras.set(cameraKeys.filter(k => cameraCache[k]?.cameraEntry && !cameraCache[k].cameraEntry.delete && cameraCache[k].cameraEntry.enable_streaming).length);
 }
 
 /**
